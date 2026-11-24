@@ -10,12 +10,25 @@ const Catalog = struct {
     indexedDB: @FieldType(sdk.SiteStorageCatalog,"indexedDB"),
     cacheStorage: @FieldType(sdk.SiteStorageCatalog,"cacheStorage"),
 };
+const DatabaseSnapshot = struct {
+    state: sdk.SiteDatabaseDetailsState,
+    stores: []const sdk.SiteObjectStore = &.{},
+    more: bool = false,
+};
+const DatabaseRequest = struct {
+    index: u32,
+    token: u64,
+    deadline: ?u64 = null,
+    result: ?std.json.Parsed(DatabaseSnapshot) = null,
+};
 const allocator = std.heap.page_allocator;
 var captured: ?std.json.Parsed(Snapshot) = null;
 var cookies: ?cookie_store.Snapshot = null;
 var catalog: ?std.json.Parsed(Catalog) = null;
 var catalog_deadline: ?u64 = null;
 var catalog_requested = false;
+var database: ?DatabaseRequest = null;
+var database_serial: u64 = 0;
 var source: u64 = 0;
 var panel: u64 = 0;
 var sequence: u64 = 0;
@@ -38,6 +51,12 @@ fn dropValues() void {
     catalog = null;
     catalog_deadline = null;
     catalog_requested = false;
+    dropDatabase();
+}
+
+fn dropDatabase() void {
+    if (database) |inspection| if (inspection.result) |result| result.deinit();
+    database = null;
 }
 
 pub fn dropCookies() void {
@@ -240,6 +259,11 @@ pub fn tick(now: u64) void {
     if (catalog_deadline) |expires| {
         if (now >= expires) catalog_deadline = null;
     }
+    if (database) |*inspection| {
+        if (inspection.deadline) |expires| {
+            if (now >= expires) inspection.deadline = null;
+        }
+    }
     if (received == .pending and now >= deadline) {
         cache_pending = false;
         received=.unavailable;
@@ -284,6 +308,59 @@ pub fn catalogStatus(tab: u64, id: []const u8, group: sdk.SiteCatalogGroup) ?sdk
         .indexedDB=if (group==.indexedDB) result.value.indexedDB else null,
         .cacheStorage=if (group==.cacheStorage) result.value.cacheStorage else null };
     return .{ .state=if (catalog_deadline!=null) .pending else .unavailable,.generation=sequence };
+}
+
+fn selectedDatabase(tab: u64, id: []const u8, query: sdk.SiteDatabaseQuery) ?sdk.SiteDatabase {
+    if (!owns(tab,id) or received!=.ready or query.generation!=sequence) return null;
+    const result = catalog orelse return null;
+    const section = result.value.indexedDB orelse return null;
+    if (query.index>=section.entries.len) return null;
+    const entry = section.entries[query.index];
+    if (entry.shortened or (entry.version orelse 0)==0) return null;
+    return entry;
+}
+
+pub fn requestDatabase(view: *native.MoonView, tab: u64, id: []const u8, query: sdk.SiteDatabaseQuery) bool {
+    const entry = selectedDatabase(tab,id,query) orelse return false;
+    if (database) |inspection| {
+        if (inspection.deadline!=null or (inspection.index==query.index and !query.refresh)) return true;
+    }
+    const bytes = std.json.Stringify.valueAlloc(allocator,.{
+        .name=entry.name,.version=entry.version.?,.revision=sequence,
+    },.{}) catch return false;
+    defer allocator.free(bytes);
+    const payload = allocator.dupeSentinel(u8,bytes,0) catch return false;
+    defer allocator.free(payload);
+    dropDatabase();
+    database_serial += 1;
+    database = .{ .index=query.index,.token=database_serial };
+    if (native.moon_engine_inspect_database(view,database_serial,payload.ptr))
+        database.?.deadline = native.moon_clock()+5000;
+    return true;
+}
+
+pub fn completeDatabase(tab: u64, token: u64, json: []const u8) void {
+    if (tab!=source or received!=.ready) return;
+    if (database) |*inspection| {
+        if (inspection.token!=token or inspection.deadline==null) return;
+        inspection.deadline = null;
+        if (json.len>20*1024) return;
+        inspection.result = std.json.parseFromSlice(DatabaseSnapshot,allocator,json,.{ .allocate=.alloc_always }) catch return;
+    }
+}
+
+pub fn databaseDetails(tab: u64, id: []const u8, query: sdk.SiteDatabaseQuery) ?sdk.SiteDatabaseDetails {
+    _ = selectedDatabase(tab,id,query) orelse return null;
+    const inspection = database orelse return null;
+    var result: sdk.SiteDatabaseDetails = .{ .index=query.index,.generation=sequence,.state=.pending };
+    if (inspection.index!=query.index or inspection.deadline!=null) return result;
+    result.state = .unavailable;
+    if (inspection.result) |parsed| {
+        result.state = parsed.value.state;
+        result.stores = parsed.value.stores;
+        result.more = parsed.value.more;
+    }
+    return result;
 }
 
 fn resolve(kind: sdk.SiteDataGroup) ?Group {

@@ -56,6 +56,8 @@ class Fixture(BaseHTTPRequestHandler):
     change_site_data_entry = Event()
     site_data_entry_changed = Event()
     site_data_catalog_ready = Event()
+    drop_site_schema = Event()
+    site_schema_dropped = Event()
     site_data_local_preserved = Event()
     change_page_source = Event()
     change_page_save = Event()
@@ -143,8 +145,12 @@ class Fixture(BaseHTTPRequestHandler):
             self.seen_filter_proof.set()
             data, content_type = b"ok", "text/plain"
         elif path == "/site-data-navigation":
-            action = b"change" if self.change_site_data_source.is_set() else b"overwrite" if self.change_site_data_entry.is_set() else b"keep"
+            action = b"change" if self.change_site_data_source.is_set() else (
+                b"overwrite" if self.change_site_data_entry.is_set() else b"drop-schema" if self.drop_site_schema.is_set() else b"keep")
             data, content_type = action, "text/plain"
+        elif path == "/site-schema-dropped":
+            self.site_schema_dropped.set()
+            data, content_type = b"ok", "text/plain"
         elif path == "/site-data-entry-changed":
             self.site_data_entry_changed.set()
             data, content_type = b"ok", "text/plain"
@@ -306,18 +312,29 @@ class Fixture(BaseHTTPRequestHandler):
                     'sessionStorage.setItem("moon-session","session-value");'
                     '(async()=>{await Promise.all(['
                     'new Promise((ok,fail)=>{const request=indexedDB.open("moon-inventory",3);'
-                    'request.onupgradeneeded=()=>request.result.createObjectStore("records");'
+                    'request.onupgradeneeded=()=>{const db=request.result;'
+                    'const store=db.createObjectStore("records",{keyPath:"id",autoIncrement:true});'
+                    'store.createIndex("by-topic",["topic","updated"],{unique:true});'
+                    'store.createIndex("by-tags","tags",{multiEntry:true});'
+                    'for(let i=0;i<10;i++)store.createIndex("z-"+i,"extra");'
+                    'for(let i=0;i<12;i++)db.createObjectStore("z-extra-"+i);};'
+                    'request.onsuccess=()=>{request.result.close();ok()};request.onerror=fail}),'
+                    'new Promise((ok,fail)=>{const request=indexedDB.open("moon-temporary-schema",1);'
+                    'request.onupgradeneeded=()=>request.result.createObjectStore("temporary");'
                     'request.onsuccess=()=>{request.result.close();ok()};request.onerror=fail}),'
                     '(async()=>{await caches.open("moon-request-cache");await caches.open("月".repeat(150));'
                     'await Promise.all(Array.from({length:32},(_,i)=>caches.open("cache-"+i)))})()]);'
                     'IDBFactory.prototype.databases=async()=>[{name:"forged",version:88}];'
+                    'IDBFactory.prototype.open=()=>{throw Error("forged open");};'
                     'CacheStorage.prototype.keys=async()=>["forged"];'
                     'CacheStorage.prototype.delete=async()=>false;'
                     'fetch("/site-data-catalog-ready");})().catch(()=>{});'
                     'Object.defineProperty(document,"cookie",{get:()=>"forged=other"});'
                     'Storage.prototype.getItem=()=>"forged";'
-                    'let changed=false;setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
+                    'let changed=false,schemaDropped=false;setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
                     'const action=await r.text();if(action==="change")location.replace("/page/site-data-changed");'
+                    'if(action==="drop-schema"&&!schemaDropped){schemaDropped=true;'
+                    'indexedDB.deleteDatabase("moon-temporary-schema").onsuccess=()=>fetch("/site-schema-dropped");}'
                     'if(action==="overwrite"&&!changed){changed=true;localStorage.setItem("moon-local","page-change");'
                     'for(let i=0;i<40;i++)sessionStorage.setItem("bulk-"+i,"extra");'
                     'fetch("/site-data-entry-changed",{cache:"no-store"});}},400);</script>'
@@ -731,6 +748,7 @@ def run_win32(exe, base, root):
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     has_site_menu = site_data.exists() and json.loads(site_data.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"][0].get("siteMenu")
     cache_remove = site_data.exists() and '"siteData.cacheWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
+    database_schema = site_data.exists() and "siteData.database" in site_data.with_name("site-data.html").read_text(encoding="utf-8")
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
     has_page_save = page_source.exists() and any(
         command["id"]=="save" for command in
@@ -1131,6 +1149,42 @@ def run_win32(exe, base, root):
             'if(!(await inventory("indexedDB")).indexedDB.entries.some(e=>e.name==="moon-inventory"))throw Error("IndexedDB was removed");'
             'if(await host("siteData.cacheRemove",{index,generation})!=="unavailable")throw Error("cache removal allowed the old snapshot");'
         ) if cache_remove else ""
+        database_contract = (
+            'const dbIndex=databases.indexedDB.entries.findIndex(db=>db.name==="moon-inventory");'
+            'const schemaQuery={index:dbIndex,generation:databases.generation};'
+            'const readSchema=query=>wait(async()=>{const schema=await host("siteData.database",query);'
+            'return schema.state!=="pending"&&schema;},"database schema");'
+            'const schemaButton=()=>[...el("results").querySelectorAll("button[data-database-index]")]'
+            '.find(button=>+button.dataset.databaseIndex===dbIndex);'
+            '(await wait(schemaButton,"schema action")).click();'
+            'await wait(()=>el("database-preview")?.textContent.includes("by-topic"),"rendered IndexedDB schema");'
+            'const schema=await readSchema(schemaQuery);'
+            'const store=schema.stores.find(item=>item.name==="records");'
+            'const compound=store?.indexes.find(item=>item.name==="by-topic");'
+            'const multi=store?.indexes.find(item=>item.name==="by-tags");'
+            'if(schema.state!=="ready"||schema.generation!==databases.generation||schema.index!==dbIndex||'
+            'schema.stores.length!==12||!schema.more||!store?.autoIncrement||store.keyPath.parts[0]!=="id"||'
+            'store.keyPath.compound||!store.more||store.indexes.length!==8||!compound?.unique||'
+            '!compound.keyPath.compound||compound.keyPath.parts.join(",")!=="topic,updated"||'
+            '!multi?.multiEntry||multi.keyPath.parts[0]!=="tags")throw Error("schema details "+JSON.stringify(schema));'
+            'schemaButton().click();'
+            'if(el("database-preview"))throw Error("schema did not collapse");'
+            'const unknown=await host("siteData.database",{...schemaQuery,index:4096}).then(()=>false,e=>e.message==="NOT_FOUND");'
+            'const old=await host("siteData.database",{...schemaQuery,generation:databases.generation-1})'
+            '.then(()=>false,e=>e.message==="NOT_FOUND");if(!unknown||!old)throw Error("unbound schema accepted");'
+            'const temporary={index:databases.indexedDB.entries.findIndex(db=>db.name==="moon-temporary-schema"),generation:databases.generation};'
+            'if(!(await readSchema(temporary)).stores.some(store=>store.name==="temporary"))throw Error("temporary database schema");'
+            'await emit({schemaStage:"delete"});'
+            'await wait(async()=>JSON.parse(await api.postMessage(JSON.stringify({op:"read"}))).value?.schemaReady,"database deletion signal");'
+            'await host("siteData.database",{...temporary,refresh:true});'
+            'if((await readSchema(temporary)).state!=="changed")throw Error("stale database did not report change");'
+            'if(!await host("siteData.refresh"))throw Error("schema refresh");'
+            'result=await wait(async()=>{const state=await host("siteData.status");'
+            'return state.state==="ready"&&state.generation>temporary.generation&&state;},"refreshed database snapshot");'
+            'const listed=(await inventory("indexedDB")).indexedDB.entries;'
+            'if(listed.some(db=>db.name==="moon-temporary-schema")||!listed.some(db=>db.name==="moon-inventory"&&db.version===3))'
+            'throw Error("removed database was recreated or an existing version changed");'
+        ) if database_schema else ""
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
             'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
@@ -1160,6 +1214,7 @@ def run_win32(exe, base, root):
             '!databases.indexedDB?.entries.some(entry=>entry.name==="moon-inventory"&&entry.version===3)||'
             'databases.indexedDB.entries.some(entry=>entry.name==="forged"))throw Error("database catalog "+JSON.stringify(databases));'
             'await wait(()=>el("results").textContent.includes("版本 3"),"rendered database version");'
+            + database_contract +
             'document.querySelector("[data-group=cacheStorage]").click();'
             'const cached=(await inventory("cacheStorage")).cacheStorage;'
             'if(!cached?.more||cached.entries.length!==32||!cached.entries.some(entry=>entry.name==="moon-request-cache")||'
@@ -2284,6 +2339,17 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address() == "extension://moon.site-data-fixture/site-data.html",
                      "The site data contract did not bind its page")
             config = profile / f'extension-{sha256(b"moon.site-data-fixture").hexdigest()}.json'
+            if database_schema:
+                phase = wait_for(lambda: (value:=read_settings(config)) and (value.get("schemaStage") or value.get("error")) and value,
+                                 "IndexedDB schema check did not request the deletion fixture",15)
+                if phase.get("error"):
+                    raise RuntimeError(f"IndexedDB schema: {phase['error']}")
+                Fixture.drop_site_schema.set()
+                if not Fixture.site_schema_dropped.wait(8):
+                    raise RuntimeError("The source could not delete its database after inspection")
+                signal = config.with_suffix(".signal")
+                signal.write_text('{"schemaReady":true}',encoding="utf-8")
+                signal.replace(config)
             if cache_remove:
                 for stage,button in (("cancel",7),("confirm",6)):
                     def cache_dialog():
@@ -2341,6 +2407,8 @@ def run_win32(exe, base, root):
                 raise RuntimeError(f"Site data invalidation: {result}")
             if has_catalog:
                 print("site_catalog=ok indexeddb_version=ok cache_limit=ok isolated_apis=ok catalog_search=ok stale_catalog=ok",flush=True)
+            if database_schema:
+                print("indexeddb_schema=ok store_and_index_limits=ok compound_key=ok index_flags=ok isolated_open=ok stale_database=ok no_recreation=ok",flush=True)
             if cache_remove:
                 print("site_cache_removal=ok native_cancel=ok named_cache_only=ok stale_generation=ok long_name_rejected=ok",flush=True)
             if "siteData.cookieDetails" in json.loads((site_data.parent / "plugin.json").read_text(encoding="utf-8"))["permissions"]:
@@ -2542,8 +2610,8 @@ def run_win32(exe, base, root):
             print("popup_policy=ok default_block=ok open_once=ok user_clicked_link=ok saved_origin_exception=ok block_and_reset=ok allow_confirmation=ok",flush=True)
             if autoplay_settings:
                 def playback(origin, stage, url=None):
-                    # A silent video decoder stall is inconclusive. A fresh URL keeps late reports separate.
-                    attempts = (stage,stage+"-retry") if url is None and stage.endswith("-silent") else (stage,)
+                    # A media decoder stall is inconclusive. A fresh URL keeps late reports separate.
+                    attempts = (stage,stage+"-retry") if url is None else (stage,)
                     outcome = None
                     for probe in attempts:
                         set_control(edit,url or origin + "/page/autoplay-" + probe)

@@ -72,7 +72,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"bookmarks.bar.toggle" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
-        .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value",
+        .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.database", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"siteData.cookieDetails", .@"siteData.cookieValue" => .@"siteData.cookieDetails",
         .@"siteData.update", .@"siteData.create", .@"siteData.clear" => .@"siteData.write",
@@ -200,7 +200,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
-        .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.cacheRemove" => {},
+        .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.cacheRemove", .@"siteData.database" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
@@ -584,6 +584,16 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             _ = native.moon_site_data_action(context.target_tab_id,owner.ptr,native.MOON_SITE_CATALOG);
             const result = site_data.catalogStatus(context.target_tab_id,context.plugin_id,options.group) orelse return sdk.failure(output,id,.NotFound);
+            return sdk.result(output,id,result);
+        },
+        .@"siteData.database" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const query = decode(sdk.SiteDatabaseQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (!native.moon_site_data_database(context.target_tab_id,owner.ptr,query.index,query.generation,query.refresh))
+                return sdk.failure(output,id,.NotFound);
+            const result = site_data.databaseDetails(context.target_tab_id,context.plugin_id,query) orelse
+                return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,result);
         },
         .@"siteData.update" => {

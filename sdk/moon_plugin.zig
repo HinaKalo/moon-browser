@@ -229,6 +229,23 @@ pub const SiteCookieEntry = struct {
 pub const SiteCookiePage = struct { available: bool, entries: []const SiteCookieEntry, more: bool, generation: u64 };
 pub const SiteCookieItem = struct { id: u32, generation: u64 };
 pub const SiteDatabase = struct { name: []const u8, version: ?u64, shortened: bool };
+pub const SiteDatabaseQuery = struct { index: u32, generation: u64, refresh: bool = false };
+pub const SiteDatabaseDetailsState = enum { pending, ready, changed, unavailable };
+pub const SiteDatabaseKeyPath = struct { parts: []const []const u8, compound: bool, shortened: bool };
+pub const SiteDatabaseIndex = struct {
+    name: []const u8, shortened: bool, keyPath: ?SiteDatabaseKeyPath, unique: bool, multiEntry: bool,
+};
+pub const SiteObjectStore = struct {
+    name: []const u8, shortened: bool, keyPath: ?SiteDatabaseKeyPath, autoIncrement: bool,
+    indexes: []const SiteDatabaseIndex, more: bool,
+};
+pub const SiteDatabaseDetails = struct {
+    state: SiteDatabaseDetailsState,
+    generation: u64,
+    index: u32,
+    stores: []const SiteObjectStore = &.{},
+    more: bool = false,
+};
 pub const SiteCache = struct { name: []const u8, shortened: bool };
 pub const SiteCatalogGroup = enum { indexedDB, cacheStorage };
 pub const SiteStorageCatalog = struct {
@@ -311,6 +328,7 @@ pub const Method = enum {
     @"siteData.status",
     @"siteData.list",
     @"siteData.catalog",
+    @"siteData.database",
     @"siteData.value",
     @"siteData.cookieDetails",
     @"siteData.cookieValue",

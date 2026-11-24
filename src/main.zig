@@ -2388,6 +2388,16 @@ fn sitePanelView(panel: u64, owner: []const u8, permission: sdk.Permission) ?*na
     return tab.view;
 }
 
+export fn moon_site_data_database(panel: u64, id: [*c]const u8, index: c_uint, generation: u64, refresh: bool) bool {
+    const owner = slice(id);
+    const view = sitePanelView(panel,owner,.@"siteData.read") orelse return false;
+    return site_data.requestDatabase(view,panel,owner,.{ .index=index,.generation=generation,.refresh=refresh });
+}
+
+export fn moon_site_database_result(tab: u64, request: u64, result: [*c]const u8) void {
+    if (!stopped and result!=null) site_data.completeDatabase(tab,request,slice(result));
+}
+
 export fn moon_site_data_cookie_url(panel: u64, id: [*c]const u8, url: [*c]u8, cap: usize) bool {
     if (native.moon_shell_private()) return false;
     const view = sitePanelView(panel,slice(id),.@"siteData.cookieDetails") orelse return false;

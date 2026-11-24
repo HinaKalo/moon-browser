@@ -74,7 +74,7 @@
     {
       "id": "moon.site-data",
       "name": "站点数据",
-      "description": "查看 Cookie 属性和 HttpOnly Cookie，编辑本地及会话存储，以及删除单个站点缓存。",
+      "description": "查看 Cookie、HttpOnly Cookie 和 IndexedDB 结构，编辑本地及会话存储，删除指定缓存。",
       "permission": "查看站点数据，编辑站点存储，并经确认删除指定缓存",
       "url": "https://docs.browser.moonl.cloud/site-data.html"
     },

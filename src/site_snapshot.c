@@ -131,6 +131,59 @@ static const char cache_remove_script[] =
     "return true;"
     "})";
 
+static const char database_script[] =
+    "((request,url,payload,reply) => {"
+    "const expected=JSON.parse(payload);"
+    "const sameDocument=()=>location.href===url&&globalThis.__moonSiteDataRevision===String(expected.revision);"
+    "let finished=false;"
+    "const finish=(state,stores=[],more=false)=>{"
+        "if(!finished&&sameDocument())reply(request+'\\n'+JSON.stringify({state,stores,more}));"
+        "finished=true;"
+    "};"
+    "const clip=(text,limit)=>text.slice(0,limit).toWellFormed();"
+    "const named=full=>{const name=clip(full,96);return {name,shortened:name!==full};};"
+    "const key=path=>{"
+        "if(path===null)return null;"
+        "const compound=Array.isArray(path),full=compound?path:[path];"
+        "const parts=full.slice(0,4).map(part=>clip(part,48));"
+        "return {parts,compound,shortened:parts.length!==full.length||parts.some((part,i)=>part!==full[i])};"
+    "};"
+    "if(!sameDocument())return;"
+    "indexedDB.databases().then(databases=>{"
+        "if(!sameDocument())return;"
+        "if(!databases.some(db=>db.name===expected.name&&db.version===expected.version)){finish('changed');return;}"
+        "const open=indexedDB.open(expected.name);"
+        "open.onupgradeneeded=()=>{open.transaction.abort();finish('changed');};"
+        "open.onerror=()=>finish('unavailable');"
+        "open.onsuccess=()=>{"
+            "const db=open.result;"
+            "try{"
+                "if(!sameDocument())return;"
+                "if(db.version!==expected.version){finish('changed');return;}"
+                "const all=db.objectStoreNames, names=[];"
+                "for(let i=0;i<Math.min(all.length,12);++i)names.push(all.item(i));"
+                "if(!names.length){finish('ready');return;}"
+                "const transaction=db.transaction(names,'readonly');"
+                "const stores=[],encoder=new TextEncoder();"
+                "let remaining=18*1024;"
+                "for(const name of names){"
+                    "const store=transaction.objectStore(name),indexes=[];"
+                    "for(let i=0;i<Math.min(store.indexNames.length,8);++i){"
+                        "const index=store.index(store.indexNames.item(i));"
+                        "indexes.push({...named(index.name),keyPath:key(index.keyPath),unique:index.unique,multiEntry:index.multiEntry});"
+                    "}"
+                    "const item={...named(name),keyPath:key(store.keyPath),autoIncrement:store.autoIncrement,"
+                        "indexes,more:store.indexNames.length>indexes.length};"
+                    "remaining-=encoder.encode(JSON.stringify(item)).length+1;"
+                    "if(remaining<0)break;"
+                    "stores.push(item);"
+                "}"
+                "finish('ready',stores,all.length>stores.length);"
+            "}catch{finish('unavailable');}finally{db.close();}"
+        "};"
+    "}).catch(()=>finish('unavailable'));"
+    "})";
+
 static void post_reply(WKBundlePageRef page,const char *channel,const char *text) {
     WKStringRef name=api.new_string(channel), body=api.new_string(text);
     if (name && body) api.post(page,name,body);
@@ -170,7 +223,12 @@ static JSValueRef cache_remove_finished(JSContextRef context,JSObjectRef functio
     return send_async_reply(context,argc,argv,exception,"MoonSiteCacheRemoval");
 }
 
-typedef enum { SITE_SNAPSHOT, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE } SiteRequest;
+static JSValueRef database_finished(JSContextRef context,JSObjectRef function,JSObjectRef self,size_t argc,
+                                    const JSValueRef argv[],JSValueRef *exception) {
+    return send_async_reply(context,argc,argv,exception,"MoonSiteDatabase");
+}
+
+typedef enum { SITE_SNAPSHOT, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE, SITE_DATABASE } SiteRequest;
 
 static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char *expected,const char *change,
                            SiteRequest kind,bool *scheduled,const char **failure) {
@@ -196,7 +254,7 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
     if (context) {
         *failure="\"evaluationFailed\"";
         const char *source = kind==SITE_ARTICLE ? change : kind==SITE_CATALOG ? catalog_script :
-                             kind==SITE_CACHE_REMOVE ? cache_remove_script : snapshot_script;
+                             kind==SITE_CACHE_REMOVE ? cache_remove_script : kind==SITE_DATABASE ? database_script : snapshot_script;
         JSStringRef script=api.source(source);
         if (kind==SITE_ARTICLE) {
             JSValueRef exception=NULL;
@@ -217,8 +275,10 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
                 if (kind==SITE_SNAPSHOT) arguments[1]=api.make_string(context,payload);
                 else {
                     arguments[1]=api.make_string(context,url);
-                    if (kind==SITE_CACHE_REMOVE) arguments[count++]=api.make_string(context,payload);
-                    arguments[count++]=api.make_callback(context,NULL,kind==SITE_CATALOG ? catalog_finished : cache_remove_finished);
+                    if (kind!=SITE_CATALOG) arguments[count++]=api.make_string(context,payload);
+                    const JSFunctionCallback handler=kind==SITE_CATALOG ? catalog_finished :
+                        kind==SITE_DATABASE ? database_finished : cache_remove_finished;
+                    arguments[count++]=api.make_callback(context,NULL,handler);
                 }
                 JSValueRef value=api.call(context,callback,NULL,count,arguments,&exception);
                 *failure="\"conversionFailed\"";
@@ -244,6 +304,7 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
     else if (api.text_equals(name,"MoonInspectCatalog")) { kind=SITE_CATALOG; channel="MoonSiteCatalog"; }
     else if (api.text_equals(name,"MoonReadArticle")) { kind=SITE_ARTICLE; channel="MoonArticleSnapshot"; }
     else if (api.text_equals(name,"MoonRemoveSiteCache")) { kind=SITE_CACHE_REMOVE; channel="MoonSiteCacheRemoval"; }
+    else if (api.text_equals(name,"MoonInspectDatabase")) { kind=SITE_DATABASE; channel="MoonSiteDatabase"; }
     else return;
     const size_t request_cap=(kind==SITE_ARTICLE ? 144 : 32)*1024;
     char *request=malloc(request_cap);

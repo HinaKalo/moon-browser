@@ -29,6 +29,11 @@
   .entry code { font-size:14px; overflow-wrap:anywhere; }
   .caption { color:var(--muted); display:block; margin-top:3px; }
   .cookie-meta { overflow-wrap:anywhere; }
+  .db-preview { padding:0 12px; margin-top:10px; border:1px solid var(--line); border-radius:8px; background:var(--page); }
+  .db-preview p { margin:10px 0; overflow-wrap:anywhere; }
+  .db-preview ul { margin:8px 0; border:0; background:none; }
+  .db-preview li { padding:8px 0; overflow-wrap:anywhere; }
+  .db-preview li li { padding:4px 0 4px 12px; }
   pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:10px 0 0; background:var(--page); border-radius:6px; padding:9px 11px; }
   .actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
   #editor { margin-top:16px; padding:14px; background:var(--surface); border:1px solid var(--line); border-radius:9px; }
@@ -87,6 +92,7 @@
   const newKey=el('key'), storageActions=el('storage-actions'), clearStorage=el('clear-storage');
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
   let clearing=false, cookieGeneration, cacheWritable=false;
+  let databasePreview;
   let dismissedMutation;
   const isCatalog=() => group==='indexedDB' || group==='cacheStorage';
   async function host(method,params={}) {
@@ -103,7 +109,7 @@
     editor.hidden=true;
     if (refocus && previous?.button.isConnected) previous.button.focus();
   }
-  function clear() { rows.replaceChildren(); rows.hidden=true; page=catalog=undefined; storageActions.hidden=true; closeEditor(); }
+  function clear() { rows.replaceChildren(); rows.hidden=true; page=catalog=databasePreview=undefined; storageActions.hidden=true; closeEditor(); }
   function lengthHint() {
     const length=new TextEncoder().encode(newValue.value).length;
     el('bytes').textContent=length + ' / 1024 字节';
@@ -273,7 +279,91 @@
       button.disabled=false;
     }
   }
+  async function toggleDatabase(index,generation) {
+    if (databasePreview?.index===index) {
+      databasePreview=undefined;
+      renderCatalog();
+      return;
+    }
+    const selection={index,generation,state:'pending'};
+    databasePreview=selection;
+    renderCatalog();
+    try {
+      for (let attempt=0; attempt<80 && databasePreview===selection; ++attempt) {
+        const result=await host('siteData.database',{index,generation,refresh:attempt===0});
+        if (databasePreview!==selection) return;
+        if (result.state!=='pending') {
+          Object.assign(selection,result);
+          renderCatalog();
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve,150));
+      }
+    } catch {}
+    if (databasePreview===selection) {
+      selection.state='unavailable';
+      renderCatalog();
+    }
+  }
+  function displayKey(key) {
+    if (key===null) return '无';
+    const value=key.compound ? JSON.stringify(key.parts) : JSON.stringify(key.parts[0] ?? '');
+    return value + (key.shortened ? '（已截断）' : '');
+  }
+  function renderDatabase() {
+    const preview=document.createElement('section');
+    preview.id='database-preview';
+    preview.className='db-preview';
+    preview.setAttribute('aria-label','数据库结构');
+    const notice=text => {
+      const line=document.createElement('p');
+      line.setAttribute('role','status');
+      line.textContent=text;
+      preview.append(line);
+    };
+    if (databasePreview.state!=='ready') {
+      notice({
+        pending:'正在读取数据库结构…',
+        changed:'数据库已变化。请刷新目录后重试。',
+        unavailable:'暂时无法读取数据库结构。',
+      }[databasePreview.state]);
+      return preview;
+    }
+    const list=document.createElement('ul');
+    for (const store of databasePreview.stores) {
+      const item=document.createElement('li'), title=document.createElement('strong'), summary=document.createElement('small');
+      title.textContent=store.name || '（空名称）';
+      summary.className='caption';
+      summary.textContent='键路径 ' + displayKey(store.keyPath) + (store.autoIncrement ? ' · 自动递增' : '') +
+        (store.shortened ? ' · 名称已截断' : '');
+      item.append(title,summary);
+      if (store.indexes.length) {
+        const indexes=document.createElement('ul');
+        indexes.setAttribute('aria-label','索引');
+        for (const index of store.indexes) {
+          const entry=document.createElement('li');
+          entry.textContent=(index.name || '（空名称）') + ' · 键路径 ' + displayKey(index.keyPath) +
+            (index.unique ? ' · 唯一' : '') + (index.multiEntry ? ' · 多值条目' : '') +
+            (index.shortened ? ' · 名称已截断' : '');
+          indexes.append(entry);
+        }
+        item.append(indexes);
+      }
+      if (store.more) {
+        const note=document.createElement('small');
+        note.className='caption';
+        note.textContent='仅显示前 8 个索引。';
+        item.append(note);
+      }
+      list.append(item);
+    }
+    if (list.childElementCount) preview.append(list);
+    else if (!databasePreview.more) notice('此数据库没有对象仓库。');
+    if (databasePreview.more) notice('还有对象仓库未显示。');
+    return preview;
+  }
   function renderCatalog() {
+    const focusedDatabase=document.activeElement?.dataset.databaseIndex;
     rows.replaceChildren();
     rows.hidden=true;
     details.textContent='';
@@ -285,15 +375,18 @@
     for (const [index,item] of section.entries.entries()) {
       if (query && !item.name.toLocaleLowerCase().includes(query)) continue;
       const row=document.createElement('li'), name=document.createElement('code');
-      row.className='entry';
+      const heading=document.createElement('div'), info=document.createElement('div');
+      heading.className='entry';
+      heading.append(info);
+      row.append(heading);
       name.textContent=item.name || '（空名称）';
-      row.append(name);
+      info.append(name);
       const text=item.version != null ? `版本 ${item.version}` : '';
       if (text || item.shortened) {
         const caption=document.createElement('small');
         caption.className='caption';
         caption.textContent=[text,item.shortened ? '名称已截断' : ''].filter(Boolean).join(' · ');
-        row.append(caption);
+        info.append(caption);
       }
       if (group==='cacheStorage' && cacheWritable && !item.shortened) {
         const remove=document.createElement('button');
@@ -301,14 +394,27 @@
         remove.textContent='删除缓存';
         remove.setAttribute('aria-label', '删除缓存 '+(item.name || '（空名称）'));
         remove.onclick=() => removeCache(index,generation,remove);
-        row.append(remove);
+        heading.append(remove);
+      }
+      if (group==='indexedDB' && !item.shortened && item.version!=null) {
+        const open=document.createElement('button'), expanded=databasePreview?.index===index;
+        const generation=catalog.generation;
+        open.dataset.databaseIndex=String(index);
+        open.textContent=expanded ? '收起结构' : '查看结构';
+        open.setAttribute('aria-expanded',String(expanded));
+        if (expanded) open.setAttribute('aria-controls','database-preview');
+        open.onclick=() => toggleDatabase(index,generation);
+        heading.append(open);
+        if (expanded) row.append(renderDatabase());
       }
       rows.append(row);
     }
+    if (focusedDatabase!==undefined)
+      rows.querySelector('[data-database-index="' + focusedDatabase + '"]')?.focus();
     rows.hidden=rows.children.length===0;
     status.textContent=rows.hidden ? (query ? '没有匹配的条目。' : `此网页尚未创建 ${label} 条目。`) : '';
     details.textContent=(section.more ? '已显示前 32 条。' : '') +
-      (group==='indexedDB' ? '在 WebKit 检查器的 Storage 面板查看对象仓库和记录。' : '');
+      (group==='indexedDB' ? '在开发者工具的 Storage 面板查看数据库记录。' : '');
   }
   async function load() {
     const ticket=++request;
@@ -316,6 +422,7 @@
       if (isCatalog()) {
         const value=await host('siteData.catalog',{group});
         if (ticket!==request) return;
+        if (databasePreview?.generation!==value.generation) databasePreview=undefined;
         catalog=value;
         renderCatalog();
         return;
@@ -369,6 +476,7 @@
       latest=identity;
       selected=current.state;
       request++;
+      if (databasePreview?.generation!==current.generation) databasePreview=undefined;
       closeEditor();
       if (current.state!=='ready' || current.generation!==dismissedMutation)
         feedback.textContent=messages[current.mutation] || '';
