@@ -216,6 +216,10 @@ void moon_web_popup(uint64_t source, const char *opener, const char *target, boo
 bool moon_popups_open(const char *owner, uint64_t source);
 bool moon_popups_open_blocked(const char *owner, uint64_t panel, uint64_t notice_id);
 bool moon_popups_change_allowed(const char *owner, uint64_t panel, const char *origin, bool allow);
+enum { MOON_AUTOPLAY_DEFAULT, MOON_AUTOPLAY_ALLOW, MOON_AUTOPLAY_MUTED, MOON_AUTOPLAY_BLOCK };
+bool moon_autoplay_rules_active(void);
+unsigned moon_autoplay_mode(const char *url);
+bool moon_autoplay_change_allowed(const char *owner, uint64_t panel, const char *origin, bool allow);
 enum MoonSiteDataAction { MOON_SITE_REFRESH, MOON_SITE_INSPECTOR, MOON_SITE_CATALOG };
 bool moon_site_data_action(uint64_t panel, const char *id, int action);
 bool moon_site_data_cookie_url(uint64_t panel, const char *id, char *url, size_t cap);

@@ -1,13 +1,13 @@
 {
   "id": "moon.popups",
-  "name": "网站弹窗",
-  "version": "1.0.0",
+  "name": "站点设置",
+  "version": "1.1.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonPopups.exe",
   "settingsPage": "popups.html",
   "contributes": {
-    "commands": [{ "id": "open", "label": "管理网站弹窗", "menu": "privacy", "siteMenu": true }]
+    "commands": [{ "id": "open", "label": "站点设置", "menu": "privacy", "siteMenu": true }]
   },
-  "permissions": ["popups.manage"]
+  "permissions": ["popups.manage", "siteSettings.autoplay"]
 }

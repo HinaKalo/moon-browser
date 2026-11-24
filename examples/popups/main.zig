@@ -12,7 +12,7 @@ pub fn main() !void {
     const reply = try client.call(.@"popups.open",.{});
     const value = reply.get("result") orelse std.json.Value.null;
     try client.reply(id,sdk.CommandResult{
-        .message = if (value == .bool and value.bool) null else "无法打开网站弹窗设置。请检查插件是否已启用。",
+        .message = if (value == .bool and value.bool) null else "无法打开站点设置。请检查插件是否已启用。",
         .toast = true,
     });
 }

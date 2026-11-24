@@ -34,6 +34,7 @@ const Grant = struct {
     search_manage: bool = false,
     site_data_write: ?bool = null,
     site_data_cookie_details: ?bool = null,
+    site_settings_autoplay: ?bool = null,
     popups_manage: bool = false,
     page_source: bool = false,
     tabs_session_manage: bool = false,
@@ -248,6 +249,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"siteData.cookieDetails");
             plugin.grants.insert(.@"siteData.cookieDetails");
         }
+        if (std.mem.eql(u8,id,"moon.popups") and plugin.enabled and requests.contains(.@"siteSettings.autoplay")) {
+            plugin.default_grants.insert(.@"siteSettings.autoplay");
+            plugin.grants.insert(.@"siteSettings.autoplay");
+        }
         if (std.mem.eql(u8,id,"moon.bookmarks") and plugin.enabled and requests.contains(.@"bookmarks.transfer")) {
             plugin.default_grants.insert(.@"bookmarks.transfer");
             plugin.grants.insert(.@"bookmarks.transfer");
@@ -351,6 +356,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"siteData.write")) plugin.grants.insert(.@"siteData.write");
         if (grant.enabled and (grant.site_data_cookie_details orelse plugin.default_grants.contains(.@"siteData.cookieDetails")) and
             plugin.requests.contains(.@"siteData.cookieDetails")) plugin.grants.insert(.@"siteData.cookieDetails");
+        if (grant.enabled and (grant.site_settings_autoplay orelse plugin.default_grants.contains(.@"siteSettings.autoplay")) and
+            plugin.requests.contains(.@"siteSettings.autoplay")) plugin.grants.insert(.@"siteSettings.autoplay");
         if (grant.enabled and grant.tabs_session_manage and plugin.requests.contains(.@"tabs.session.manage")) plugin.grants.insert(.@"tabs.session.manage");
         if (grant.enabled and (grant.bookmarks_transfer orelse plugin.default_grants.contains(.@"bookmarks.transfer")) and
             plugin.requests.contains(.@"bookmarks.transfer")) plugin.grants.insert(.@"bookmarks.transfer");
@@ -432,6 +439,7 @@ fn persist() bool {
         .search_manage = plugin.grants.contains(.@"search.manage"),
         .site_data_write = plugin.grants.contains(.@"siteData.write"),
         .site_data_cookie_details = plugin.grants.contains(.@"siteData.cookieDetails"),
+        .site_settings_autoplay = plugin.grants.contains(.@"siteSettings.autoplay"),
         .page_source = plugin.grants.contains(.@"page.source"),
         .popups_manage = plugin.grants.contains(.@"popups.manage"),
         .tabs_session_manage = plugin.grants.contains(.@"tabs.session.manage"),
@@ -480,6 +488,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"tabs.groups" => "此插件可管理组名称、颜色与标签成员。读取标签网址仍需要单独授权。",
                 .@"browser.defaultApp" => "此插件可在你执行命令时打开 Windows 默认应用设置。系统会由你决定是否更改默认应用。",
                 .@"popups.manage" => "此插件可管理网站弹窗权限，并为触发命令的网页打开最近拦截的链接。",
+                .@"siteSettings.autoplay" => "此插件可查看和修改网站的媒体自动播放规则。允许有声自动播放时需要单独确认。",
                 .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",
                 .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",

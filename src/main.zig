@@ -13,6 +13,7 @@ const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
 const page_source = @import("page_source.zig");
 const popups = @import("popup_policy.zig");
+const autoplay = @import("autoplay_policy.zig");
 const reading = @import("reading.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const market = @import("market.zig");
@@ -1365,6 +1366,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         downloads.init(profile);
         reading.init(profile);
         popups.init(profile);
+        autoplay.init(profile);
         userscripts.init(profile);
         search.init();
     }
@@ -1849,6 +1851,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"tabs.groups" => "允许管理标签组",
         .@"browser.defaultApp" => "允许打开 Windows 默认应用设置",
         .@"popups.manage" => "允许管理网站弹窗",
+        .@"siteSettings.autoplay" => "允许管理媒体自动播放",
         .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",
         .@"window.fullscreen" => "允许切换浏览器全屏",
@@ -2156,7 +2159,7 @@ export fn moon_web_popup(source: u64, opener: [*c]const u8, destination: [*c]con
     if (rule != .block and (gesture or (rule == .allow and tabs[active].document_committed))) {
         if (popup[0] == 0 and count < tabs.len) _ = copy(&popup,target);
     } else if (enabled and tabs[active].document_committed and popups.blocked(source,target)) {
-        native.moon_shell_toast("已拦截弹窗","可在「… → 隐私与安全 → 管理网站弹窗」查看并打开一次。");
+        native.moon_shell_toast("已拦截弹窗","可在「站点设置」查看并打开一次。");
     }
 }
 
@@ -2179,6 +2182,34 @@ export fn moon_popups_open(owner: [*c]const u8, source: u64) bool {
 fn popupPanelAllowed(owner: []const u8, panel: u64) bool {
     return !stopped and count != 0 and tabs[active].id == panel and tabs[active].extension and
         !native.moon_shell_private() and plugins.hasGrant(owner,.@"popups.manage");
+}
+
+export fn moon_autoplay_rules_active() bool {
+    return !stopped and autoplay.hasRules() and plugins.systemEnabled(.@"siteSettings.autoplay");
+}
+
+export fn moon_autoplay_mode(url: [*c]const u8) c_uint {
+    const key = popups.origin(slice(url)) orelse return native.MOON_AUTOPLAY_DEFAULT;
+    return switch (autoplay.mode(slice(&key))) {
+        .automatic => native.MOON_AUTOPLAY_DEFAULT,
+        .allow => native.MOON_AUTOPLAY_ALLOW,
+        .muted => native.MOON_AUTOPLAY_MUTED,
+        .block => native.MOON_AUTOPLAY_BLOCK,
+    };
+}
+
+fn autoplayPanelAllowed(owner: []const u8, panel: u64) bool {
+    return !stopped and count!=0 and tabs[active].id==panel and tabs[active].extension and
+        !native.moon_shell_private() and plugins.hasGrant(owner,.@"siteSettings.autoplay");
+}
+
+export fn moon_autoplay_change_allowed(owner: [*c]const u8, panel: u64, origin: [*c]const u8, allow: bool) bool {
+    const id = slice(owner);
+    if (!autoplayPanelAllowed(id,panel)) return false;
+    if (!allow) return true;
+    var body: [640]u8 = undefined;
+    const message = std.fmt.bufPrintSentinel(&body,"允许 {s} 自动播放有声音的媒体？",.{slice(origin)},0) catch return false;
+    return native.moon_shell_confirm("允许有声自动播放？",message.ptr) and autoplayPanelAllowed(id,panel);
 }
 
 export fn moon_popups_change_allowed(owner: [*c]const u8, panel: u64, origin: [*c]const u8, allow: bool) bool {

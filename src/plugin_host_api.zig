@@ -11,6 +11,7 @@ const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
 const page_source = @import("page_source.zig");
 const popups = @import("popup_policy.zig");
+const autoplay = @import("autoplay_policy.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const privacy = @import("privacy.zig");
 const search = @import("search.zig");
@@ -61,6 +62,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
         .@"page.saveHtml" => .@"page.save",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
+        .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => .@"siteSettings.autoplay",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
@@ -195,7 +197,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
-        .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => {},
+        .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         .@"tabs.groups.list", .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve" => {},
         .@"privacy.clear", .@"privacy.status" => {},
@@ -214,7 +216,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"host.getInfo", .@"browser.openDefaultApps", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.bar.toggle", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find", .@"pageSource.open", .@"pageSource.status",
-        .@"popups.open", .@"popups.status", .@"downloads.clearCompleted", .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink",
+        .@"popups.open", .@"popups.status", .@"siteSettings.autoplay.get", .@"downloads.clearCompleted", .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig",
         .@"tabs.session.status", .@"tabs.session.restore", .@"tabs.session.forget" => {
@@ -380,6 +382,25 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const request = decode(struct { id: u64 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             return sdk.result(output,id,native.moon_popups_open_blocked(owner.ptr,context.target_tab_id,request.id));
+        },
+        .@"siteSettings.autoplay.get" => {
+            if (!context.from_page or native.moon_shell_private()) return sdk.failure(output,id,.PermissionDenied);
+            var buffer: autoplay.Buffer = undefined;
+            return sdk.result(output,id,autoplay.status(context.target_tab_id,context.plugin_id,&buffer));
+        },
+        .@"siteSettings.autoplay.set" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const rule = decode(sdk.AutoplayRule,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const key = popups.origin(rule.origin) orelse return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (!native.moon_autoplay_change_allowed(owner.ptr,context.target_tab_id,&key,
+                rule.mode==.allow and autoplay.mode(std.mem.sliceTo(&key,0))!=.allow))
+                return sdk.failure(output,id,.Cancelled);
+            autoplay.save(allocator,key,rule.mode) catch |err| return sdk.failure(output,id,switch (err) {
+                error.LimitExceeded => .LimitExceeded,
+                else => .InternalError,
+            });
+            return sdk.result(output,id,true);
         },
         .@"ui.openPage" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

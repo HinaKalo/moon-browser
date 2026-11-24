@@ -3,9 +3,9 @@
   "entries": [
     {
       "id": "moon.popups",
-      "name": "网站弹窗",
-      "description": "设置每个网站的弹窗规则，或打开一次刚拦截的链接。",
-      "permission": "管理网站弹窗",
+      "name": "站点设置",
+      "description": "按网站设置弹窗和媒体自动播放规则，支持仅允许静音播放。",
+      "permission": "管理网站弹窗和媒体自动播放规则",
       "url": "https://docs.browser.moonl.cloud/popups.html"
     },
     {

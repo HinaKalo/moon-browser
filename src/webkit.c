@@ -42,6 +42,12 @@
 
 extern void WKHTTPCookieStoreDeleteAllCookies(WKHTTPCookieStoreRef, void *, void (*)(void *));
 extern WKStringRef WKFrameCopyMIMEType(WKFrameRef);
+enum WKWebsiteAutoplayPolicy {
+    kWKWebsiteAutoplayPolicyDefault, kWKWebsiteAutoplayPolicyAllow,
+    kWKWebsiteAutoplayPolicyAllowWithoutSound, kWKWebsiteAutoplayPolicyDeny
+};
+extern WKWebsitePoliciesRef WKWebsitePoliciesCreate(void);
+extern void WKWebsitePoliciesSetAutoplayPolicy(WKWebsitePoliciesRef, enum WKWebsiteAutoplayPolicy);
 
 #define WK_FUNCTIONS(X) \
     X(WKRelease) X(WKGetTypeID) X(WKSessionStateGetTypeID) X(WKSessionStateCopyData) X(WKDataGetSize) \
@@ -88,10 +94,11 @@ extern WKStringRef WKFrameCopyMIMEType(WKFrameRef);
     X(WKPageSetPageFindClient) X(WKPageFindString) X(WKPageHideFindUI) \
     X(WKPageGetPageZoomFactor) X(WKPageSetPageZoomFactor) \
     X(WKPageCopySessionState) X(WKPageRestoreFromSessionState) X(WKPageGetProcessIdentifier) X(WKPageGetMediaState) X(WKPageSetMuted) \
-    X(WKNavigationActionCopyRequest) X(WKNavigationActionShouldPerformDownload) \
+    X(WKNavigationActionCopyRequest) X(WKNavigationActionShouldPerformDownload) X(WKNavigationActionCopyTargetFrameInfo) \
     X(WKNavigationActionGetNavigationType) X(WKNavigationActionHasUnconsumedUserGesture) \
     X(WKNavigationResponseCopyResponse) X(WKNavigationResponseCanShowMIMEType) \
     X(WKFramePolicyListenerUse) X(WKFramePolicyListenerIgnore) X(WKFramePolicyListenerDownload) \
+    X(WKFramePolicyListenerUseWithPolicies) X(WKWebsitePoliciesCreate) X(WKWebsitePoliciesSetAutoplayPolicy) \
     X(WKErrorCopyLocalizedDescription) X(WKDownloadGetOriginatingPage) X(WKDownloadCancel) \
     X(WKPageListenForLayoutMilestones) X(WKPageCallAfterNextPresentationUpdate)
 
@@ -195,6 +202,26 @@ static bool safe_method(WKURLRequestRef request) {
     release(method);
     return safe;
 }
+static WKWebsitePoliciesRef autoplay_policies(WKNavigationActionRef action, WKURLRequestRef request) {
+    if (!request || !moon_autoplay_rules_active()) return NULL;
+    WKFrameInfoRef frame=wk.WKNavigationActionCopyTargetFrameInfo(action);
+    const bool main=frame && wk.WKFrameInfoGetIsMainFrame(frame);
+    release(frame);
+    if (!main) return NULL;
+    char url[4096];
+    copy_url(wk.WKURLRequestCopyURL(request),url,sizeof(url));
+    enum WKWebsiteAutoplayPolicy policy;
+    switch (moon_autoplay_mode(url)) {
+        case MOON_AUTOPLAY_ALLOW: policy=kWKWebsiteAutoplayPolicyAllow; break;
+        case MOON_AUTOPLAY_MUTED: policy=kWKWebsiteAutoplayPolicyAllowWithoutSound; break;
+        case MOON_AUTOPLAY_BLOCK: policy=kWKWebsiteAutoplayPolicyDeny; break;
+        default: return NULL;
+    }
+    WKWebsitePoliciesRef settings=wk.WKWebsitePoliciesCreate();
+    if (settings) wk.WKWebsitePoliciesSetAutoplayPolicy(settings,policy);
+    return settings;
+}
+
 static void navigation_action(WKPageRef page, WKNavigationActionRef action, WKFramePolicyListenerRef listener,
                               WKTypeRef user, const void *client) {
     WKURLRequestRef request = wk.WKNavigationActionCopyRequest(action);
@@ -219,10 +246,15 @@ static void navigation_action(WKPageRef page, WKNavigationActionRef action, WKFr
     }
     bool allowed = supported_scheme(request);
     if (!safe_method(request)) emit(client, MOON_UNSAFE, NULL);
-    release(request);
     if (!allowed) wk.WKFramePolicyListenerIgnore(listener);
     else if (wk.WKNavigationActionShouldPerformDownload(action)) wk.WKFramePolicyListenerDownload(listener);
-    else wk.WKFramePolicyListenerUse(listener);
+    else {
+        WKWebsitePoliciesRef policies=autoplay_policies(action,request);
+        if (policies) wk.WKFramePolicyListenerUseWithPolicies(listener,policies);
+        else wk.WKFramePolicyListenerUse(listener);
+        release(policies);
+    }
+    release(request);
 }
 static void navigation_response(WKPageRef page, WKNavigationResponseRef response, WKFramePolicyListenerRef listener,
                                 WKTypeRef user, const void *client) {

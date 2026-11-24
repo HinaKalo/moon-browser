@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>网站弹窗</title>
+<title>站点设置</title>
 <style>
   :root { color-scheme:light; font:14px/1.5 "Segoe UI","Microsoft YaHei UI",sans-serif; --page:#f5f6f9; --panel:#fff; --text:#14161d; --muted:#51586a; --line:#d9dce6; --accent:#354db8; --soft:#e8ecff; background:var(--page); color:var(--text); }
   :root[data-moon-theme=dark] { color-scheme:dark; --page:#191c23; --panel:#20232c; --text:#e9ebf2; --muted:#b7becf; --line:#3a4256; --accent:#adbcff; --soft:#2b365e; }
@@ -34,24 +34,28 @@
   #status { color:var(--accent); margin-top:10px; }
   #status:empty,.empty { display:none; }
   #results:empty+.empty { display:block; }
+  #autoplay-results:empty+.empty { display:block; }
+  #autoplay-list { margin-top:14px; }
+  #autoplay-status { margin-top:10px; color:var(--accent); }
+  #autoplay-status:empty { display:none; }
 </style>
 <main>
-  <header><h1>网站弹窗</h1><p>默认打开主动点击的链接，拦截网页自动打开的新标签。</p></header>
+  <header><h1>站点设置</h1><p>按网站保存规则。HTTP、HTTPS 和不同端口各自设置。</p></header>
   <section id="current" hidden>
     <h2>当前网站</h2>
-    <div class="row"><code id="current-origin" class="origin"></code><button id="use-current" type="button">编辑此网站规则</button></div>
+    <div class="row"><code id="current-origin" class="origin"></code><button id="use-current" type="button">编辑弹窗规则</button></div>
     <div id="notice" class="notice row" hidden>
       <div><p id="blocked-summary"></p><code id="blocked-target" class="origin"></code></div>
       <button id="open-blocked" type="button">打开一次</button>
     </div>
   </section>
   <section>
-    <h2>网站规则</h2>
+    <h2>弹窗例外</h2>
     <ul id="results"></ul>
     <p class="empty">暂无网站例外。</p>
   </section>
   <section>
-    <h2>添加或编辑规则</h2>
+    <h2>添加或编辑弹窗规则</h2>
     <form id="rule-form">
       <input id="origin" required spellcheck="false" inputmode="url" aria-label="网站 URL" placeholder="https://example.com">
       <select id="mode" aria-label="弹窗权限">
@@ -63,18 +67,38 @@
     </form>
     <p id="status" role="status"></p>
   </section>
+  <section id="autoplay" hidden>
+    <h2>媒体自动播放</h2>
+    <form id="autoplay-form">
+      <input id="autoplay-origin" required spellcheck="false" inputmode="url" aria-label="自动播放的网站 URL" placeholder="https://example.com">
+      <select id="autoplay-mode" aria-label="媒体自动播放规则">
+        <option value="automatic">使用默认设置</option>
+        <option value="allow">允许自动播放</option>
+        <option value="muted">仅允许静音自动播放</option>
+        <option value="block">阻止自动播放</option>
+      </select>
+      <button id="autoplay-save" type="submit">保存</button>
+    </form>
+    <p id="autoplay-status" role="status"></p>
+    <div id="autoplay-list">
+      <ul id="autoplay-results" aria-label="自动播放例外"></ul>
+      <p class="empty">暂无自动播放例外。</p>
+    </div>
+  </section>
 </main>
 <script>
   const get = id => document.getElementById(id);
   const input = get('origin'), mode = get('mode'), rows = get('results'), status = get('status');
   const labels = {allow:'允许自动弹窗', block:'阻止新窗口'};
+  const autoplayInput = get('autoplay-origin'), autoplayMode = get('autoplay-mode'), autoplayStatus = get('autoplay-status');
+  const autoplayLabels = {allow:'允许自动播放',muted:'仅允许静音自动播放',block:'阻止自动播放'};
   const messages = {
     INVALID_PARAMS:'请输入有效的 HTTP 或 HTTPS 网站地址。',
     LIMIT_EXCEEDED:'网站例外已达上限，请先移除不再需要的规则。',
     CANCELLED:'操作已取消。',
     PERMISSION_DENIED:'请在插件管理页启用网站弹窗权限。'
   };
-  let sequence = 0, current, busy = false;
+  let sequence = 0, current, busy = false, autoplayBusy = false, autoplayOrigin;
   async function host(method, params = {}) {
     const id = 'popups:' + ++sequence;
     const result = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0', id, method, params})));
@@ -95,8 +119,11 @@
       get('blocked-summary').textContent = '已拦截 ' + current.blocked.count + ' 次 · 最近目标';
       get('blocked-target').textContent = current.blocked.targetOrigin;
     }
-    rows.replaceChildren();
-    for (const rule of current.rules.sort((a,b) => a.origin.localeCompare(b.origin))) {
+    renderRules(rows,current.rules,labels,rule => edit(rule.origin,rule.mode),rule => setRule(rule.origin,'automatic'));
+  }
+  function renderRules(list, rules, names, editRule, resetRule) {
+    list.replaceChildren();
+    for (const rule of rules.sort((a,b) => a.origin.localeCompare(b.origin))) {
       const row = document.createElement('li');
       const text = document.createElement('div');
       const key = document.createElement('code');
@@ -104,16 +131,16 @@
       key.textContent = rule.origin;
       const label = document.createElement('p');
       label.className = 'policy';
-      label.textContent = labels[rule.mode];
+      label.textContent = names[rule.mode];
       text.append(key,label);
       const change = document.createElement('button');
       change.textContent = '编辑';
-      change.onclick = () => edit(rule.origin,rule.mode);
+      change.onclick = () => editRule(rule);
       const reset = document.createElement('button');
       reset.textContent = '恢复默认';
-      reset.onclick = () => setRule(rule.origin,'automatic');
+      reset.onclick = () => resetRule(rule);
       row.append(text,change,reset);
-      rows.append(row);
+      list.append(row);
     }
   }
   async function setRule(origin, value) {
@@ -148,6 +175,39 @@
       busy = false;
     }
   };
-  refresh().catch(error => { status.textContent = messages[error.message] || '暂时无法读取网站设置。'; });
+  async function refreshAutoplay() {
+    const permissions = await host('siteSettings.autoplay.get');
+    if (autoplayOrigin !== permissions.currentOrigin) {
+      autoplayOrigin = permissions.currentOrigin;
+      autoplayInput.value = permissions.currentOrigin || '';
+      autoplayMode.value = permissions.rules.find(rule => rule.origin === permissions.currentOrigin)?.mode || 'automatic';
+    }
+    get('autoplay').hidden = false;
+    renderRules(get('autoplay-results'),permissions.rules,autoplayLabels,rule => {
+      autoplayInput.value = rule.origin;
+      autoplayMode.value = rule.mode;
+      autoplayMode.focus();
+    },rule => saveAutoplay(rule.origin,'automatic'));
+  }
+  async function saveAutoplay(origin, value) {
+    if (autoplayBusy) return;
+    autoplayBusy = get('autoplay-save').disabled = true;
+    try {
+      await host('siteSettings.autoplay.set',{origin,mode:value});
+      await refreshAutoplay();
+      if (autoplayInput.value === origin) autoplayMode.value = value;
+      autoplayStatus.textContent = value === 'automatic' ? '已恢复默认设置。下次打开或刷新网页时生效。' : '已保存。下次打开或刷新网页时生效。';
+    } catch (error) {
+      autoplayStatus.textContent = error.message === 'PERMISSION_DENIED' ? '请在插件管理页授权媒体自动播放。' :
+        messages[error.message] || '暂时无法保存自动播放规则。';
+    } finally { autoplayBusy = get('autoplay-save').disabled = false; }
+  }
+  get('autoplay-form').onsubmit = event => { event.preventDefault(); saveAutoplay(autoplayInput.value.trim(),autoplayMode.value); };
+  function load() {
+    refresh().catch(error => { status.textContent = messages[error.message] || '暂时无法读取网站设置。'; });
+    refreshAutoplay().catch(() => { get('autoplay').hidden = true; });
+  }
+  document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });
+  load();
 </script>
 </html>

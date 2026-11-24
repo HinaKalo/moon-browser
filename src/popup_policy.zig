@@ -138,6 +138,11 @@ fn selected(panel: u64, owner: []const u8) ?*const Binding {
     return value;
 }
 
+pub fn boundOrigin(panel: u64, owner: []const u8) ?[]const u8 {
+    const bound = selected(panel,owner) orelse return null;
+    return if (bound.origin[0]!=0) text(&bound.origin) else null;
+}
+
 pub fn status(panel: u64, owner: []const u8, buffer: *RuleBuffer, target: *Origin) Status {
     var result: Status = .{ .rules=rules(&state,buffer), .currentOrigin=null, .blocked=null };
     const bound = selected(panel,owner) orelse return result;
