@@ -12,6 +12,7 @@ const site_data = @import("site_data.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const privacy = @import("privacy.zig");
 const search = @import("search.zig");
+const session = @import("session.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
 pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false };
@@ -46,6 +47,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
         .@"search.getConfig", .@"search.setConfig" => .@"search.manage",
+        .@"tabs.session.status", .@"tabs.session.setPreferences", .@"tabs.session.restore", .@"tabs.session.forget" => .@"tabs.session.manage",
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => .@"taskManager.manage",
         .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => .@"ui.commands",
     };
@@ -159,6 +161,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         .@"privacy.clear", .@"privacy.status" => {},
         .@"search.getConfig", .@"search.setConfig" => {},
+        .@"tabs.session.status", .@"tabs.session.setPreferences", .@"tabs.session.restore", .@"tabs.session.forget" => {},
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => {},
         .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
@@ -173,7 +176,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
-        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig" => {
+        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig",
+        .@"tabs.session.status", .@"tabs.session.restore", .@"tabs.session.forget" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -451,6 +455,21 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
             const config = decode(sdk.SearchConfig,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             return sdk.result(output,id,search.save(allocator,config,params.?));
+        },
+        .@"tabs.session.status" => sdk.result(output,id,session.status()),
+        .@"tabs.session.setPreferences" => {
+            if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const preferences = decode(sdk.SessionPreferences,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            return sdk.result(output,id,session.configure(allocator,preferences,params.?));
+        },
+        .@"tabs.session.restore" => {
+            if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const result = native.moon_session_restore(context.target_tab_id);
+            return sdk.result(output,id,@as(sdk.SessionRestore,@enumFromInt(result)));
+        },
+        .@"tabs.session.forget" => {
+            if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            return sdk.result(output,id,session.forget());
         },
         .@"taskManager.snapshot" => {
             const query = decode(sdk.TaskQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);

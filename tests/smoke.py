@@ -228,7 +228,8 @@ class Fixture(BaseHTTPRequestHandler):
                     'addEventListener("load",report);</script>'
                 )
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
-                        "pinned-first", "pinned-second"):
+                        "pinned-first", "pinned-second", "session-first", "session-second", "session-pinned", "session-private",
+                        "session-external"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "chrome-window":
                 demo = (
@@ -524,6 +525,7 @@ def run_win32(exe, base, root):
     task_manager = exe.parent / "plugins" / "task-manager" / "MoonTaskManager.exe"
     commands = exe.parent / "plugins" / "ui-commands" / "MoonCommandExample.exe"
     search_plugin = exe.parent / "plugins" / "search" / "MoonSearch.exe"
+    session_plugin = exe.parent / "plugins" / "session" / "MoonSession.exe"
     tab_tools = exe.parent / "plugins" / "tab-tools" / "MoonTabTools.exe"
     private_window = exe.parent / "plugins" / "private-window" / "MoonPrivateWindow.exe"
     if task_manager.exists():
@@ -1527,6 +1529,10 @@ def run_win32(exe, base, root):
 
             saved_bookmarks = count_rows("bookmarks.sqlite3","bookmarks")
             saved_downloads = count_rows("downloads.sqlite3","downloads")
+            session_checkpoint = profile / "last-session.json"
+            if session_plugin.exists():
+                session_checkpoint.write_text(json.dumps({"version":1,"tabs":[{"url":base,"title":"Previous session"}],"selected":0}),
+                                              encoding="utf-8")
             invoke("清除浏览数据")
             wait_for(lambda: read_address()=="extension://moon.privacy/privacy.html",
                      "The bundled privacy plugin did not open its page")
@@ -1537,6 +1543,8 @@ def run_win32(exe, base, root):
             library_result("moon.privacy-cache-fixture")
             if not history_rows("SELECT id FROM visits WHERE url=?",(base + "/page/privacy-seed",)):
                 raise RuntimeError("Cache-only clearing removed history")
+            if session_plugin.exists() and not json.loads(session_checkpoint.read_text(encoding="utf-8"))["tabs"]:
+                raise RuntimeError("Cache-only clearing removed the previous session")
             check_site(visit_privacy("privacy-after-cache"),True,worker)
             if Fixture.privacy_asset_requests != warm + 1:
                 raise RuntimeError("Clearing the resource cache did not refetch the cached response")
@@ -1547,6 +1555,8 @@ def run_win32(exe, base, root):
             library_result("moon.privacy-data-fixture")
             if history_rows("SELECT COUNT(*) FROM visits") != [(0,)]:
                 raise RuntimeError("Selected browsing history was not cleared")
+            if session_plugin.exists() and json.loads(session_checkpoint.read_text(encoding="utf-8"))["tabs"]:
+                raise RuntimeError("Privacy history clearing did not forget the previous session")
             check_site(visit_privacy("privacy-after-data"),False,worker)
             if count_rows("bookmarks.sqlite3","bookmarks") != saved_bookmarks or \
                     count_rows("downloads.sqlite3","downloads") != saved_downloads:
@@ -1660,6 +1670,8 @@ def run_win32(exe, base, root):
                                                  "复制当前标签","复制当前标签网址","关闭其他标签","关闭下方标签"})
             if search_plugin.exists():
                 expected["标签与页面"].add("管理搜索引擎")
+            if session_plugin.exists():
+                expected["标签与页面"].update({"管理启动与会话","恢复上次会话"})
             if private_window.exists():
                 expected["隐私与安全"].add("新建隐私窗口\tCtrl+Shift+N")
             for group, labels in expected.items():
@@ -1960,6 +1972,132 @@ def run_win32(exe, base, root):
             wait_for(lambda: user.IsWindowVisible(user.GetDlgItem(frame,1002)),"Restarted shell did not initialize")
             search_input(edit,query,expected)
             print("search_engines=ok live_config=ok custom_default=ok palette_alias=ok home_search=ok utf8_encoding=ok validation=ok restart=ok",flush=True)
+        if session_plugin.exists():
+            session_root = root / "session-check"
+            session_profile = session_root / "profile"
+            saved_session = session_profile / "last-session.json"
+            fixture = session_profile / "plugins" / "session-contract"
+            fixture.mkdir(parents=True)
+            (session_profile / "memory.json").write_text(json.dumps({
+                "warm_tabs":10,"idle_seconds":3600,"pressure_mib":32768,"target_mib":32000,
+            }),encoding="utf-8")
+            manifest = json.loads(session_plugin.with_name("plugin.json").read_text(encoding="utf-8"))
+            manifest.update(id="moon.session-fixture",name="Session preference fixture")
+            for command in manifest["contributes"]["commands"]:
+                command.pop("menu")
+                command["label"] = "Session fixture " + command["id"]
+            (fixture / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+            shutil.copyfile(session_plugin,fixture / session_plugin.name)
+            (session_profile / "plugin-state.json").write_text(json.dumps([
+                {"id":"moon.session-fixture","enabled":True,"tabs_read":False,"tabs_session_manage":True},
+            ]),encoding="utf-8")
+            page = session_plugin.with_name("session.html").read_text(encoding="utf-8")
+            contract = (
+                '<script>(async()=>{const settings=window.webkit.messageHandlers.moonSettings;'
+                'const emit=value=>settings.postMessage(JSON.stringify({op:"write",value}));'
+                'const wait=async(check)=>{for(let i=0;i<120;i++){if(await check())return;'
+                'await new Promise(r=>setTimeout(r,40));}throw Error("session settings timeout");};'
+                'try{await wait(()=>!automatic.disabled);if(automatic.checked)throw Error("startup enabled by default");'
+                'automatic.click();await wait(async()=>!automatic.disabled&&(await host("tabs.session.status")).autoRestore);'
+                'if(forget.disabled)throw Error("saved checkpoint cannot be cleared after restore");'
+                'forget.click();confirm.querySelector("[value=cancel]").click();'
+                'await wait(async()=>!confirm.open&&(await host("tabs.session.status")).alreadyRestored);'
+                'forget.click();confirm.querySelector("[value=forget]").click();'
+                'await wait(async()=>forget.disabled&&!(await host("tabs.session.status")).alreadyRestored);'
+                'await emit({passed:true});}catch(e){await emit({error:String(e)});}})();</script>'
+            )
+            (fixture / "session.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
+
+            def restart_session(*args, message=0x0010):
+                user.PostMessageW(frame,message,1 if message==0x0016 else 0,0)
+                if proc.wait(8)!=0:
+                    raise RuntimeError("Browser did not finish the session checkpoint")
+                restarted = subprocess.Popen([str(exe),*args],env=preview_env(session_root))
+                return restarted,browser_frame(restarted)
+
+            def counts():
+                return tuple(Fixture.closed_loaded.get(name,0) for name in ("session-first","session-second","session-pinned"))
+
+            database = session_profile / "history.sqlite3"
+            proc,frame = restart_session("--gdi")
+            edit = user.GetDlgItem(frame,1001)
+            home = user.GetDlgItem(frame,1002)
+            wait_for(lambda: user.IsWindowVisible(home),"The fresh session browser did not initialize")
+            pinned_url = closed_page("session-pinned")
+            tab_menu(0,"固定标签")
+            pin_file = session_profile / "pinned-tabs.json"
+            wait_for(lambda: pin_file.exists() and json.loads(pin_file.read_text(encoding="utf-8")),
+                     "Could not pin the test session's first webpage")
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Opening the first session tab failed")
+            first_url = closed_page("session-first")
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Opening the last active session tab failed")
+            selected_url = closed_page("session-second")
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Opening the session's POST tab failed")
+            posted = base + "/closed-submit"
+            set_control(edit,base + "/page/closed-post")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(posted,)),
+                     "The session's POST request did not finish")
+            click(px(110),px(222))
+            wait_for(lambda: read_address()==selected_url,"Could not select the last ordinary session tab")
+            initial = counts()
+            proc,frame = restart_session("--gdi")
+            edit = user.GetDlgItem(frame,1001)
+            home = user.GetDlgItem(frame,1002)
+            wait_for(lambda: user.IsWindowVisible(home),"A fresh start unexpectedly restored the old session")
+            recorded = json.loads(saved_session.read_text(encoding="utf-8"))
+            if [tab["url"] for tab in recorded["tabs"]] != [first_url,selected_url] or recorded["selected"]!=1:
+                raise RuntimeError("Session checkpoint lost tab order, included a pin or POST, or lost the selected tab")
+            if counts()!=initial:
+                raise RuntimeError("Previous webpages loaded before the user restored the session")
+            before = palette_rows()
+            invoke("恢复上次会话")
+            wait_for(lambda: read_address()==selected_url and counts()[1]>initial[1],"Manual restore did not load the selected tab")
+            if counts()[0]!=initial[0] or counts()[2]!=initial[2] or palette_rows()!=before+1:
+                raise RuntimeError("Manual restore duplicated the pin or loaded a background tab")
+            invoke("恢复上次会话")
+            wait_for(lambda: owned_window("#32770","上次会话"),"The consumed session did not report an empty state")
+            if palette_rows()!=before+1:
+                raise RuntimeError("A second manual restore duplicated the session")
+            click(px(110),px(185))
+            wait_for(lambda: read_address()==first_url and counts()[0]>initial[0],"Selecting a restored background tab did not load it")
+
+            invoke("管理启动与会话")
+            wait_for(lambda: read_address()=="extension://moon.session/session.html","The packaged startup preferences did not open")
+            set_control(edit,"extension://moon.session-fixture/session.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            preference_report = session_profile / f'extension-{sha256(b"moon.session-fixture").hexdigest()}.json'
+            result = wait_for(lambda: preference_report.exists() and json.loads(preference_report.read_text(encoding="utf-8")),
+                              "The session preferences fixture did not finish")
+            if not result.get("passed"):
+                raise RuntimeError(f"Session preferences: {result}")
+            invoke("Moon fixture session-second")
+            wait_for(lambda: read_address()==selected_url,"The last active session tab did not regain focus")
+            proc,frame = restart_session("--private","--gdi",base + "/page/session-private",message=0x0016)
+            wait_for(lambda: Fixture.closed_loaded.get("session-private"),"The isolated private-window fixture did not load")
+            saved_bytes = saved_session.read_bytes()
+            initial = counts()
+            proc,frame = restart_session("--gdi")
+            edit = user.GetDlgItem(frame,1001)
+            wait_for(lambda: read_address()==selected_url and counts()[1]>initial[1],"Automatic restore did not reopen the selected tab")
+            if saved_session.read_bytes()!=saved_bytes or counts()[0]!=initial[0] or counts()[2]!=initial[2]:
+                raise RuntimeError("Private browsing rewrote the previous session or auto restore loaded its background tabs")
+            external = base + "/page/session-external"
+            initial = counts()
+            proc,frame = restart_session("--gdi",external)
+            edit = user.GetDlgItem(frame,1001)
+            wait_for(lambda: read_address()==external and Fixture.closed_loaded.get("session-external"),
+                     "An explicit startup address did not take precedence over session restore")
+            if counts()!=initial:
+                raise RuntimeError("Opening an explicit address also loaded the previous session")
+            invoke("恢复上次会话")
+            wait_for(lambda: read_address()==selected_url and counts()[1]>initial[1],
+                     "The previous session was unavailable after explicit startup")
+            print("last_session=ok safe_checkpoint=ok selected_restore=ok no_duplicate=ok lazy_load=ok "
+                  "auto_startup=ok private_excluded=ok external_url_priority=ok forget_confirmation=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

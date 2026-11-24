@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.session",
+      "name": "上次会话",
+      "description": "从上次正常退出恢复普通标签。支持启动恢复与后台按需加载。",
+      "permission": "保存和恢复上次浏览会话",
+      "url": "https://docs.browser.moonl.cloud/session.html"
+    },
+    {
       "id": "moon.search",
       "name": "搜索引擎",
       "description": "设置默认搜索引擎，并在地址栏使用自定义关键词。",

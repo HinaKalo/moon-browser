@@ -90,6 +90,12 @@ pub fn build(b: *std.Build) void {
     });
     recent_tabs.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(recent_tabs);
+    const session = b.addExecutable(.{
+        .name = "MoonSession",
+        .root_module = b.createModule(.{ .root_source_file=b.path("examples/session/main.zig"),.target=target,.optimize=optimize,.link_libc=true }),
+    });
+    session.root_module.addImport("moon_plugin",plugin_sdk);
+    b.installArtifact(session);
     const tab_tools = b.addExecutable(.{
         .name = "MoonTabTools",
         .root_module = b.createModule(.{ .root_source_file=b.path("examples/tab-tools/main.zig"),.target=target,.optimize=optimize,.link_libc=true }),

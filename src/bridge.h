@@ -193,6 +193,7 @@ unsigned moon_plugin_ui_shortcut(const char *owner, const char *command, const c
 bool moon_reading_find(uint64_t tab, const char *owner);
 unsigned moon_reading_zoom(uint64_t tab, int action);
 int moon_recent_reopen(uint64_t tab, bool specific, uint32_t entry);
+int moon_session_restore(uint64_t source);
 int moon_tabs_organize(uint64_t tab, int operation);
 typedef struct MoonTabCloseResult { uint32_t closed, kept; } MoonTabCloseResult;
 bool moon_tabs_close_group(uint64_t tab, bool below, MoonTabCloseResult *result);

@@ -16,8 +16,9 @@ const recent_tabs = @import("recent_tabs.zig");
 const market = @import("market.zig");
 const updater = @import("updater.zig");
 const search = @import("search.zig");
+const last_session = @import("session.zig");
 
-const max_tabs = 128;
+const max_tabs = last_session.limit;
 const max_pinned = 24;
 const PinnedEntry = struct { url: []const u8, title: []const u8 };
 const Phase = sdk.TaskTabPhase;
@@ -461,6 +462,66 @@ fn readCommittedAddress(tab: *const Tab, buffer: *[4096:0]u8) bool {
 
 fn pinnedAddress(tab: *const Tab, buffer: *[4096:0]u8) ?[]const u8 {
     return if (!tab.unsafe_history and readCommittedAddress(tab,buffer)) slice(buffer) else null;
+}
+
+fn saveLastSession() void {
+    const allocator = std.heap.page_allocator;
+    const addresses = allocator.alloc([4096:0]u8,count) catch return;
+    defer allocator.free(addresses);
+    var entries: [max_tabs]last_session.Entry = undefined;
+    var used: usize = 0;
+    var selected: ?usize = null;
+    for (tabs[0..count],0..) |*tab,index| {
+        if (tab.pinned or tab.unsafe_history or tab.loading or tab.opening!=.none or
+            (tab.phase!=.live and tab.phase!=.dormant) or !readCommittedAddress(tab,&addresses[used])) continue;
+        const title = slice(&tab.title);
+        entries[used] = .{ .title=if (std.unicode.utf8ValidateSlice(title)) title else "", .url=slice(&addresses[used]) };
+        if (index==active) selected = used;
+        used += 1;
+    }
+    _ = last_session.save(.{ .tabs=entries[0..used], .selected=selected });
+}
+
+fn resumeLastSession() sdk.SessionRestore {
+    if (count==0 or !plugins.systemEnabled(.@"tabs.session.manage") or !network.mayNavigate()) return .unavailable;
+    const saved = last_session.read() orelse return .empty;
+    defer saved.deinit();
+    const snapshot = saved.value;
+    if (snapshot.tabs.len==0) return .empty;
+    const current = &tabs[active];
+    const reuse = active==count-1 and !current.pinned and current.phase==.blank and current.opening==.none and current.view==null;
+    const start = if (reuse) active else count;
+    if (snapshot.tabs.len > tabs.len-count+@intFromBool(reuse)) return .tabLimit;
+
+    const append_from: usize = if (reuse) 1 else 0;
+    const appended_at = count;
+    const now = native.moon_clock();
+    for (snapshot.tabs,0..) |saved_tab,offset| {
+        const index = if (reuse and offset==0) start else appended_at+offset-append_from;
+        var tab: Tab = .{ .id=next_id, .phase=.dormant, .has_document=true, .loaded=true, .last_used=now };
+        _ = copy(&tab.url,saved_tab.url);
+        _ = copy(&tab.title,saved_tab.title);
+        tabs[index] = tab;
+        next_id += 1;
+    }
+    count += snapshot.tabs.len-append_from;
+    last_session.markRestored();
+    const offset = snapshot.selected orelse 0;
+    const target = if (reuse and offset==0) start else appended_at+offset-append_from;
+    if (target==active) {
+        updateChrome(true);
+        restore(&tabs[target]);
+        updateChrome(false);
+        plugins.changed(tabSnapshot());
+    } else {
+        chooseTab(target,true);
+    }
+    return .restored;
+}
+
+export fn moon_session_restore(source: u64) c_int {
+    if (stopped or count==0 or tabs[active].id!=source) return @intFromEnum(sdk.SessionRestore.unavailable);
+    return @intFromEnum(resumeLastSession());
 }
 
 fn savePinnedTabs() bool {
@@ -980,6 +1041,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     }
     network.select(plugins.networkSource());
     if (smoke==.off and !private) {
+        last_session.init(profile);
         if (std.fmt.bufPrintSentinel(&pins_path,"{s}\\pinned-tabs.json",.{profile},0)) |_|
             readPinnedTabs()
         else |_| pins_path[0] = 0;
@@ -992,6 +1054,8 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     } else if (first_url) |initial| {
         var buffer: [4096]u8 = undefined;
         if (normalize(initial, &buffer)) |url| navigate(&tabs[active], url);
+    } else if (last_session.automatic()) {
+        _ = resumeLastSession();
     }
     return true;
 }
@@ -999,6 +1063,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
     if (stopped) return;
     if (command == native.MOON_SHUTDOWN) {
         if (pins_save_at!=null) _ = savePinnedTabs();
+        if (argument==0 and smoke==.off and plugins.systemEnabled(.@"tabs.session.manage")) saveLastSession();
         stopped = true;
         history.close();
         bookmarks.close();
@@ -1307,6 +1372,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"downloads.manage" => "允许管理下载",
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
+        .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
         .@"privacy.clear" => "允许在确认后清除浏览数据",

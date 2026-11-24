@@ -674,7 +674,7 @@ void moon_shell_refresh(void) { clamp_tab_strip(true); InvalidateRect(frame,NULL
 void moon_quit(int status) {
     if (quitting) return;
     quitting = true;
-    moon_command(MOON_SHUTDOWN,0,NULL);
+    moon_command(MOON_SHUTDOWN,status==0?0:1,NULL);
     if (frame) DestroyWindow(frame);
     PostQuitMessage(status);
 }
@@ -1172,6 +1172,9 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             if (moon_plugin_global_key((unsigned)wp,LOWORD(lp),HIWORD(lp))) return 0;
             break;
         case WM_CLOSE: moon_quit(0); return 0;
+        case WM_ENDSESSION:
+            if (wp) moon_quit(0);
+            return 0;
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }

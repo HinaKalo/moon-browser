@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>启动与会话</title>
+<style>
+  :root {
+    color-scheme:light; font:15px/1.55 "Segoe UI","Microsoft YaHei UI",sans-serif;
+    --page:#f6f7fa; --surface:#fff; --text:#171b27; --quiet:#535d73; --line:#dadfec;
+    --accent:#4158bf; --on-accent:#fff;
+    background:var(--page); color:var(--text);
+  }
+  :root[data-moon-theme=dark] {
+    color-scheme:dark; --page:#171a22; --surface:#222634; --text:#eef1f8; --quiet:#b8c1d5;
+    --line:#39435a; --accent:#aab8ff; --on-accent:#171b27;
+  }
+  body { margin:0; }
+  main { max-width:680px; margin:auto; padding:40px clamp(18px,5vw,44px); }
+  h1 { margin:0 0 20px; font-size:30px; }
+  h2 { margin:0 0 8px; font-size:17px; }
+  p { margin:6px 0; color:var(--quiet); }
+  p:empty { display:none; }
+  section { padding:17px 0; border-top:1px solid var(--line); }
+  label,.actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  input { accent-color:var(--accent); }
+  button {
+    font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line);
+    padding:8px 12px; border-radius:8px; cursor:pointer;
+  }
+  button.primary { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
+  button:disabled { opacity:.55; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .actions { margin-top:12px; }
+  dialog { width:min(405px,84vw); padding:20px; border:1px solid var(--line); border-radius:12px; color:inherit; background:var(--surface); }
+  dialog::backdrop { background:#141a326e; }
+</style>
+<main>
+  <h1>启动与会话</h1>
+  <section>
+    <h2>启动时</h2>
+    <label><input type="checkbox" id="auto" disabled>自动恢复上次会话</label>
+    <p>仅加载恢复后选中的标签，其余网页在切换到时加载。</p>
+  </section>
+  <section>
+    <h2>上次会话</h2>
+    <p id="count">正在读取会话…</p>
+    <div class="actions">
+      <button type="button" class="primary" id="restore" disabled>恢复会话</button>
+      <button type="button" id="forget" disabled>忘记会话</button>
+    </div>
+  </section>
+  <p id="feedback" role="status"></p>
+</main>
+<dialog id="confirm" aria-labelledby="question">
+  <form method="dialog">
+    <h2 id="question">忘记上次会话？</h2>
+    <p>将清除用于恢复的已保存网页。</p>
+    <div class="actions">
+      <button value="cancel" autofocus>取消</button>
+      <button value="forget">忘记会话</button>
+    </div>
+  </form>
+</dialog>
+<script>
+  const el=id=>document.getElementById(id);
+  const automatic=el('auto'), restore=el('restore'), forget=el('forget'), feedback=el('feedback'), confirm=el('confirm');
+  let sequence=0, state;
+  async function host(method,params={}) {
+    const id=String(++sequence);
+    const payload=JSON.stringify({jsonrpc:'2.0',id,method,params});
+    const reply=JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(payload));
+    if (reply.id!==id || reply.error) throw Error(reply.error?.message || 'INVALID_RESPONSE');
+    return reply.result;
+  }
+  function show() {
+    automatic.disabled=!state;
+    restore.disabled=!state?.tabs;
+    forget.disabled=!(state?.tabs || state?.alreadyRestored);
+    if (!state) { el('count').textContent='无法读取会话，请检查插件权限。'; return; }
+    automatic.checked=state.autoRestore;
+    el('count').textContent=state.alreadyRestored?'本窗口已恢复上次会话。':
+      state.tabs?'有 '+state.tabs+' 个网页可恢复。':'没有可恢复的上次会话。';
+  }
+  async function refresh() {
+    try { state=await host('tabs.session.status'); } catch { state=undefined; }
+    show();
+  }
+  automatic.onchange=async () => {
+    automatic.disabled=true;
+    try {
+      if (!await host('tabs.session.setPreferences',{autoRestore:automatic.checked})) throw Error();
+      feedback.textContent='已保存。';
+    } catch { feedback.textContent='无法保存启动设置。'; }
+    await refresh();
+  };
+  restore.onclick=async () => {
+    restore.disabled=true;
+    try {
+      const result=await host('tabs.session.restore');
+      feedback.textContent=({
+        restored:'已恢复会话。', empty:'没有可恢复的会话。', tabLimit:'当前窗口没有足够的标签位置。',
+      })[result] || '当前无法恢复会话。';
+    } catch { feedback.textContent='当前无法恢复会话。'; }
+    await refresh();
+  };
+  forget.onclick=()=>{confirm.returnValue='';confirm.showModal();};
+  confirm.onclose=async () => {
+    if (confirm.returnValue!=='forget') return;
+    try {
+      if (!await host('tabs.session.forget')) throw Error();
+      feedback.textContent='已忘记上次会话。';
+    } catch { feedback.textContent='无法清除已保存的会话。'; }
+    await refresh();
+  };
+  refresh();
+</script>
+</html>

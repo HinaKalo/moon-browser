@@ -33,6 +33,7 @@ const Grant = struct {
     tabs_manage: ?bool = null,
     search_manage: bool = false,
     site_data_write: ?bool = null,
+    tabs_session_manage: bool = false,
     menu_items: []const []const u8 = &.{},
     hidden_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
@@ -172,7 +173,8 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             else if (std.mem.eql(u8,id,"moon.task-manager")) .@"taskManager.manage"
             else if (std.mem.eql(u8,id,"moon.tab-tools")) .@"tabs.organize"
             else if (std.mem.eql(u8,id,"moon.private-window")) .@"privacy.privateWindow"
-            else if (std.mem.eql(u8,id,"moon.search")) .@"search.manage" else null;
+            else if (std.mem.eql(u8,id,"moon.search")) .@"search.manage"
+            else if (std.mem.eql(u8,id,"moon.session")) .@"tabs.session.manage" else null;
         if (default_permission) |scope| {
             if (requests.contains(scope)) {
                 plugin.enabled = true;
@@ -272,6 +274,7 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.search_manage and plugin.requests.contains(.@"search.manage")) plugin.grants.insert(.@"search.manage");
         if (grant.enabled and (grant.site_data_write orelse plugin.default_grants.contains(.@"siteData.write")) and
             plugin.requests.contains(.@"siteData.write")) plugin.grants.insert(.@"siteData.write");
+        if (grant.enabled and grant.tabs_session_manage and plugin.requests.contains(.@"tabs.session.manage")) plugin.grants.insert(.@"tabs.session.manage");
         if (canContribute(plugin)) {
             for (grant.hidden_menu_items) |id| {
                 if (findAction(plugin,id)) |index| {
@@ -339,6 +342,7 @@ fn persist() bool {
         .tabs_manage = plugin.grants.contains(.@"tabs.manage"),
         .search_manage = plugin.grants.contains(.@"search.manage"),
         .site_data_write = plugin.grants.contains(.@"siteData.write"),
+        .tabs_session_manage = plugin.grants.contains(.@"tabs.session.manage"),
         .menu_items = menus[index][0..used],
         .hidden_menu_items = hidden_menus[index][0..hidden],
         .hotkey = saved_key,
@@ -385,6 +389,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"tabs.organize" => "此插件可固定或取消固定触发命令的标签，也可切换该标签的音频静音。",
                 .@"tabs.manage" => "此插件可复制触发命令的标签或将网址写入剪贴板，也可关闭未固定且未受保护的其他标签。",
                 .@"search.manage" => "此插件可查看和修改默认搜索引擎、搜索网址和关键词。修改会影响之后主动提交的搜索。",
+                .@"tabs.session.manage" => "此插件可恢复上次正常退出时的普通网页、修改启动选项或清除已保存的会话。",
                 .@"privacy.privateWindow" => "此插件可在执行用户命令时打开独立的隐私浏览窗口。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;

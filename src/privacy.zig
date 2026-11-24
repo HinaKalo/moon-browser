@@ -3,6 +3,7 @@ const native = @import("native");
 const sdk = @import("moon_plugin");
 const history = @import("history.zig");
 const recent_tabs = @import("recent_tabs.zig");
+const session = @import("session.zig");
 const site_data = @import("site_data.zig");
 const userscripts = @import("userscripts.zig");
 
@@ -27,7 +28,7 @@ pub fn start(selection: sdk.PrivacySelection, tab: u64, plugin_id: [:0]const u8,
     if (plugin_id.len >= owner.len or !native.moon_privacy_allowed(tab, plugin_id.ptr)) return .unavailable;
     var buffer: [640]u8 = undefined;
     const detail = std.fmt.bufPrintSentinel(&buffer, "永久清除当前浏览器配置文件中所选项目的全部时间记录？\n{s}{s}{s}", .{
-        if (selection.history) "\n· 浏览历史和最近关闭的标签" else "",
+        if (selection.history) "\n· 浏览历史、最近关闭的标签和上次会话" else "",
         if (selection.siteData) "\n· Cookie 和持久站点数据。网站可能会退出登录。" else "",
         if (selection.cache) "\n· 网页缓存文件" else "",
     }, 0) catch return .unavailable;
@@ -44,7 +45,10 @@ pub fn start(selection: sdk.PrivacySelection, tab: u64, plugin_id: [:0]const u8,
         history.clear() catch {
             failed.history = true;
         };
-        if (!failed.history) recent_tabs.clear();
+        if (!failed.history) {
+            recent_tabs.clear();
+            if (!session.forget()) failed.history = true;
+        }
     }
     if (selection.siteData) site_data.reset();
     const requested: c_uint = (if (selection.siteData) @as(c_uint, native.MOON_ERASE_SITE) else 0) |
