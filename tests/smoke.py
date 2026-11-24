@@ -2634,7 +2634,7 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address()==first,"Switching to the first tab failed")
             if "固定标签" not in tab_menu(1,"固定标签"):
                 raise RuntimeError("No pin action on the background tab")
-            wait_for(lambda: pins.exists() and json.loads(pins.read_text(encoding="utf-8"))[0]["url"]==second,
+            wait_for(lambda: [item["url"] for item in read_settings(pins)]==[second],
                      "The background tab was not saved as pinned")
             if read_address()!=first or "取消固定标签" not in tab_menu(0):
                 raise RuntimeError("Pinning activated the background tab or did not move it to the top")
@@ -2663,7 +2663,7 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address()==second and Fixture.closed_loaded.get("pinned-second",0)>loads,
                      "Selecting the restored pinned tab did not load its page")
             tab_menu(0,"取消固定标签")
-            wait_for(lambda: json.loads(pins.read_text(encoding="utf-8"))==[],"Unpinning did not clear the saved pin")
+            wait_for(lambda: read_settings(pins)==[],"Unpinning did not clear the saved pin")
             print("tab_tools=ok background_target=ok single_tab_mute_state=ok mute_reload=ok pinned_order=ok restart_lazy_restore=ok",flush=True)
 
             def palette_rows():
@@ -2695,8 +2695,7 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address()==second and Fixture.closed_loaded.get("pinned-second",0)>previous,
                      "The duplicate's Forward entry was not preserved")
             tab_menu(0,"固定标签")
-            wait_for(lambda: json.loads(pins.read_text(encoding="utf-8")) and
-                     json.loads(pins.read_text(encoding="utf-8"))[0]["url"]==second,
+            wait_for(lambda: [item["url"] for item in read_settings(pins)]==[second],
                      "The bulk-close test did not pin the source")
             invoke("新建标签页")
             wait_for(lambda: user.IsWindowVisible(home),"Opening the last tab failed")
@@ -2989,7 +2988,7 @@ def run_win32(exe, base, root):
             pinned_url = closed_page("session-pinned")
             tab_menu(0,"固定标签")
             pin_file = session_profile / "pinned-tabs.json"
-            wait_for(lambda: pin_file.exists() and json.loads(pin_file.read_text(encoding="utf-8")),
+            wait_for(lambda: read_settings(pin_file),
                      "Could not pin the test session's first webpage")
             invoke("新建标签页")
             wait_for(lambda: user.IsWindowVisible(home),"Opening the first session tab failed")
