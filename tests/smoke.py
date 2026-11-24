@@ -248,6 +248,8 @@ class Fixture(BaseHTTPRequestHandler):
                 suffix = "target" if name == "link-menu-contract" else "stale-target"
                 demo = (f'<a style="position:absolute;top:10px;left:10px" href="/page/link-menu-{suffix}">本地链接验收</a>'
                         '<a style="position:absolute;top:46px;left:10px" href="mailto:fixture@example.invalid">邮件链接</a>')
+                if name == "link-menu-contract":
+                    demo += '<script>addEventListener("load",()=>fetch("/closed-ready/link-menu-contract"));</script>'
                 if name == "link-menu-stale":
                     demo += ('<script>const poll=setInterval(async()=>{'
                              'const r=await fetch("/link-menu-navigation",{cache:"no-store"});'
@@ -2121,8 +2123,6 @@ def run_win32(exe, base, root):
                               "Reader did not invalidate the old article",15)
             if not result.get("passed"):
                 raise RuntimeError(f"Reader invalidation check: {result}")
-            # The reader fixture is finished. Free its plugin slot for the task fixture after restart.
-            (profile / "plugins" / "reader-contract" / "plugin.json").unlink()
             print("reader_system_plugin=ok shortcut=ok live_dom=ok structure=ok appearance=ok return_to_tab=ok owner_isolation=ok stale_snapshot=ok",flush=True)
 
         if blocker.exists():
@@ -2747,13 +2747,6 @@ def run_win32(exe, base, root):
             user.PostMessageW(frame,0x0010,0,0)
             if proc.wait(8) != 0:
                 raise RuntimeError("Browser failed to shut down before reading preference check")
-            if reader_page.is_file() and task_manager.exists():
-                # A grant save while the first process was full may have omitted the task fixture.
-                state_path = profile / "plugin-state.json"
-                grants = json.loads(state_path.read_text(encoding="utf-8"))
-                if not any(grant["id"]=="moon.task-fixture" for grant in grants):
-                    grants.append({"id":"moon.task-fixture","enabled":True,"tabs_read":False,"task_manager_manage":True})
-                    state_path.write_text(json.dumps(grants),encoding="utf-8")
             frame = None
             persisted = base + "/page/reading-restart"
             proc = subprocess.Popen([str(exe),"--gdi",persisted],env=preview_env(root))
@@ -3898,6 +3891,102 @@ def run_win32(exe, base, root):
             invoke("显示或隐藏书签栏")
             wait_for(lambda: viewport_top(frame)==collapsed,"Hiding the bookmark bar did not restore the viewport")
             print("bookmarks_bar=ok session_preference=ok nested_menu=ok direct_navigation=ok menu_anchor=ok live_refresh=ok overflow=ok fullscreen=ok private=ok",flush=True)
+        if commands.exists():
+            user.PostMessageW(frame,0x0010,0,0)
+            if proc.wait(8)!=0:
+                raise RuntimeError("Could not close the browser before the plugin capacity fixture")
+            frame = None
+            capacity_env = preview_env(root / "plugin-capacity")
+            capacity_profile = Path(capacity_env["MOON_BROWSER_PROFILE_DIR"])
+            packages = capacity_profile / "plugins"
+            slots = 64 - len(list(exe.parent.glob("plugins/*/plugin.json")))
+            target_id, target_name = "sample.capacity-last", "插件容量边界"
+            command_label, link_label = "运行高序号插件", "由高序号插件处理链接"
+            for index in range(slots + 1):
+                is_target = index == slots - 1
+                shard = packages / f"capacity-{index:02d}"
+                shard.mkdir(parents=True)
+                shutil.copy2(commands,shard / commands.name)
+                manifest = {
+                    "id": target_id if is_target else f"sample.capacity-{index:02d}",
+                    "name": target_name if is_target else f"容量占位插件 {index:02d}",
+                    "version":"1.0.0","apiVersion":2,"runtime":"native","entry":commands.name,
+                    "contributes":{"commands":[{"id":"hello","label":command_label}]},
+                }
+                if is_target:
+                    manifest.update(settingsPage="commands.html",permissions=["ui.commands","bookmarks.manage"])
+                    manifest["contributes"]["commands"].append({"id":"settings","label":link_label,"linkMenu":"bookmark"})
+                    (shard / "commands.html").write_text("<!doctype html><title>容量验收页面</title>",encoding="utf-8")
+                (shard / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+            grant_file = capacity_profile / "plugin-state.json"
+            grant_file.write_text(json.dumps([
+                {"id":target_id,"enabled":True,"tabs_read":False,"bookmarks_manage":True},
+            ]),encoding="utf-8")
+            (capacity_profile / "plugin-shortcuts.json").write_text(json.dumps([
+                {"plugin":target_id,"command":"hello","shortcut":"Alt+Shift+9"},
+            ]),encoding="utf-8")
+
+            def open_capacity():
+                process = subprocess.Popen([str(exe),"--gdi"],env=capacity_env)
+                window = browser_frame(process)
+                user.SetWindowPos(window,None,0,0,px(960),px(610),0x0016)
+                return process,window,user.GetDlgItem(window,1001),user.FindWindowExW(window,None,"MoonContent",None)
+
+            proc,frame,edit,content = open_capacity()
+            listed = native_entries()["插件"]
+            if len(listed)!=64 or target_name not in listed or f"容量占位插件 {slots:02d}" in listed:
+                raise RuntimeError(f"Unexpected registered plugin count or max boundary: {len(listed)}")
+            if cache_remove and "允许经确认删除单个站点缓存" not in listed.get("站点数据",{}):
+                raise RuntimeError("The native menu omitted the most recently added permission")
+            native_entries(choose=("插件",target_name,"允许添加菜单入口和注册快捷键"))
+            dialog = wait_for(lambda: owned_window("#32770","授予插件权限？"),"The high-index permission did not prompt")
+            user.PostMessageW(dialog,0x0111,6,0)
+            def saved_grants():
+                if grant_file.stat().st_size<=32*1024:
+                    return False
+                try:
+                    entries=json.loads(grant_file.read_text(encoding="utf-8"))
+                except (FileNotFoundError,PermissionError):
+                    return False
+                return len(entries)==64 and any(grant["id"]==target_id and grant["ui_commands"] for grant in entries)
+            wait_for(saved_grants,"The 64-plugin grant file was not persisted")
+            user.PostMessageW(frame,0x0010,0,0)
+            if proc.wait(8)!=0:
+                raise RuntimeError("Could not restart the browser with the large grant file")
+            frame = None
+            proc,frame,edit,content = open_capacity()
+            command_entry = command_label+"\tAlt+Shift+9"
+            native_entries(choose=("插件",target_name,command_entry))
+            wait_for(lambda: owned_window("#32770",target_name),"The high-index plugin command did not run after restart")
+
+            invoke("管理插件")
+            wait_for(lambda: read_address()=="moon://plugins/","Plugin Manager did not open for the capacity profile")
+            for _ in range(12):
+                if find_bar():
+                    break
+                invoke("页内查找")
+                sleep(0.25)
+            find = wait_for(find_bar,"Native find did not open in Plugin Manager")
+            search = user.GetDlgItem(find,1201)
+            set_control(search,"64 / 64 个已加载")
+            wait_for(lambda: read_control(user.GetDlgItem(find,1202))=="1 项匹配",
+                     "Plugin Manager did not render the whole registry and capacity",15)
+            user.PostMessageW(search,0x0100,0x1B,1)
+
+            source = base+"/page/link-menu-contract"
+            previous = Fixture.closed_loaded.get("link-menu-contract",0)
+            set_control(edit,source)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: Fixture.closed_loaded.get("link-menu-contract",0)>previous,"The high-index link fixture did not load")
+            target_view = wait_for(visible_page_view,"No WebKit view for the high-index menu")
+            def right_click_capacity():
+                point = px(42)|(px(16)<<16)
+                user.PostMessageW(target_view,0x0204,2,point)
+                user.PostMessageW(target_view,0x0205,0,point)
+            native_entries(trigger=right_click_capacity,choose=link_label,owner_window=target_view)
+            wait_for(lambda: read_address()==f"extension://{target_id}/commands.html",
+                     "The high-index WebKit context command did not use its restored permission")
+            print("plugin_capacity=ok count=64 excess_rejected=ok manager_count=ok large_grants_restart=ok native_command=ok user_shortcut_label=ok webkit_link_menu=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

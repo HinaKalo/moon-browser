@@ -143,7 +143,7 @@ struct MoonView {
     struct MoonView *next;
 };
 static MoonView *views;
-enum { LINK_COMMANDS = 32*MOON_LINK_MENU_STRIDE, LINK_MENU_GENERATIONS = 128 };
+enum { LINK_COMMANDS = MOON_PLUGIN_LIMIT*MOON_LINK_MENU_STRIDE, LINK_MENU_GENERATIONS = 64 };
 _Static_assert(kWKContextMenuItemBaseApplicationTag+LINK_COMMANDS*LINK_MENU_GENERATIONS <= UINT16_MAX,
     "Context menu command IDs must fit a Win32 menu command");
 static MoonLinkContext link_context;
@@ -593,7 +593,7 @@ static size_t web_link_menu(MoonView *view,WKHitTestResultRef hit,WKTypeRef *ite
     memset(link_items,0,sizeof(link_items));
     size_t used=0;
     for (unsigned kind=MOON_LINK_OPEN;kind<=MOON_LINK_BOOKMARK;++kind) {
-        for (size_t plugin=0;plugin<moon_plugin_count() && plugin<LINK_COMMANDS/MOON_LINK_MENU_STRIDE;++plugin) {
+        for (size_t plugin=0;plugin<moon_plugin_count();++plugin) {
             for (size_t command=0;command<moon_plugin_action_count(plugin);++command) {
                 if (moon_plugin_link_action(plugin,command)!=kind) continue;
                 const size_t index=plugin*MOON_LINK_MENU_STRIDE+command;

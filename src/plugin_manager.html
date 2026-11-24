@@ -350,14 +350,15 @@
     loading = true;
     try {
       const found = [];
-      let offset = 0;
+      let offset = 0, limit;
       do {
         const page = await host({op:'list', offset});
         found.push(...page.items);
         offset = page.next;
+        limit = page.limit;
       } while (offset !== null);
       items = found.sort((a,b) => a.name.localeCompare(b.name,'zh-CN') || a.id.localeCompare(b.id));
-      get('counts').textContent = items.length + ' 个已安装 · ' + items.filter(item => item.enabled).length + ' 个已启用';
+      get('counts').textContent = items.length + ' / ' + limit + ' 个已加载 · ' + items.filter(item => item.enabled).length + ' 个已启用';
       await render(focus);
     } catch {
       status.textContent = '插件列表暂不可用。请按 F5 重试。';

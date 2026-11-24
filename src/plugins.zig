@@ -101,6 +101,8 @@ const Command = struct {
 };
 comptime {
     if (native.MOON_LINK_MENU_STRIDE != sdk.command_limit) @compileError("WebKit link menu stride must match the plugin command limit");
+    if (std.enums.values(sdk.Permission).len > native.MOON_PLUGIN_MENU_PERMISSION_LIMIT)
+        @compileError("Native plugin menu must have a slot for every permission");
 }
 const Hotkey = struct {
     action: usize, mods: c_uint, key: c_uint, scope: sdk.ShortcutScope,
@@ -131,7 +133,8 @@ const Plugin = struct {
     hotkey: ?Hotkey = null,
 };
 
-var all: [32]Plugin = undefined;
+var all: [native.MOON_PLUGIN_LIMIT]Plugin = undefined;
+const state_limit = 256 * 1024;
 var len: usize = 0;
 var file_path: [4096:0]u8 = @splat(0);
 var shortcut_path: [4096:0]u8 = @splat(0);
@@ -289,7 +292,8 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
 fn discover(root: []const u8, bundled: bool) void {
     var c_path: [4096]u8 = undefined;
     const directory = std.fmt.bufPrintSentinel(&c_path, "{s}\\plugins", .{root}, 0) catch return;
-    var names: [32][256]u8 = undefined;
+    // Allow some entries to be skipped because their manifests are invalid or missing.
+    var names: [native.MOON_PLUGIN_LIMIT * 2][256]u8 = undefined;
     const found = native.moon_plugin_directories(directory.ptr, &names[0][0], names[0].len, names.len);
     for (names[0..found]) |*name| {
         if (len == all.len) break;
@@ -339,9 +343,10 @@ pub fn init(app: []const u8, profile: []const u8) void {
     _ = std.fmt.bufPrintSentinel(&shortcut_path, "{s}\\plugin-shortcuts.json", .{profile}, 0) catch return;
     // Load user choices after the plugin registrations, even when there is no grant file.
     defer loadUserShortcuts();
-    var raw: [32768]u8 = undefined;
-    if (!native.moon_read_text(&file_path, &raw, raw.len)) return;
-    const saved = std.json.parseFromSlice([]Grant, allocator, std.mem.sliceTo(&raw, 0), .{}) catch return;
+    const raw = allocator.alloc(u8,state_limit) catch return;
+    defer allocator.free(raw);
+    if (!native.moon_read_text(&file_path,raw.ptr,raw.len)) return;
+    const saved = std.json.parseFromSlice([]Grant,allocator,std.mem.sliceTo(raw,0),.{}) catch return;
     defer saved.deinit();
     for (all[0..len]) |*plugin| for (saved.value) |grant| {
         if (!std.mem.eql(u8, grant.id, std.mem.sliceTo(&plugin.id, 0))) continue;
@@ -479,6 +484,7 @@ fn persist() bool {
     }
     const bytes = std.json.Stringify.valueAlloc(allocator, items[0..len], .{}) catch return false;
     defer allocator.free(bytes);
+    if (bytes.len>=state_limit) return false;
     const string = allocator.dupeSentinel(u8, bytes, 0) catch return false;
     defer allocator.free(string);
     return native.moon_write_text(&file_path, string.ptr);

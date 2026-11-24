@@ -254,6 +254,7 @@ typedef struct { uint64_t tab_id, navigation; bool site_muted, tab_muted; char o
 bool moon_site_context(MoonSiteContext *site);
 void moon_site_menu_run(const MoonSiteContext *site, size_t index, size_t command);
 enum MoonLinkMenu { MOON_LINK_OPEN = 1, MOON_LINK_COPY, MOON_LINK_BOOKMARK, MOON_LINK_MENU_STRIDE = 12 };
+enum { MOON_PLUGIN_LIMIT = 64, MOON_PLUGIN_MENU_PERMISSION_LIMIT = 40 };
 typedef struct { uint64_t tab_id, navigation; char url[4096], label[512]; } MoonLinkContext;
 bool moon_link_capture(MoonLinkContext *link, uint64_t tab);
 bool moon_link_current(const MoonLinkContext *link);

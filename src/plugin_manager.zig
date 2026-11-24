@@ -47,7 +47,10 @@ pub fn list(allocator: std.mem.Allocator, output: []u8, offset: usize) bool {
         .enabled = plugins.isEnabled(index),
         .bundled = plugins.isBundled(index),
     };
-    return reply(allocator, output, .{ .items = items[0..size], .next = if (offset + size < count) offset + size else null });
+    return reply(allocator, output, .{
+        .items=items[0..size],.next=if (offset+size<count) offset+size else null,
+        .limit=native.MOON_PLUGIN_LIMIT,
+    });
 }
 
 pub fn details(allocator: std.mem.Allocator, output: []u8, index: usize) bool {
