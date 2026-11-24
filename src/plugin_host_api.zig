@@ -40,6 +40,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"tabs.togglePinned", .@"tabs.toggleMuted" => .@"tabs.organize",
+        .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.closeGroup" => .@"tabs.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => .@"taskManager.manage",
@@ -168,7 +169,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
-        .@"tabs.togglePinned", .@"tabs.toggleMuted" => {
+        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -377,10 +378,26 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const result: ?c_uint = if (percent == 0) null else percent;
             return sdk.result(output,id,result);
         },
-        .@"tabs.togglePinned", .@"tabs.toggleMuted" => {
+        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
-            const outcome = native.moon_tabs_organize(context.target_tab_id,method==.@"tabs.toggleMuted");
+            const operation: sdk.TabOperation = switch (method) {
+                .@"tabs.togglePinned" => .pin,
+                .@"tabs.toggleMuted" => .mute,
+                .@"tabs.duplicate" => .duplicate,
+                .@"tabs.copyAddress" => .copyAddress,
+                else => unreachable,
+            };
+            const outcome = native.moon_tabs_organize(context.target_tab_id,@intFromEnum(operation));
             return sdk.result(output,id,@as(sdk.TabOrganization,@enumFromInt(outcome)));
+        },
+        .@"tabs.closeGroup" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(struct { scope: sdk.TabCloseScope },allocator,params) catch
+                return sdk.failure(output,id,.InvalidParams);
+            var counts: native.MoonTabCloseResult = undefined;
+            if (!native.moon_tabs_close_group(context.target_tab_id,options.scope==.below,&counts))
+                return sdk.result(output,id,null);
+            return sdk.result(output,id,sdk.TabCloseResult{ .closed=counts.closed,.kept=counts.kept });
         },
         .@"tabs.closed.list" => {
             var items: [recent_tabs.limit]sdk.ClosedTab = undefined;

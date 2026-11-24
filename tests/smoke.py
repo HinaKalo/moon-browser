@@ -538,6 +538,7 @@ def run_win32(exe, base, root):
             {"id": "moon.privacy-data-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.task-fixture", "enabled": True, "tabs_read": False, "task_manager_manage": True},
             {"id": "moon.command-fixture", "enabled": True, "tabs_read": False, "ui_commands": True},
+            {"id": "moon.tab-tools", "enabled": True, "tabs_read": False, "tabs_organize": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
@@ -1554,7 +1555,8 @@ def run_win32(exe, base, root):
                 "扩展工具": {"打开 Lua 脚本编辑器","配置菜单与快捷键示例","显示 Moon 命令提示"},
             }
             if tab_tools.exists():
-                expected["标签与页面"].update({"切换当前标签的固定状态","切换当前标签的静音状态"})
+                expected["标签与页面"].update({"切换当前标签的固定状态","切换当前标签的静音状态",
+                                                 "复制当前标签","复制当前标签网址","关闭其他标签","关闭下方标签"})
             if private_window.exists():
                 expected["隐私与安全"].add("新建隐私窗口\tCtrl+Shift+N")
             for group, labels in expected.items():
@@ -1670,6 +1672,67 @@ def run_win32(exe, base, root):
             tab_menu(0,"取消固定标签")
             wait_for(lambda: json.loads(pins.read_text(encoding="utf-8"))==[],"Unpinning did not clear the saved pin")
             print("tab_tools=ok background_target=ok single_tab_mute_state=ok mute_reload=ok pinned_order=ok restart_lazy_restore=ok",flush=True)
+
+            def palette_rows():
+                click(px(70),px(65))
+                dialog = find_palette()
+                count = user.SendMessageW(user.GetDlgItem(dialog,1004),0x018B,0,0)  # LB_GETCOUNT
+                user.PostMessageW(dialog,0x0010,0,0)
+                wait_for(lambda: not user.IsWindow(dialog),"The tab-count command palette did not close")
+                return count
+
+            closed_page("pinned-first")
+            closed_page("pinned-second")
+            click(px(110),px(185))
+            wait_for(lambda: user.IsWindowVisible(home),"The source tab did not move to the background")
+            before = palette_rows()
+            previous = Fixture.closed_loaded.get("pinned-second",0)
+            if "复制标签网址" not in tab_menu(0,"复制标签"):
+                raise RuntimeError("The background-tab menu did not offer copying its address")
+            wait_for(lambda: read_address()==second and Fixture.closed_loaded.get("pinned-second",0)>previous,
+                     "Duplicating the background tab did not open its page")
+            if palette_rows()!=before+1:
+                raise RuntimeError("Duplicating did not create exactly one tab")
+            previous = Fixture.closed_loaded.get("pinned-first",0)
+            click(px(285),px(24))
+            wait_for(lambda: read_address()==first and Fixture.closed_loaded.get("pinned-first",0)>previous,
+                     "The duplicate's Back entry was not preserved")
+            previous = Fixture.closed_loaded.get("pinned-second",0)
+            click(px(319),px(24))
+            wait_for(lambda: read_address()==second and Fixture.closed_loaded.get("pinned-second",0)>previous,
+                     "The duplicate's Forward entry was not preserved")
+            tab_menu(0,"固定标签")
+            wait_for(lambda: json.loads(pins.read_text(encoding="utf-8")) and
+                     json.loads(pins.read_text(encoding="utf-8"))[0]["url"]==second,
+                     "The bulk-close test did not pin the source")
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Opening the last tab failed")
+            before = palette_rows()
+            tab_menu(1,"关闭下方标签")
+            wait_for(lambda: read_address()==second and palette_rows()==before-2,
+                     "Closing the tabs below did not keep their source tab active")
+
+            content = user.FindWindowExW(frame,None,"MoonContent",None)
+            view = user.FindWindowExW(content,None,None,None)
+            while view and not user.IsWindowVisible(view):
+                view = user.FindWindowExW(content,view,None,None)
+            if not view:
+                raise RuntimeError("The duplicate's WebKit view was not visible")
+            user.PostMessageW(view,0x0102,ord('x'),1)  # WM_CHAR makes the live tab protected
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Opening a disposable tab failed")
+            closed_page("pinned-first")
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Opening the bulk-close target failed")
+            keep = closed_page("closed-item")
+            before = palette_rows()
+            tab_menu(3,"关闭其他标签")
+            wait_for(lambda: palette_rows()==before-1,"Closing other tabs did not preserve pinned and edited tabs")
+            if read_address()!=keep or "取消固定标签" not in tab_menu(0):
+                raise RuntimeError("Bulk closing changed the retained active tab or removed the pin")
+            click(px(110),px(185))
+            wait_for(lambda: read_address()==second,"The protected edited tab was not retained")
+            print("tab_batch_tools=ok duplicate_target=ok duplicate_history=ok close_below=ok pinned_kept=ok edited_tab_kept=ok",flush=True)
         if private_window.exists():
             private_title = "Moon Browser · 隐私浏览"
             kernel = ctypes.WinDLL("kernel32",use_last_error=True)

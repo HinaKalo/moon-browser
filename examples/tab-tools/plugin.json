@@ -1,15 +1,19 @@
 {
   "id": "moon.tab-tools",
   "name": "标签管理",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonTabTools.exe",
   "contributes": {
     "commands": [
       { "id": "pin", "label": "切换当前标签的固定状态", "menu": "page" },
-      { "id": "mute", "label": "切换当前标签的静音状态", "menu": "page" }
+      { "id": "mute", "label": "切换当前标签的静音状态", "menu": "page" },
+      { "id": "duplicate", "label": "复制当前标签", "menu": "page" },
+      { "id": "copyAddress", "label": "复制当前标签网址", "menu": "page" },
+      { "id": "closeOthers", "label": "关闭其他标签", "menu": "page" },
+      { "id": "closeBelow", "label": "关闭下方标签", "menu": "page" }
     ]
   },
-  "permissions": ["tabs.organize"]
+  "permissions": ["tabs.organize", "tabs.manage"]
 }

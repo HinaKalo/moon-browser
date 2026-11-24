@@ -465,15 +465,18 @@ fn readPinnedTabs() void {
     }
 }
 
-fn pinnedAddress(tab: *const Tab, buffer: *[4096:0]u8) ?[]const u8 {
-    if (tab.extension or tab.unsafe_history or !tab.has_document) return null;
+fn readCommittedAddress(tab: *const Tab, buffer: *[4096:0]u8) bool {
+    if (tab.extension or !tab.has_document) return false;
     if (tab.view) |view| {
         native.moon_engine_committed_url(view,buffer,buffer.len);
-        const address = slice(buffer);
-        return if (history.validURL(address)) address else null;
+    } else {
+        buffer.* = tab.url;
     }
-    const address = slice(&tab.url);
-    return if (history.validURL(address)) address else null;
+    return history.validURL(slice(buffer));
+}
+
+fn pinnedAddress(tab: *const Tab, buffer: *[4096:0]u8) ?[]const u8 {
+    return if (!tab.unsafe_history and readCommittedAddress(tab,buffer)) slice(buffer) else null;
 }
 
 fn savePinnedTabs() bool {
@@ -510,15 +513,27 @@ fn moveTab(from: usize, to: usize) void {
     active = tabIndex(active_id).?;
 }
 
-export fn moon_tabs_organize(id: u64, mute: bool) c_int {
-    return @intFromEnum(organizeTab(id,mute));
+fn pinnedCount() usize {
+    for (tabs[0..count],0..) |*entry,position| if (!entry.pinned) return position;
+    return count;
 }
 
-fn organizeTab(id: u64, mute: bool) sdk.TabOrganization {
-    const index = tabIndex(id) orelse return .unavailable;
+export fn moon_tabs_organize(id: u64, operation: c_int) c_int {
+    const action = std.enums.fromInt(sdk.TabOperation,operation) orelse return @intFromEnum(sdk.TabOrganization.unavailable);
+    return @intFromEnum(organizeTab(id,action));
+}
+
+fn organizeTab(id: u64, action: sdk.TabOperation) sdk.TabOrganization {
     if (stopped) return .unavailable;
+    const index = tabIndex(id) orelse return .unavailable;
     const tab = &tabs[index];
-    if (mute) {
+    if (action==.copyAddress) {
+        var address: [4096:0]u8 = undefined;
+        if (!readCommittedAddress(tab,&address)) return .unavailable;
+        return if (native.moon_shell_copy_text(&address)) .copied else .clipboardBusy;
+    }
+    if (action==.duplicate) return duplicateTab(index);
+    if (action==.mute) {
         if (!tab.muted and (tab.extension or !safeURL(slice(&tab.url)))) return .unavailable;
         tab.muted = !tab.muted;
         if (tab.view) |view| {
@@ -529,9 +544,7 @@ fn organizeTab(id: u64, mute: bool) sdk.TabOrganization {
     }
     if (native.moon_shell_private()) return .unavailable;
     const was_pinned = tab.pinned;
-    const pinned_count = for (tabs[0..count],0..) |*entry,position| {
-        if (!entry.pinned) break position;
-    } else count;
+    const pinned_count = pinnedCount();
     if (!was_pinned) {
         var buffer: [4096:0]u8 = undefined;
         if (tab.loading or pinnedAddress(tab,&buffer)==null) return .unavailable;
@@ -547,6 +560,33 @@ fn organizeTab(id: u64, mute: bool) sdk.TabOrganization {
     }
     native.moon_shell_refresh();
     return if (was_pinned) .unpinned else .pinned;
+}
+
+fn canDuplicate(tab: *const Tab) bool {
+    return tab.has_document and !tab.extension and !tab.unsafe_history and !tab.dirty and
+        !tab.loading and tab.opening==.none and tab.download_count==0 and
+        (tab.phase==.dormant or (tab.phase==.live and tab.loaded));
+}
+
+fn duplicateTab(index: usize) sdk.TabOrganization {
+    const source = &tabs[index];
+    var address: [4096:0]u8 = undefined;
+    if (!canDuplicate(source) or !readCommittedAddress(source,&address) or !network.mayNavigate()) return .unavailable;
+    if (count==tabs.len) return .limitReached;
+    const session = if (source.view) |view| native.moon_engine_save(view)
+        else native.moon_engine_retain_state(source.session);
+    const destination = if (source.pinned) pinnedCount() else index+1;
+    if (destination<count) std.mem.copyBackwards(Tab,tabs[destination+1..count+1],tabs[destination..count]);
+    if (active>=destination) active += 1;
+    tabs[destination] = .{
+        .id=next_id, .phase=.dormant, .url=address, .title=source.title,
+        .session=session, .muted=source.muted, .has_document=true, .loaded=true,
+        .last_used=native.moon_clock(),
+    };
+    count += 1;
+    next_id += 1;
+    chooseTab(destination,true);
+    return .duplicated;
 }
 
 fn checkTabToolsGrant() void {
@@ -602,6 +642,41 @@ fn closeTab(index: usize) void {
     updateChrome(was_active);
 }
 
+fn canCloseInGroup(tab: *const Tab) bool {
+    if (tab.pinned or tab.opening!=.none) return false;
+    if (tab.phase==.blank and tab.view==null) return true;
+    if (tab.phase!=.live and tab.phase!=.dormant) return false;
+    if (tabProtection(tab)) |reason| {
+        if (reason!=.loading or tab.phase!=.dormant or tab.loading or !tab.has_document) return false;
+    }
+    if (tab.view) |view| return !native.moon_engine_media(view);
+    return true;
+}
+
+export fn moon_tabs_close_group(id: u64, below: bool, result: *native.MoonTabCloseResult) bool {
+    if (stopped) return false;
+    const target = tabIndex(id) orelse return false;
+    const start = if (below) target+1 else 0;
+    var selected: [max_tabs]bool = @splat(false);
+    result.* = .{ .closed=0, .kept=0 };
+    for (tabs[start..count],start..) |*tab,index| {
+        if (index==target) continue;
+        if (canCloseInGroup(tab)) selected[index] = true else result.kept += 1;
+    }
+    if (selected[active]) chooseTab(target,true);
+    var index = count;
+    while (index>start) {
+        index -= 1;
+        if (!selected[index]) continue;
+        if (!canCloseInGroup(&tabs[index])) {
+            result.kept += 1;
+            continue;
+        }
+        closeTab(index);
+        result.closed += 1;
+    }
+    return true;
+}
 fn rememberClosedTab(tab: *Tab) void {
     if (!plugins.systemEnabled(.@"tabs.closed.manage") or tab.extension or !tab.has_document or
         tab.dirty or tab.unsafe_history or tab.loading or tab.opening != .none or tab.download_count != 0 or
@@ -962,10 +1037,22 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_NEW => addTab(null, true),
         native.MOON_CLOSE => closeTab(index),
         native.MOON_SELECT => chooseTab(index, true),
-        native.MOON_TAB_PIN, native.MOON_TAB_MUTE => {
-            if (!moon_tab_tools_enabled()) return;
+        native.MOON_TAB_PIN, native.MOON_TAB_MUTE, native.MOON_TAB_DUPLICATE, native.MOON_TAB_COPY_ADDRESS,
+        native.MOON_TAB_CLOSE_OTHERS, native.MOON_TAB_CLOSE_BELOW => {
+            const permission: sdk.Permission = if (command==native.MOON_TAB_PIN or command==native.MOON_TAB_MUTE)
+                .@"tabs.organize" else .@"tabs.manage";
+            if (!plugins.systemEnabled(permission)) return;
             const target = tabIndex(argument) orelse return;
-            _ = plugins.namedCommand("moon.tab-tools",if (command==native.MOON_TAB_PIN) "pin" else "mute",snapshotFor(&tabs[target]));
+            const action: []const u8 = switch (command) {
+                native.MOON_TAB_PIN => "pin",
+                native.MOON_TAB_MUTE => "mute",
+                native.MOON_TAB_DUPLICATE => "duplicate",
+                native.MOON_TAB_COPY_ADDRESS => "copyAddress",
+                native.MOON_TAB_CLOSE_OTHERS => "closeOthers",
+                native.MOON_TAB_CLOSE_BELOW => "closeBelow",
+                else => unreachable,
+            };
+            _ = plugins.namedCommand("moon.tab-tools",action,snapshotFor(&tabs[target]));
         },
         native.MOON_TAB_CLOSE_TARGET => closeTab(tabIndex(argument) orelse return),
         native.MOON_KEY_NEXT => chooseTab((active + 1) % count, true),
@@ -1188,13 +1275,16 @@ export fn moon_tab_flags(index: usize) c_uint {
         (if (tab.muted) @as(c_uint,native.MOON_TAB_MUTED) else 0) |
         (if (!native.moon_shell_private() and (tab.pinned or (!tab.extension and tab.has_document and !tab.unsafe_history and !tab.loading and safeURL(slice(&tab.url)))))
             @as(c_uint,native.MOON_TAB_CAN_PIN) else 0) |
-        (if (tab.muted or (!tab.extension and safeURL(slice(&tab.url)))) @as(c_uint,native.MOON_TAB_CAN_MUTE) else 0);
+        (if (tab.muted or (!tab.extension and safeURL(slice(&tab.url)))) @as(c_uint,native.MOON_TAB_CAN_MUTE) else 0) |
+        (if (canDuplicate(tab) and safeURL(slice(&tab.url))) @as(c_uint,native.MOON_TAB_CAN_DUPLICATE) else 0) |
+        (if (tab.has_document and !tab.extension and safeURL(slice(&tab.url))) @as(c_uint,native.MOON_TAB_CAN_COPY_ADDRESS) else 0);
 }
 export fn moon_tab_id(index: usize) u64 {
     return if (index<count) tabs[index].id else 0;
 }
-export fn moon_tab_tools_enabled() bool {
-    return plugins.systemEnabled(.@"tabs.organize");
+export fn moon_tab_tools_permissions() c_uint {
+    return (if (plugins.systemEnabled(.@"tabs.organize")) @as(c_uint,native.MOON_TAB_ORGANIZE) else 0) |
+        (if (plugins.systemEnabled(.@"tabs.manage")) @as(c_uint,native.MOON_TAB_MANAGE) else 0);
 }
 export fn moon_controls() c_uint {
     if (count == 0) return 0;
@@ -1238,6 +1328,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"ui.commands" => "允许添加主菜单入口和注册快捷键",
         .@"tabs.organize" => "允许固定标签和切换标签静音",
         .@"privacy.privateWindow" => "允许打开隐私浏览窗口",
+        .@"tabs.manage" => "允许复制和批量关闭标签",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {

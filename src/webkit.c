@@ -730,6 +730,7 @@ bool moon_engine_restore(MoonView *view, const void *state) {
     wk.WKPageRestoreFromSessionState(view->page,state);
     return true;
 }
+const void *moon_engine_retain_state(const void *state) { return state ? wk.WKRetain(state) : NULL; }
 void moon_engine_release_state(const void *state) { release(state); }
 uint32_t moon_engine_pid(MoonView *view) { return (uint32_t)wk.WKPageGetProcessIdentifier(view->page); }
 void moon_engine_mute(MoonView *view, bool muted) {

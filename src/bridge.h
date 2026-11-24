@@ -10,7 +10,8 @@ enum MoonCommand {
     MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
     MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES,
     MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_SETTINGS, MOON_MARKET,
-    MOON_TAB_PIN, MOON_TAB_MUTE, MOON_TAB_CLOSE_TARGET
+    MOON_TAB_PIN, MOON_TAB_MUTE, MOON_TAB_CLOSE_TARGET, MOON_TAB_DUPLICATE, MOON_TAB_COPY_ADDRESS,
+    MOON_TAB_CLOSE_OTHERS, MOON_TAB_CLOSE_BELOW
 };
 enum MoonEngineEvent {
     MOON_STARTED = 1, MOON_COMMITTED, MOON_FINISHED, MOON_FAILED, MOON_CHANGED,
@@ -56,6 +57,7 @@ void moon_shell_toggle_theme(void);
 void moon_shell_open_plugins(void);
 void moon_shell_info(const char *title, const char *body);
 void moon_shell_toast(const char *title, const char *body);
+bool moon_shell_copy_text(const char *text);
 void moon_shell_error(const char *body);
 bool moon_shell_confirm(const char *title, const char *body);
 const char *moon_profile_dir(void);
@@ -103,6 +105,7 @@ void moon_engine_reload(MoonView *view);
 unsigned moon_engine_controls(MoonView *view);
 bool moon_engine_restore(MoonView *view, const void *state);
 const void *moon_engine_save(MoonView *view);
+const void *moon_engine_retain_state(const void *state);
 void moon_engine_release_state(const void *state);
 uint32_t moon_engine_pid(MoonView *view);
 bool moon_engine_media(MoonView *view);
@@ -147,9 +150,11 @@ unsigned moon_tab_flags(size_t index);
 uint64_t moon_tab_id(size_t index);
 enum {
     MOON_TAB_DORMANT = 1, MOON_TAB_FAILED = 2, MOON_TAB_LOADING = 4, MOON_TAB_PINNED = 8,
-    MOON_TAB_MUTED = 16, MOON_TAB_CAN_PIN = 32, MOON_TAB_CAN_MUTE = 64
+    MOON_TAB_MUTED = 16, MOON_TAB_CAN_PIN = 32, MOON_TAB_CAN_MUTE = 64,
+    MOON_TAB_CAN_DUPLICATE = 128, MOON_TAB_CAN_COPY_ADDRESS = 256
 };
-bool moon_tab_tools_enabled(void);
+enum { MOON_TAB_ORGANIZE = 1, MOON_TAB_MANAGE = 2 };
+unsigned moon_tab_tools_permissions(void);
 unsigned moon_controls(void);
 size_t moon_plugin_count(void);
 const char *moon_plugin_label(size_t index);
@@ -185,7 +190,9 @@ unsigned moon_plugin_ui_shortcut(const char *owner, const char *command, const c
 bool moon_reading_find(uint64_t tab, const char *owner);
 unsigned moon_reading_zoom(uint64_t tab, int action);
 int moon_recent_reopen(uint64_t tab, bool specific, uint32_t entry);
-int moon_tabs_organize(uint64_t tab, bool mute);
+int moon_tabs_organize(uint64_t tab, int operation);
+typedef struct MoonTabCloseResult { uint32_t closed, kept; } MoonTabCloseResult;
+bool moon_tabs_close_group(uint64_t tab, bool below, MoonTabCloseResult *result);
 enum { MOON_ERASE_SITE = 1, MOON_ERASE_CACHE = 2 };
 unsigned moon_engine_erase_data(unsigned requested);
 void moon_privacy_engine_done(unsigned category);

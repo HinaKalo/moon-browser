@@ -157,23 +157,34 @@ static void draw_button(const Popup *popup, const DRAWITEMSTRUCT *item) {
     }
 }
 
-static void copy_details(Popup *popup) {
-    const size_t size = (wcslen(popup->body)+1)*sizeof(wchar_t);
+static bool copy_text(HWND window, const wchar_t *text) {
+    const size_t size = (wcslen(text)+1)*sizeof(wchar_t);
     HGLOBAL data = GlobalAlloc(GMEM_MOVEABLE,size);
-    if (!data) return;
+    if (!data) return false;
+    bool copied = false;
     void *memory = GlobalLock(data);
     if (memory) {
-        memcpy(memory,popup->body,size);
+        memcpy(memory,text,size);
         GlobalUnlock(data);
-        if (OpenClipboard(popup->window)) {
+        if (OpenClipboard(window)) {
             if (EmptyClipboard() && SetClipboardData(CF_UNICODETEXT,data)) {
                 data = NULL;
-                SetWindowTextW(popup->copy,L"已复制");
+                copied = true;
             }
             CloseClipboard();
         }
     }
     if (data) GlobalFree(data);
+    return copied;
+}
+
+bool moon_shell_copy_text(const char *text) {
+    wchar_t wide[4096];
+    return moon_utf16(text,wide,ARRAYSIZE(wide)) && copy_text(moon_shell_window(),wide);
+}
+
+static void copy_details(Popup *popup) {
+    if (copy_text(popup->window,popup->body)) SetWindowTextW(popup->copy,L"已复制");
 }
 
 static void close_popup(Popup *popup, int result) {

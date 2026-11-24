@@ -23,6 +23,7 @@ pub const Permission = enum {
     @"ui.commands",
     @"tabs.organize",
     @"privacy.privateWindow",
+    @"tabs.manage",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -70,7 +71,12 @@ pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
 pub const TabChange = struct { tabId: ?[]const u8 };
 pub const ClosedTab = struct { id: u32, title: []const u8, origin: []const u8 };
 pub const ReopenClosedTab = enum(c_int) { reopened, notFound, tabLimit, unavailable };
-pub const TabOrganization = enum(c_int) { pinned, unpinned, muted, unmuted, unavailable, limitReached, saveFailed };
+pub const TabOperation = enum(c_int) { pin, mute, duplicate, copyAddress };
+pub const TabOrganization = enum(c_int) {
+    pinned, unpinned, muted, unmuted, unavailable, limitReached, saveFailed, duplicated, copied, clipboardBusy,
+};
+pub const TabCloseScope = enum { others, below };
+pub const TabCloseResult = struct { closed: u32, kept: u32 };
 pub const PrivacySelection = struct { history: bool = false, siteData: bool = false, cache: bool = false };
 pub const PrivacyStart = enum { started, cancelled, busy, unavailable };
 pub const PrivacyState = enum { idle, running, waitingForEngine, complete, incomplete };
@@ -185,6 +191,9 @@ pub const Method = enum {
     @"tabs.closed.clear",
     @"tabs.togglePinned",
     @"tabs.toggleMuted",
+    @"tabs.duplicate",
+    @"tabs.copyAddress",
+    @"tabs.closeGroup",
     @"privacy.clear",
     @"privacy.status",
     @"privacy.openPrivateWindow",

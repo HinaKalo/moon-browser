@@ -30,6 +30,7 @@ const Grant = struct {
     ui_commands: bool = false,
     tabs_organize: bool = false,
     private_window: bool = false,
+    tabs_manage: ?bool = null,
     menu_items: []const []const u8 = &.{},
     hidden_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
@@ -176,6 +177,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
                 plugin.grants = plugin.default_grants;
             }
         }
+        if (std.mem.eql(u8,id,"moon.tab-tools") and plugin.enabled and requests.contains(.@"tabs.manage")) {
+            plugin.default_grants.insert(.@"tabs.manage");
+            plugin.grants.insert(.@"tabs.manage");
+        }
         if (std.mem.eql(u8,id,"moon.blocker") and requests.contains(.@"network.filter"))
             plugin.default_grants.insert(.@"network.filter");
     }
@@ -255,6 +260,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.ui_commands and plugin.requests.contains(.@"ui.commands")) plugin.grants.insert(.@"ui.commands");
         if (grant.enabled and grant.tabs_organize and plugin.requests.contains(.@"tabs.organize")) plugin.grants.insert(.@"tabs.organize");
         if (grant.enabled and grant.private_window and plugin.requests.contains(.@"privacy.privateWindow")) plugin.grants.insert(.@"privacy.privateWindow");
+        if (grant.enabled and (grant.tabs_manage orelse plugin.default_grants.contains(.@"tabs.manage")) and
+            plugin.requests.contains(.@"tabs.manage")) plugin.grants.insert(.@"tabs.manage");
         if (canContribute(plugin)) {
             for (grant.hidden_menu_items) |id| {
                 if (findAction(plugin,id)) |index| {
@@ -319,6 +326,7 @@ fn persist() bool {
         .ui_commands = plugin.grants.contains(.@"ui.commands"),
         .tabs_organize = plugin.grants.contains(.@"tabs.organize"),
         .private_window = plugin.grants.contains(.@"privacy.privateWindow"),
+        .tabs_manage = plugin.grants.contains(.@"tabs.manage"),
         .menu_items = menus[index][0..used],
         .hidden_menu_items = hidden_menus[index][0..hidden],
         .hotkey = saved_key,
@@ -362,6 +370,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"taskManager.manage" => "此插件可查看标签标题和浏览器进程内存，以及切换标签和卸载可回收的后台标签。",
                 .@"ui.commands" => "此插件可为已声明的命令添加主菜单入口，并设置一个快捷键。系统全局快捷键需要单独确认。",
                 .@"tabs.organize" => "此插件可固定或取消固定触发命令的标签，也可切换该标签的音频静音。",
+                .@"tabs.manage" => "此插件可复制触发命令的标签或将网址写入剪贴板，也可关闭未固定且未受保护的其他标签。",
                 .@"privacy.privateWindow" => "此插件可在执行用户命令时打开独立的隐私浏览窗口。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;

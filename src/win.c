@@ -946,14 +946,23 @@ static void tab_context_menu(HWND hwnd, POINT screen) {
     unsigned flags=moon_tab_flags(index);
     HMENU popup=CreatePopupMenu();
     if (!popup) return;
-    if (moon_tab_tools_enabled()) {
+    const unsigned tab_tools=moon_tab_tools_permissions();
+    if (tab_tools&MOON_TAB_ORGANIZE) {
         AppendMenuW(popup,MF_STRING|((flags&MOON_TAB_CAN_PIN)?0:MF_GRAYED),MOON_TAB_PIN,
             (flags&MOON_TAB_PINNED)?L"取消固定标签":L"固定标签");
         AppendMenuW(popup,MF_STRING|((flags&MOON_TAB_CAN_MUTE)?0:MF_GRAYED),MOON_TAB_MUTE,
             (flags&MOON_TAB_MUTED)?L"取消标签静音":L"静音此标签");
-        AppendMenuW(popup,MF_SEPARATOR,0,NULL);
     }
+    if (tab_tools&MOON_TAB_MANAGE) {
+        AppendMenuW(popup,MF_STRING|((flags&MOON_TAB_CAN_DUPLICATE)?0:MF_GRAYED),MOON_TAB_DUPLICATE,L"复制标签");
+        AppendMenuW(popup,MF_STRING|((flags&MOON_TAB_CAN_COPY_ADDRESS)?0:MF_GRAYED),MOON_TAB_COPY_ADDRESS,L"复制标签网址");
+    }
+    if (tab_tools) AppendMenuW(popup,MF_SEPARATOR,0,NULL);
     AppendMenuW(popup,MF_STRING,MOON_TAB_CLOSE_TARGET,L"关闭标签");
+    if (tab_tools&MOON_TAB_MANAGE) {
+        AppendMenuW(popup,MF_STRING|(moon_tab_count()>1?0:MF_GRAYED),MOON_TAB_CLOSE_OTHERS,L"关闭其他标签");
+        AppendMenuW(popup,MF_STRING|(index+1<moon_tab_count()?0:MF_GRAYED),MOON_TAB_CLOSE_BELOW,L"关闭下方标签");
+    }
     const UINT command=TrackPopupMenuEx(popup,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON,screen.x,screen.y,hwnd,NULL);
     DestroyMenu(popup);
     if (command) moon_command((int)command,id,NULL);
