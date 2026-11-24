@@ -584,6 +584,10 @@ def run_win32(exe, base, root):
     user.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
     user.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
     user.IsIconic.argtypes = [wt.HWND]
+    user.IsZoomed.argtypes = [wt.HWND]
+    user.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
+    user.MonitorFromWindow.restype = wt.HANDLE
+    user.GetMonitorInfoW.argtypes = [wt.HANDLE, ctypes.c_void_p]
     user.RegisterHotKey.argtypes = [wt.HWND,ctypes.c_int,wt.UINT,wt.UINT]
     user.UnregisterHotKey.argtypes = [wt.HWND,ctypes.c_int]
     user.GetMenuItemCount.argtypes = [wt.HMENU]
@@ -641,6 +645,7 @@ def run_win32(exe, base, root):
             ]), encoding="utf-8")
         (profile / "plugin-state.json").write_text(json.dumps([
             {"id": "moon.lua-manager", "enabled": True, "tabs_read": False, "lua_scripts_manage": True},
+            {"id": "moon.reading", "enabled": True, "tabs_read": False, "page_reading": True},
             {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
             {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
             {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True, "popups_manage": popups.exists()},
@@ -1915,6 +1920,62 @@ def run_win32(exe, base, root):
             target = base + "/page/reading-contract"
             navigate_reading(target)
             normal_width = wait_for(lambda: viewport("reading-contract")[0],"Reading viewport was not reported")
+
+            class MonitorInfo(ctypes.Structure):
+                _fields_ = [("size", wt.DWORD), ("monitor", wt.RECT),
+                            ("work", wt.RECT), ("flags", wt.DWORD)]
+
+            def rect_tuple(rect):
+                return rect.left, rect.top, rect.right, rect.bottom
+
+            def outer_rect(window):
+                rect = wt.RECT()
+                if not user.GetWindowRect(window, ctypes.byref(rect)):
+                    raise RuntimeError("Could not read the test window bounds")
+                return rect_tuple(rect)
+
+            def fullscreen_covers_monitor():
+                return (not user.IsWindowVisible(edit)
+                        and outer_rect(frame) == full_bounds and outer_rect(content) == full_bounds
+                        and viewport("reading-contract")[0] > normal_width)
+
+            original_bounds = outer_rect(frame)
+            monitor = MonitorInfo(ctypes.sizeof(MonitorInfo))
+            if not user.GetMonitorInfoW(user.MonitorFromWindow(frame,2), ctypes.byref(monitor)):
+                raise RuntimeError("Could not read bounds of the browser monitor")
+            full_bounds = rect_tuple(monitor.monitor)
+            user.PostMessageW(edit,0x0100,0x7A,1)  # F11
+            wait_for(fullscreen_covers_monitor,"F11 did not fill the monitor with the actual WebKit viewport")
+            user.PostMessageW(frame,0x0100,0x7A,1|(1<<30))
+            sleep(0.35)
+            if not fullscreen_covers_monitor():
+                raise RuntimeError("A held F11 toggled fullscreen again")
+            exit_button = user.GetDlgItem(frame,1005)
+            if not user.IsWindowVisible(exit_button):
+                raise RuntimeError("The native fullscreen exit button did not appear")
+            user.SendMessageW(exit_button,0x00F5,0,0)  # BM_CLICK
+            wait_for(lambda: user.IsWindowVisible(edit) and outer_rect(frame)==original_bounds,
+                     "The fullscreen exit button did not restore the normal window")
+
+            invoke("切换浏览器全屏")
+            wait_for(fullscreen_covers_monitor,"The reading plugin command did not toggle fullscreen")
+            user.PostMessageW(frame,0x0100,0x1B,1)  # Escape
+            wait_for(lambda: user.IsWindowVisible(edit) and outer_rect(frame)==original_bounds,
+                     "Escape did not restore the normal window")
+
+            user.ShowWindow(frame,3)  # SW_MAXIMIZE
+            wait_for(lambda: user.IsZoomed(frame),"Could not maximize the browser before F11")
+            maximized_bounds = outer_rect(frame)
+            user.PostMessageW(edit,0x0100,0x7A,1)
+            wait_for(fullscreen_covers_monitor,"F11 did not cover the taskbar from a maximized window")
+            user.PostMessageW(frame,0x0100,0x7A,1)
+            wait_for(lambda: user.IsZoomed(frame) and user.IsWindowVisible(edit) and outer_rect(frame)==maximized_bounds,
+                     "F11 did not restore the maximized window")
+            user.ShowWindow(frame,9)  # SW_RESTORE
+            wait_for(lambda: outer_rect(frame)==original_bounds and viewport("reading-contract")[0]==normal_width,
+                     "Restoring after fullscreen did not recover the earlier window and viewport size")
+            print("fullscreen_system_plugin=ok monitor_coverage=ok repeat_suppression=ok mouse_escape_f11=ok placement_restored=ok",flush=True)
+
             invoke("页内查找")
             bar = wait_for(find_bar,"The reading plugin did not open the find bar")
             search = user.GetDlgItem(bar,1201)
@@ -2350,7 +2411,7 @@ def run_win32(exe, base, root):
             if "管理插件" not in groups:
                 raise RuntimeError("The native menu has no plugin management entry")
             expected = {
-                "标签与页面": {"页内查找\tCtrl+F","放大页面\tCtrl++","恢复上一个关闭的标签\tCtrl+Shift+T"},
+                "标签与页面": {"页内查找\tCtrl+F","放大页面\tCtrl++","切换浏览器全屏\tF11","恢复上一个关闭的标签\tCtrl+Shift+T"},
                 "浏览资料": {"历史记录\tCtrl+H","查看下载\tCtrl+J","管理书签\tCtrl+Shift+O"},
                 "隐私与安全": {"清除浏览数据\tCtrl+Shift+Delete","查看当前站点数据"},
                 "开发与诊断": {"打开网页开发者工具\tF12","打开网页控制台\tCtrl+Shift+J","浏览器任务管理器\tCtrl+Shift+M"},

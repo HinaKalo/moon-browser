@@ -17,6 +17,10 @@ pub fn main() !void {
         const response = try client.call(.@"reading.find", .{});
         const result = response.get("result") orelse std.json.Value.null;
         break :find if (result == .bool and result.bool) null else unavailable;
+    } else if (std.mem.eql(u8,action,"fullscreen")) fullscreen: {
+        const response = try client.call(.@"window.toggleFullscreen", .{});
+        const result = response.get("result") orelse std.json.Value.null;
+        break :fullscreen if (result == .bool) null else unavailable;
     } else zoom: {
         const step = std.meta.stringToEnum(sdk.ZoomAction, action) orelse return error.InvalidCommand;
         const response = try client.call(.@"reading.zoom", .{ .action = step });

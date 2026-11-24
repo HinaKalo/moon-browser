@@ -37,6 +37,7 @@ const Grant = struct {
     page_source: bool = false,
     tabs_session_manage: bool = false,
     bookmarks_transfer: ?bool = null,
+    window_fullscreen: ?bool = null,
     menu_items: []const []const u8 = &.{},
     hidden_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
@@ -58,6 +59,7 @@ const Task = struct {
     expected_epoch: u32,
     snapshot: ?Snapshot,
     target_tab_id: u64,
+    target_navigation: u64,
     trigger: Trigger,
     plugin_id: [*:0]const u8,
     command_id: [*:0]const u8,
@@ -211,6 +213,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"bookmarks.transfer");
             plugin.grants.insert(.@"bookmarks.transfer");
         }
+        if (std.mem.eql(u8,id,"moon.reading") and plugin.enabled and requests.contains(.@"window.fullscreen")) {
+            plugin.default_grants.insert(.@"window.fullscreen");
+            plugin.grants.insert(.@"window.fullscreen");
+        }
         if (std.mem.eql(u8,id,"moon.blocker") and requests.contains(.@"network.filter"))
             plugin.default_grants.insert(.@"network.filter");
     }
@@ -303,6 +309,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.tabs_session_manage and plugin.requests.contains(.@"tabs.session.manage")) plugin.grants.insert(.@"tabs.session.manage");
         if (grant.enabled and (grant.bookmarks_transfer orelse plugin.default_grants.contains(.@"bookmarks.transfer")) and
             plugin.requests.contains(.@"bookmarks.transfer")) plugin.grants.insert(.@"bookmarks.transfer");
+        if (grant.enabled and (grant.window_fullscreen orelse plugin.default_grants.contains(.@"window.fullscreen")) and
+            plugin.requests.contains(.@"window.fullscreen")) plugin.grants.insert(.@"window.fullscreen");
         if (canContribute(plugin)) {
             for (grant.hidden_menu_items) |id| {
                 if (findAction(plugin,id)) |index| {
@@ -376,6 +384,7 @@ fn persist() bool {
         .popups_manage = plugin.grants.contains(.@"popups.manage"),
         .tabs_session_manage = plugin.grants.contains(.@"tabs.session.manage"),
         .bookmarks_transfer = plugin.grants.contains(.@"bookmarks.transfer"),
+        .window_fullscreen = plugin.grants.contains(.@"window.fullscreen"),
         .menu_items = menus[index][0..used],
         .hidden_menu_items = hidden_menus[index][0..hidden],
         .hotkey = saved_key,
@@ -421,6 +430,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
                 .@"page.reading" => "此插件可在当前页打开查找栏，并调整页面缩放。",
+                .@"window.fullscreen" => "此插件可在你触发命令时切换浏览器全屏。按 Esc 可以退出全屏。",
                 .@"tabs.closed.manage" => "此插件可查看最近关闭标签的标题和站点，并恢复或清空这些标签。",
                 .@"privacy.clear" => "此插件可以请求清除所选浏览数据。浏览器会在删除前单独确认。",
                 .@"taskManager.manage" => "此插件可查看标签标题和浏览器进程内存，以及切换标签和卸载可回收的后台标签。",
@@ -798,7 +808,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
     const plus = vk==0xbb or vk==0x6b; // VK_OEM_PLUS, VK_ADD
     if (plus and (mods==ctrl or mods==ctrl_shift)) return .@"Ctrl++";
     return switch (mods) {
-        0 => if (vk==0x7b) .F12 else null,
+        0 => switch (vk) { 0x7a => .F11, 0x7b => .F12, else => null },
         ctrl => switch (vk) {
             'H' => .@"Ctrl+H",
             'J' => .@"Ctrl+J",
@@ -854,7 +864,9 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
         if (!plugin.enabled) continue;
         for (plugin.actions[0..plugin.action_count],0..) |entry,command_index| {
             if (entry.shortcut!=key or entry.user_shortcut!=null or registeredShortcut(index,command_index)!=null) continue;
-            runShortcut(index,command_index,snapshot,repeated);
+            if (key==.F11 and ((!plugin.bundled and !canContribute(plugin)) or
+                !plugin.grants.contains(.@"window.fullscreen"))) continue;
+            if (key!=.F11 or !repeated) runShortcut(index,command_index,snapshot,repeated);
             return true;
         }
     }
@@ -938,6 +950,7 @@ fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?
         .snapshot = if (plugin.grants.contains(.@"tabs.read") or plugin.grants.contains(.@"bookmarks.manage") or
             plugin.grants.contains(.@"siteData.read") or plugin.grants.contains(.@"page.source")) snapshot else null,
         .target_tab_id = if (snapshot) |tab| tab.id else 0,
+        .target_navigation = if (snapshot) |tab| tab.navigation else 0,
         .trigger = trigger,
         .plugin_id = &plugin.id,
         .command_id = &plugin.actions[command_index].id,
@@ -1003,6 +1016,7 @@ fn serviceRpc(task: *Task, rpc: *Rpc) void {
         .grants = task.grants,
         .plugin_id = std.mem.span(task.plugin_id),
         .target_tab_id = task.target_tab_id,
+        .target_navigation = task.target_navigation,
         .tab = if (task.snapshot) |*snapshot| snapshot else null,
         .consent = .{ .context = task, .valid = invocationActive },
         .user_command = task.trigger == .command,

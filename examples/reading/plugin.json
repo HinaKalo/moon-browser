@@ -1,7 +1,7 @@
 {
   "id": "moon.reading",
   "name": "查找与缩放",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonReading.exe",
@@ -10,8 +10,9 @@
       { "id": "find", "label": "页内查找", "menu": "page", "shortcut": "Ctrl+F" },
       { "id": "increase", "label": "放大页面", "menu": "page", "shortcut": "Ctrl++" },
       { "id": "decrease", "label": "缩小页面", "menu": "page", "shortcut": "Ctrl+-" },
-      { "id": "reset", "label": "重置页面缩放", "menu": "page", "shortcut": "Ctrl+0" }
+      { "id": "reset", "label": "重置页面缩放", "menu": "page", "shortcut": "Ctrl+0" },
+      { "id": "fullscreen", "label": "切换浏览器全屏", "menu": "page", "shortcut": "F11" }
     ]
   },
-  "permissions": ["page.reading"]
+  "permissions": ["page.reading", "window.fullscreen"]
 }

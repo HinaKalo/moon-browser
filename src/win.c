@@ -13,10 +13,15 @@
 #include <shlwapi.h>
 #include <tlhelp32.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 
 static HWND frame, content, address, home_edit, palette, palette_input, palette_list;
+static HWND fullscreen_exit;
+static WINDOWPLACEMENT fullscreen_placement;
+static LONG_PTR fullscreen_style;
+static bool fullscreen;
 static HBRUSH address_brush;
 static HFONT edit_font, hero_font;
 static UINT dpi = 96;
@@ -48,11 +53,13 @@ static const Theme dark = {
 static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
-enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
+enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, FULLSCREEN_HINT_TIMER = 3,
+       ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
 enum { MENU_ADD = 11, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_MANAGE_PLUGINS,
        MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 24, MENU_PLUGIN_STRIDE = 32,
        MENU_SCRIPTS_PICK = 2000, MENU_SCRIPTS_BASE = 2010 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
+       FULLSCREEN_EXIT_CONTROL = 1005,
        PALETTE_TAB_OFFSET = 1000 };
 
 typedef struct Canvas {
@@ -498,6 +505,10 @@ static void paint_home(Canvas c,int width,int height) {
     }
 }
 static void paint_chrome(Canvas c,int width,int height) {
+    if (fullscreen) {
+        fill(c,0,0,width,height,theme->panel,0);
+        return;
+    }
     fill(c,0,0,width,height,theme->frame,0);
     int left=pane_left();
     if (!focus_mode) paint_sidebar(c,height);
@@ -581,10 +592,14 @@ static void layout(void) {
     RECT r;
     GetClientRect(frame,&r);
     int width=client_width(), height=client_height();
-    int left=px(pane_left()+1), top=px(TOP+1), margin=px(PAD+1);
+    int left=fullscreen?0:px(pane_left()+1), top=fullscreen?0:px(TOP+1), margin=fullscreen?0:px(PAD+1);
     int pane_width=r.right-left-margin, pane_height=r.bottom-top-margin;
     MoveWindow(content,left,top,pane_width>0?pane_width:0,pane_height>0?pane_height:0,TRUE);
-    if (pane_width>0 && pane_height>0) {
+    if (fullscreen) {
+        SetWindowRgn(content,NULL,TRUE);
+        if (fullscreen_exit)
+            SetWindowPos(fullscreen_exit,HWND_TOP,(r.right-px(206))/2,px(8),px(206),px(38),SWP_NOACTIVATE);
+    } else if (pane_width>0 && pane_height>0) {
         HRGN corners=CreateRoundRectRgn(0,0,pane_width+1,pane_height+1,px(20),px(20));
         if (corners && !SetWindowRgn(content,corners,TRUE)) DeleteObject(corners);
     }
@@ -604,6 +619,51 @@ static void layout(void) {
     }
     clamp_tab_strip(true);
     InvalidateRect(frame,NULL,FALSE);
+}
+static bool fit_fullscreen(HMONITOR monitor) {
+    MONITORINFO info={.cbSize=sizeof(info)};
+    if (!GetMonitorInfoW(monitor,&info)) return false;
+    const RECT r=info.rcMonitor;
+    return SetWindowPos(frame,NULL,r.left,r.top,r.right-r.left,r.bottom-r.top,
+        SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED);
+}
+static void show_fullscreen_exit(void) {
+    if (!fullscreen_exit) return;
+    ShowWindow(fullscreen_exit,SW_SHOWNA);
+    if (!SetTimer(frame,FULLSCREEN_HINT_TIMER,3000,NULL)) ShowWindow(fullscreen_exit,SW_HIDE);
+}
+void moon_shell_leave_fullscreen(void) {
+    if (!fullscreen) return;
+    fullscreen=false;
+    KillTimer(frame,FULLSCREEN_HINT_TIMER);
+    if (GetFocus()==fullscreen_exit) SetFocus(content);
+    ShowWindow(fullscreen_exit,SW_HIDE);
+    SetWindowLongPtrW(frame,GWL_STYLE,fullscreen_style&~(LONG_PTR)(WS_MAXIMIZE|WS_MINIMIZE));
+    SetWindowPlacement(frame,&fullscreen_placement);
+    SetWindowPos(frame,NULL,0,0,0,0,SWP_NOZORDER|SWP_NOACTIVATE|SWP_NOMOVE|SWP_NOSIZE|SWP_FRAMECHANGED);
+    ShowWindow(address,SW_SHOWNA);
+    layout();
+}
+int moon_shell_toggle_fullscreen(void) {
+    if (fullscreen) {
+        moon_shell_leave_fullscreen();
+        return 0;
+    }
+    if (!frame || show_home || IsIconic(frame)) return -1;
+    fullscreen_placement=(WINDOWPLACEMENT){.length=sizeof(fullscreen_placement)};
+    if (!GetWindowPlacement(frame,&fullscreen_placement)) return -1;
+    HMONITOR monitor=MonitorFromWindow(frame,MONITOR_DEFAULTTONEAREST);
+    fullscreen_style=GetWindowLongPtrW(frame,GWL_STYLE);
+    fullscreen=true;
+    ShowWindow(address,SW_HIDE);
+    SetWindowLongPtrW(frame,GWL_STYLE,(fullscreen_style&~(LONG_PTR)(WS_CAPTION|WS_THICKFRAME|WS_MAXIMIZEBOX|WS_MAXIMIZE))|WS_POPUP);
+    if (!fit_fullscreen(monitor)) {
+        moon_shell_leave_fullscreen();
+        return -1;
+    }
+    layout();
+    show_fullscreen_exit();
+    return 1;
 }
 static void set_font(void) {
     HFONT old = edit_font;
@@ -629,7 +689,11 @@ unsigned moon_shell_test_dpi(void) {
     SendMessageW(frame,WM_DPICHANGED,MAKELONG(original,original),(LPARAM)&outer);
     return correct ? requested : 0;
 }
-void moon_shell_focus_address(void) { SetFocus(address); SendMessageW(address, EM_SETSEL, 0, -1); }
+void moon_shell_focus_address(void) {
+    moon_shell_leave_fullscreen();
+    SetFocus(address);
+    SendMessageW(address,EM_SETSEL,0,-1);
+}
 void moon_shell_address(const char *value, bool force) {
     if (GetFocus() == address && !force) return;
     wchar_t wide[4096];
@@ -643,6 +707,7 @@ void moon_shell_status(const char *value) {
     InvalidateRect(content,NULL,FALSE);
 }
 void moon_shell_show_home(bool visible) {
+    if (visible) moon_shell_leave_fullscreen();
     if (show_home==visible) return;
     show_home=visible;
     if (visible) SetWindowTextW(home_edit,L"");
@@ -1096,7 +1161,7 @@ static void queue_presentation(HWND hwnd) {
 static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     switch (msg) {
         case WM_NCCALCSIZE: {
-            if (IsZoomed(hwnd)) {
+            if (!fullscreen && IsZoomed(hwnd)) {
                 MONITORINFO area={.cbSize=sizeof(area)};
                 RECT *client=wp ? &((NCCALCSIZE_PARAMS *)lp)->rgrc[0] : (RECT *)lp;
                 if (GetMonitorInfoW(MonitorFromRect(client,MONITOR_DEFAULTTONEAREST),&area))
@@ -1111,6 +1176,7 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             if (!IsIconic(hwnd)) return DefWindowProcW(hwnd,msg,wp,-1);
             break;
         case WM_NCHITTEST: {
+            if (fullscreen) return HTCLIENT;
             POINT point={(short)LOWORD(lp),(short)HIWORD(lp)};
             RECT bounds;
             GetWindowRect(hwnd,&bounds);
@@ -1138,13 +1204,15 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             return 0;
         case WM_DISPLAYCHANGE: case WM_DWMCOMPOSITIONCHANGED:
             release_target();
+            if (msg==WM_DISPLAYCHANGE && fullscreen) fit_fullscreen(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST));
             queue_presentation(hwnd);
             break;
         case WM_DPICHANGED: {
             dpi = LOWORD(wp);
             const RECT *r = (RECT *)lp;
             release_target();
-            SetWindowPos(hwnd,NULL,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER | SWP_NOACTIVATE);
+            if (fullscreen) fit_fullscreen(MonitorFromRect(r,MONITOR_DEFAULTTONEAREST));
+            else SetWindowPos(hwnd,NULL,r->left,r->top,r->right-r->left,r->bottom-r->top,SWP_NOZORDER | SWP_NOACTIVATE);
             if (address && content) {
                 set_font();
                 layout();
@@ -1165,8 +1233,24 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             SetTextColor((HDC)wp,rgb(theme->text));
             return (LRESULT)address_brush;
         case WM_COMMAND:
+            if (LOWORD(wp)==FULLSCREEN_EXIT_CONTROL && HIWORD(wp)==BN_CLICKED && (HWND)lp==fullscreen_exit)
+                moon_shell_leave_fullscreen();
             if (HIWORD(wp)==EN_SETFOCUS || HIWORD(wp)==EN_KILLFOCUS) InvalidateRect(hwnd,NULL,FALSE);
             return 0;
+        case WM_DRAWITEM: {
+            if (wp!=FULLSCREEN_EXIT_CONTROL) break;
+            const DRAWITEMSTRUCT *item=(const DRAWITEMSTRUCT *)lp;
+            HBRUSH background=CreateSolidBrush(rgb(item->itemState&(ODS_SELECTED|ODS_HOTLIGHT)?theme->soft:theme->field));
+            FillRect(item->hDC,&item->rcItem,background);
+            DeleteObject(background);
+            SetBkMode(item->hDC,TRANSPARENT);
+            SetTextColor(item->hDC,rgb(theme->text));
+            HFONT old=SelectObject(item->hDC,edit_font);
+            RECT label=item->rcItem;
+            DrawTextW(item->hDC,L"退出全屏   ·   F11 或 Esc",-1,&label,DT_CENTER|DT_VCENTER|DT_SINGLELINE);
+            SelectObject(item->hDC,old);
+            return TRUE;
+        }
         case WM_MOUSEMOVE:
             hover=(POINT){MulDiv((short)LOWORD(lp),96,dpi),MulDiv((short)HIWORD(lp),96,dpi)};
             if (!tracking_mouse) {
@@ -1180,12 +1264,14 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             tracking_mouse=false;
             InvalidateRect(hwnd,NULL,FALSE);
             return 0;
-        case WM_LBUTTONUP: click(hwnd,(short)LOWORD(lp),(short)HIWORD(lp)); return 0;
+        case WM_LBUTTONUP:
+            if (!fullscreen) click(hwnd,(short)LOWORD(lp),(short)HIWORD(lp));
+            return 0;
         case WM_CONTEXTMENU:
-            if ((HWND)wp==hwnd && lp!=-1) tab_context_menu(hwnd,(POINT){(short)LOWORD(lp),(short)HIWORD(lp)});
+            if (!fullscreen && (HWND)wp==hwnd && lp!=-1) tab_context_menu(hwnd,(POINT){(short)LOWORD(lp),(short)HIWORD(lp)});
             return 0;
         case WM_MOUSEWHEEL:
-            if (!focus_mode && moon_tab_count() > tab_capacity()) {
+            if (!fullscreen && !focus_mode && moon_tab_count() > tab_capacity()) {
                 if (GET_WHEEL_DELTA_WPARAM(wp) < 0) ++first_tab;
                 else if (first_tab) --first_tab;
                 clamp_tab_strip(false);
@@ -1197,6 +1283,14 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             if (wp==PRESENTATION_TIMER) {
                 KillTimer(hwnd,PRESENTATION_TIMER);
                 refresh_presentation(hwnd);
+            }
+            if (wp==FULLSCREEN_HINT_TIMER) {
+                RECT bounds;
+                POINT mouse;
+                if (!GetWindowRect(fullscreen_exit,&bounds) || !GetCursorPos(&mouse) || !PtInRect(&bounds,mouse)) {
+                    KillTimer(hwnd,FULLSCREEN_HINT_TIMER);
+                    ShowWindow(fullscreen_exit,SW_HIDE);
+                }
             }
             return 0;
         case WM_HOTKEY:
@@ -1234,6 +1328,10 @@ static bool keyboard(MSG *msg) {
             return true;
         }
     }
+    if (fullscreen && !modifiers && msg->wParam==VK_ESCAPE && !moon_ime_composing(msg->hwnd)) {
+        if (!repeated) moon_shell_leave_fullscreen();
+        return true;
+    }
     if ((msg->hwnd==address || msg->hwnd==home_edit) && msg->wParam==VK_RETURN && !ctrl && !alt && !moon_ime_composing(msg->hwnd)) {
         wchar_t wide[4096];
         char value[16384];
@@ -1253,8 +1351,8 @@ static bool keyboard(MSG *msg) {
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
     if (modifiers==MOD_ALT && msg->wParam=='I' && !moon_ime_composing(msg->hwnd))
         return repeated || site_menu(frame);
-    if (in_content && !in_page && msg->wParam!=VK_F12) return false;
-    if ((ctrl || alt || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
+    if (in_content && !in_page && msg->wParam!=VK_F11 && msg->wParam!=VK_F12) return false;
+    if ((ctrl || alt || msg->wParam==VK_F11 || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
         moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
     return false;
 }
@@ -1348,6 +1446,8 @@ static int run_shell(int argc, wchar_t **argv) {
     home_edit = CreateWindowExW(0,L"EDIT",NULL,WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL,
         0,0,0,0,frame,(HMENU)HOME_CONTROL,instance,NULL);
     if (!address || !home_edit || !content) return 1;
+    fullscreen_exit=CreateWindowExW(0,L"BUTTON",L"退出全屏",WS_CHILD|BS_OWNERDRAW,
+        0,0,0,0,frame,(HMENU)FULLSCREEN_EXIT_CONTROL,instance,NULL);
     SendMessageW(address,EM_SETLIMITTEXT,4095,0);
     SendMessageW(address,EM_SETCUEBANNER,TRUE,(LPARAM)L"搜索或输入网址");
     SendMessageW(home_edit,EM_SETLIMITTEXT,4095,0);
@@ -1367,6 +1467,14 @@ static int run_shell(int argc, wchar_t **argv) {
             !moon_ime_composing(msg.hwnd) && palette_key(&msg)) continue;
         if ((msg.hwnd==frame || IsChild(frame,msg.hwnd)) &&
             (msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) && (moon_find_key(&msg) || keyboard(&msg))) continue;
+        if (fullscreen && fullscreen_exit && msg.message==WM_MOUSEMOVE && GetForegroundWindow()==frame &&
+            !IsWindowVisible(fullscreen_exit) && (msg.hwnd==frame || IsChild(frame,msg.hwnd))) {
+            RECT bounds;
+            POINT pointer={(short)LOWORD(msg.lParam),(short)HIWORD(msg.lParam)};
+            MapWindowPoints(msg.hwnd,frame,&pointer,1);
+            if (GetClientRect(frame,&bounds) && pointer.y>=0 && pointer.y<px(8) &&
+                abs(pointer.x-bounds.right/2)<px(103)) show_fullscreen_exit();
+        }
         if (page_input(msg.message,msg.wParam) && IsChild(content,msg.hwnd) && moon_engine_page_window(msg.hwnd))
             moon_command(MOON_INPUT,0,NULL);
         TranslateMessage(&msg);

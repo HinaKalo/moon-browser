@@ -54,6 +54,8 @@ bool moon_shell_dark_mode(void);
 void moon_shell_focus_address(void);
 void moon_shell_toggle_sidebar(void);
 void moon_shell_toggle_theme(void);
+int moon_shell_toggle_fullscreen(void);
+void moon_shell_leave_fullscreen(void);
 void moon_shell_info(const char *title, const char *body);
 void moon_shell_toast(const char *title, const char *body);
 int moon_shell_pick_bookmarks(bool save, char *path, size_t capacity);
@@ -222,6 +224,7 @@ unsigned moon_plugin_ui_shortcut(const char *owner, const char *command, const c
     const void *context, MoonPluginConsent consent);
 bool moon_reading_find(uint64_t tab, const char *owner);
 unsigned moon_reading_zoom(uint64_t tab, int action);
+int moon_window_fullscreen(uint64_t tab, uint64_t navigation, const char *owner);
 int moon_recent_reopen(uint64_t tab, bool specific, uint32_t entry);
 int moon_session_restore(uint64_t source);
 int moon_tabs_organize(uint64_t tab, int operation);

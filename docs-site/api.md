@@ -25,7 +25,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 
 将 `plugin.json` 和同目录 EXE 放进浏览器程序或配置目录下的 `plugins/<目录>`，重启后从工具栏菜单启用。命令在插件菜单与命令面板中使用同一 ID。每个插件可声明一到八条命令，ID 在插件内唯一。
 
-命令可选填 `shortcut`。当前支持 `Ctrl+H`、`Ctrl+D`、`Ctrl+Shift+O`、`Ctrl+J`、`F12`、`Ctrl+Shift+J`、`Ctrl+U`、`Ctrl+F`、`Ctrl++`、`Ctrl+-`、`Ctrl+0`、`Ctrl+Shift+T`、`Ctrl+Shift+Delete`、`Ctrl+Shift+M` 和 `Ctrl+Shift+N`。同一组合键由第一个已启用且声明该组合键的插件处理，随浏览器分发的插件优先。
+命令可选填 `shortcut`。当前支持 `Ctrl+H`、`Ctrl+D`、`Ctrl+Shift+O`、`Ctrl+J`、`F11`、`F12`、`Ctrl+Shift+J`、`Ctrl+U`、`Ctrl+F`、`Ctrl++`、`Ctrl+-`、`Ctrl+0`、`Ctrl+Shift+T`、`Ctrl+Shift+Delete`、`Ctrl+Shift+M` 和 `Ctrl+Shift+N`。同一组合键由第一个符合条件且声明该组合键的插件处理，随浏览器分发的插件优先。使用 `F11` 需要 `window.fullscreen` 权限，外部插件还需要 `ui.commands` 权限。
 
 插件启用与权限授权分别由用户确认。`tabs.read` 允许访问触发时的活动标签，`lua.scripts.manage` 允许管理已安装用户脚本。撤销权限后，后续调用失效。EXE 自身按当前 Windows 用户权限运行。
 
@@ -74,6 +74,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteData.refresh` / `siteData.openInspector` | `siteData.read` | 前台面板可刷新同一网页的快照，或为原网页打开已启用的 WebKit Inspector。返回布尔值。 |
 | `reading.find` | `page.reading` | 在用户命令中传入 `{}`，为触发命令的活动标签打开原生查找栏。返回布尔值。 |
 | `reading.zoom` | `page.reading` | 在用户命令中传入 `{ action }`。支持 `increase`、`decrease`、`reset`，返回新的整数百分比。活动页不可用时返回 `null`。 |
+| `window.toggleFullscreen` | `window.fullscreen` | 用户触发的原生命令传入 `{}`。返回 `true`（全屏）、`false`（已退出）或 `null`（来源页面已切换或窗口不可用）。 |
 | `tabs.closed.list` | `tabs.closed.manage` | 无参数，返回最近关闭标签的数组 `[{ id, title, origin }]`。 |
 | `tabs.closed.reopen` | `tabs.closed.manage` | 在用户命令或活动插件页面中传入 `{ id? }`。省略 ID 时恢复最近一项。返回 `reopened`、`notFound`、`tabLimit` 或 `unavailable`。 |
 | `tabs.closed.clear` | `tabs.closed.manage` | 在用户命令或插件页面中调用，无参数。成功返回 `null`。 |

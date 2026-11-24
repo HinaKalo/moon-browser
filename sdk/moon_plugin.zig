@@ -30,6 +30,7 @@ pub const Permission = enum {
     @"bookmarks.transfer",
     @"page.source",
     @"popups.manage",
+    @"window.fullscreen",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -40,6 +41,7 @@ pub const Shortcut = enum {
     @"Ctrl+Shift+M",
     @"Ctrl+Shift+N",
     @"Ctrl+U",
+    F11,
 };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
 pub const LinkMenuAction = enum(c_uint) { open = 1, copy, bookmark };
@@ -249,6 +251,7 @@ pub const Method = enum {
     @"siteData.update",
     @"reading.find",
     @"reading.zoom",
+    @"window.toggleFullscreen",
     @"tabs.closed.list",
     @"tabs.closed.reopen",
     @"tabs.closed.clear",

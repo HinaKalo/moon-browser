@@ -59,6 +59,7 @@ var count: usize = 0;
 var active: usize = 0;
 var find_tab: u64 = 0;
 var find_owner: [96:0]u8 = @splat(0);
+var fullscreen_owner: [96:0]u8 = @splat(0);
 var next_id: u64 = 1;
 var pins_path: [4096:0]u8 = @splat(0);
 var pins_save_at: ?u64 = null;
@@ -1474,6 +1475,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"popups.manage" => "允许管理网站弹窗",
         .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",
+        .@"window.fullscreen" => "允许切换浏览器全屏",
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
         .@"privacy.clear" => "允许在确认后清除浏览数据",
         .@"taskManager.manage" => "允许查看和管理标签与进程",
@@ -1519,6 +1521,10 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     if (permission == null or permission == .@"siteData.read") checkSiteDataGrant();
     if (permission == null or permission == .@"page.source") checkPageSourceGrant();
     if (permission == null or permission == .@"page.reading") checkFindGrant();
+    if (fullscreen_owner[0]!=0 and !plugins.hasGrant(slice(&fullscreen_owner),.@"window.fullscreen")) {
+        native.moon_shell_leave_fullscreen();
+        fullscreen_owner[0] = 0;
+    }
     if (permission == null or permission == .@"tabs.closed.manage") checkClosedTabGrant();
     if (permission == null or permission == .@"tabs.organize") checkTabToolsGrant();
     native.moon_shell_refresh();
@@ -1790,6 +1796,21 @@ fn readingTarget(id: u64) ?*Tab {
     if (stopped or count == 0) return null;
     const tab = &tabs[active];
     return if (tab.id == id and tab.phase == .live and tab.loaded and !tab.loading and tab.view != null) tab else null;
+}
+
+export fn moon_window_fullscreen(id: u64, navigation: u64, owner: [*c]const u8) c_int {
+    if (stopped or count == 0 or !plugins.hasGrant(slice(owner),.@"window.fullscreen")) return -1;
+    const tab = &tabs[active];
+    if (tab.id!=id or tab.navigation!=navigation) return -1;
+    const view = tab.view orelse return -1;
+    const state = native.moon_shell_toggle_fullscreen();
+    if (state == 1) {
+        _ = copy(&fullscreen_owner,slice(owner));
+        native.moon_engine_show(view,true);
+    } else if (state == 0) {
+        fullscreen_owner[0] = 0;
+    }
+    return state;
 }
 
 export fn moon_reading_find(id: u64, owner: [*c]const u8) bool {

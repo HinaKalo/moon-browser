@@ -23,6 +23,7 @@ pub const Context = struct {
     grants: Permissions,
     plugin_id: []const u8,
     target_tab_id: u64,
+    target_navigation: u64 = 0,
     tab: ?*const Snapshot,
     consent: userscripts.Consent,
     from_page: bool = false,
@@ -65,6 +66,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"siteData.update" => .@"siteData.write",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
+        .@"window.toggleFullscreen" => .@"window.fullscreen",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"tabs.togglePinned", .@"tabs.toggleMuted" => .@"tabs.organize",
         .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup" => .@"tabs.manage",
@@ -507,6 +509,14 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const value = decode(struct { action: sdk.ZoomAction },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             const percent = native.moon_reading_zoom(context.target_tab_id,@intFromEnum(value.action));
             const result: ?c_uint = if (percent == 0) null else percent;
+            return sdk.result(output,id,result);
+        },
+        .@"window.toggleFullscreen" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const state = native.moon_window_fullscreen(context.target_tab_id,context.target_navigation,owner.ptr);
+            const result: ?bool = if (state < 0) null else state != 0;
             return sdk.result(output,id,result);
         },
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress" => {
