@@ -26,7 +26,7 @@ foreach ($item in $assets) {
     $item.sha = (Get-FileHash -LiteralPath $item.path -Algorithm SHA256).Hash.ToLowerInvariant()
     $item.url = "$base/v1/apps/moon-browser/$($item.platform)/releases/$($version.code)/download"
 }
-if ((Get-Item -LiteralPath $assets[1].path).VersionInfo.FileVersion -ne $version.windows_version) {
+if ((Get-Item -LiteralPath $assets[1].path).VersionInfo.FileVersion.Trim() -ne $version.windows_version) {
     throw 'Installer file version differs from src/version.json.'
 }
 
