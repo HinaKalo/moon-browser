@@ -9,4 +9,11 @@ HWND moon_shell_content(void);
 bool moon_utf16(const char *text, wchar_t *output, size_t capacity);
 bool moon_utf8(const wchar_t *text, char *output, size_t capacity);
 bool moon_path(wchar_t *output, size_t capacity, const wchar_t *directory, const wchar_t *name);
+
+typedef struct MoonDialogTheme {
+    COLORREF panel, field, border, text, muted, accent, on_accent, danger, hover;
+} MoonDialogTheme;
+MoonDialogTheme moon_dialog_theme(void);
+void moon_dialog_refresh(void);
+bool moon_dialog_message(MSG *message);
 #endif

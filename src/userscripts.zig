@@ -139,6 +139,48 @@ pub fn list(output: *[max_scripts]sdk.Script) []const sdk.Script {
     return output[0..count];
 }
 
+pub fn getSource(id: []const u8) ServiceError![]const u8 {
+    return scripts[find(id) orelse return error.NotFound].source;
+}
+
+fn sameRules(old: []const Rule, replacement: []const Rule) bool {
+    if (old.len != replacement.len) return false;
+    for (old,replacement) |a,b| {
+        if (a.prefix != b.prefix or a.excluded != b.excluded or
+            !std.mem.eql(u8,a.origin,b.origin) or !std.mem.eql(u8,a.path,b.path)) return false;
+    }
+    return true;
+}
+
+pub fn replace(id: []const u8, source: []const u8) ServiceError!sdk.Script {
+    const index = find(id) orelse return error.NotFound;
+    var entry = parse(source,false) catch |err| switch (err) {
+        error.OutOfMemory => return error.InternalError,
+        else => return error.InvalidScript,
+    };
+    var transferred = false;
+    defer if (!transferred) allocator.free(entry.source);
+    if (find(&entry.id)) |existing| {
+        if (existing != index) return error.AlreadyExists;
+        return describe(&scripts[index]);
+    }
+    var message: [160]u8 = undefined;
+    if (!native.moon_lua_check(entry.source.ptr,&message,message.len)) return error.InvalidScript;
+    const original = scripts[index];
+    if (sameRules(original.rules[0..original.rule_count],entry.rules[0..entry.rule_count])) {
+        entry.approved = original.approved;
+        entry.enabled = original.enabled;
+    }
+    scripts[index] = entry;
+    if (!save(null)) {
+        scripts[index] = original;
+        return error.InternalError;
+    }
+    allocator.free(original.source);
+    transferred = true;
+    return describe(&scripts[index]);
+}
+
 fn confirmScope(entry: *const Script) bool {
     var message: [1800:0]u8 = @splat(0);
     var writer: std.Io.Writer = .fixed(&message);
@@ -252,17 +294,26 @@ fn matches(script: *const Script, origin: []const u8, path: []const u8) bool {
     return allowed;
 }
 
+fn addressParts(href: []const u8) ?struct { origin: []const u8, path: []const u8 } {
+    const start: usize = if (std.mem.startsWith(u8, href, "https://")) 8 else if (std.mem.startsWith(u8, href, "http://")) 7 else return null;
+    const slash = start + (std.mem.indexOfScalar(u8, href[start..], '/') orelse return null);
+    const relative = href[slash..];
+    return .{ .origin = href[0..slash], .path = relative[0 .. std.mem.indexOfAny(u8,relative,"?#") orelse relative.len] };
+}
+
+pub fn matchesEnabled(id: []const u8, href: []const u8) bool {
+    const script = &scripts[find(id) orelse return false];
+    const parts = addressParts(href) orelse return false;
+    return script.enabled and matches(script,parts.origin,parts.path);
+}
+
 pub fn apply(view: *native.MoonView) void {
     if (count == 0) return;
     var url: [4096:0]u8 = @splat(0);
     native.moon_engine_committed_url(view, &url, url.len);
-    const href = text(&url);
-    const start: usize = if (std.mem.startsWith(u8, href, "https://")) 8 else if (std.mem.startsWith(u8, href, "http://")) 7 else return;
-    const slash = start + (std.mem.indexOfScalar(u8, href[start..], '/') orelse return);
-    const relative = href[slash..];
-    const path = relative[0 .. std.mem.indexOfAny(u8, relative, "?#") orelse relative.len];
+    const parts = addressParts(text(&url)) orelse return;
     for (scripts[0..count]) |*script| {
-        if (script.enabled and matches(script, href[0..slash], path)) execute(script, view, &url);
+        if (script.enabled and matches(script,parts.origin,parts.path)) execute(script, view, &url);
     }
 }
 

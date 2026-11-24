@@ -10,9 +10,10 @@ pub const rpc_version = "2.0";
 pub const Permission = enum {
     @"tabs.read",
     @"lua.scripts.manage",
+    @"page.inspect",
 };
 pub const Event = enum { @"tabs.changed" };
-pub const Command = struct { id: []const u8, label: []const u8 };
+pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false };
 pub const Manifest = struct {
     id: []const u8,
     name: []const u8,
@@ -20,6 +21,7 @@ pub const Manifest = struct {
     apiVersion: u32,
     runtime: enum { native },
     entry: []const u8,
+    settingsPage: ?[]const u8 = null,
     contributes: struct { commands: []const Command },
     permissions: []const Permission = &.{},
     events: []const Event = &.{},
@@ -29,6 +31,8 @@ pub const Initialization = struct {
     apiVersion: u32,
     pluginId: []const u8,
     permissions: []const Permission,
+    browserWindow: u64 = 0,
+    darkMode: bool = false,
 };
 pub const HostInfo = struct { apiVersion: u32, browserVersion: []const u8, luaVersion: []const u8 };
 pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
@@ -37,6 +41,9 @@ pub const Script = struct { id: []const u8, name: []const u8, enabled: bool };
 pub const ScriptId = struct { id: []const u8 };
 pub const ScriptSwitch = struct { id: []const u8, enabled: bool };
 pub const ScriptSource = struct { sourceBase64: []const u8 };
+pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
+pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
+pub const InspectorPanel = enum { inspector, console, resources };
 pub const CommandResult = struct { message: ?[]const u8 = null };
 
 pub const Method = enum {
@@ -46,6 +53,12 @@ pub const Method = enum {
     @"lua.scripts.install",
     @"lua.scripts.setEnabled",
     @"lua.scripts.remove",
+    @"lua.scripts.getSource",
+    @"lua.scripts.update",
+    @"lua.scripts.reloadActive",
+    @"settings.read",
+    @"settings.write",
+    @"devtools.open",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

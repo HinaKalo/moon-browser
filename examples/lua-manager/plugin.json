@@ -1,0 +1,13 @@
+{
+  "id": "moon.lua-manager",
+  "name": "Lua 脚本管理器",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonLuaManager.exe",
+  "settingsPage": "settings.html",
+  "contributes": {
+    "commands": [{"id": "open", "label": "打开 Lua 脚本编辑器", "interactive": true}]
+  },
+  "permissions": ["lua.scripts.manage"]
+}

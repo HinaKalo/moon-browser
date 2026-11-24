@@ -6,6 +6,8 @@
 #include <WebKit/WKDownloadRef.h>
 #include <WebKit/WKErrorRef.h>
 #include <WebKit/WKFramePolicyListener.h>
+#include <WebKit/WKFrameInfoRef.h>
+#include <WebKit/WKInspector.h>
 #include <WebKit/WKNavigationActionRef.h>
 #include <WebKit/WKNavigationResponseRef.h>
 #include <WebKit/WKPage.h>
@@ -16,8 +18,10 @@
 #include <WebKit/WKPageUIClient.h>
 #include <WebKit/WKPreferencesRef.h>
 #include <WebKit/WKSessionStateRef.h>
+#include <WebKit/WKScriptMessageRef.h>
 #include <WebKit/WKString.h>
 #include <WebKit/WKType.h>
+#include <WebKit/WKUserContentControllerRef.h>
 #include <WebKit/WKURL.h>
 #include <WebKit/WKURLRequest.h>
 #include <WebKit/WKURLResponse.h>
@@ -49,9 +53,17 @@
     X(WKPageSetPageNavigationClient) X(WKPageSetPageUIClient) X(WKPageSetPageStateClient) \
     X(WKPageLoadURL) X(WKPageCopyTitle) X(WKPageCopyActiveURL) X(WKPageClose) \
     X(WKPageCopyCommittedURL) X(WKPageCallAsyncJavaScriptWithoutUserGesture) \
+    X(WKPageLoadHTMLString) X(WKStringGetTypeID) X(WKFrameInfoGetIsMainFrame) \
+    X(WKWebsiteDataStoreCreateNonPersistentDataStore) X(WKPageConfigurationSetUserContentController) \
+    X(WKUserContentControllerCreate) X(WKUserContentControllerAddScriptMessageHandler) \
+    X(WKUserContentControllerRemoveAllUserMessageHandlers) X(WKScriptMessageGetBody) \
+    X(WKScriptMessageGetFrameInfo) X(WKCompletionListenerComplete) \
+    X(WKPreferencesSetDeveloperExtrasEnabled) \
+    X(WKPageGetInspector) X(WKInspectorShow) X(WKInspectorShowConsole) X(WKInspectorShowResources) \
     X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
     X(WKPageCopySessionState) X(WKPageRestoreFromSessionState) X(WKPageGetProcessIdentifier) X(WKPageGetMediaState) \
     X(WKNavigationActionCopyRequest) X(WKNavigationActionShouldPerformDownload) \
+    X(WKNavigationActionGetNavigationType) \
     X(WKNavigationResponseCopyResponse) X(WKNavigationResponseCanShowMIMEType) \
     X(WKFramePolicyListenerUse) X(WKFramePolicyListenerIgnore) X(WKFramePolicyListenerDownload) \
     X(WKErrorCopyLocalizedDescription) X(WKDownloadGetOriginatingPage) \
@@ -65,7 +77,6 @@ static struct {
 static HMODULE module;
 static WKContextRef context;
 static WKWebsiteDataStoreRef store;
-static WKPreferencesRef preferences;
 static DLL_DIRECTORY_COOKIE dll_directory;
 static wchar_t engine_dir[2048];
 static char engine_error[256];
@@ -75,11 +86,17 @@ static int test_download_result;
 struct MoonView {
     WKViewRef view;
     WKPageRef page;
+    WKPreferencesRef view_preferences;
     HWND hwnd;
     uint64_t token;
+    uintptr_t extension_serial;
+    WKUserContentControllerRef extension_controller;
+    char extension_id[96];
+    char *extension_address;
     struct MoonView *next;
 };
 static MoonView *views;
+static uintptr_t extension_sequence;
 static struct { WKDownloadRef download; uint64_t token; } downloads[64];
 
 static void release(WKTypeRef ref) { if (ref) wk.WKRelease(ref); }
@@ -121,6 +138,22 @@ static bool safe_method(WKURLRequestRef request) {
 static void navigation_action(WKPageRef page, WKNavigationActionRef action, WKFramePolicyListenerRef listener,
                               WKTypeRef user, const void *client) {
     WKURLRequestRef request = wk.WKNavigationActionCopyRequest(action);
+    const MoonView *view = client;
+    if (view->extension_address) {
+        char url[4096];
+        copy_url(request ? wk.WKURLRequestCopyURL(request) : NULL,url,sizeof(url));
+        if (!strcmp(url,"about:blank") || !strcmp(url,view->extension_address)) {
+            wk.WKFramePolicyListenerUse(listener);
+        } else {
+            const char *docs = "https://docs.browser.moonl.cloud/";
+            if (!strcmp(view->extension_address,"moon://market/") && !strncmp(url,docs,strlen(docs)) &&
+                wk.WKNavigationActionGetNavigationType(action)==kWKFrameNavigationTypeLinkClicked && safe_method(request))
+                emit(client,MOON_POPUP,url);
+            wk.WKFramePolicyListenerIgnore(listener);
+        }
+        release(request);
+        return;
+    }
     bool allowed = supported_scheme(request);
     if (!safe_method(request)) emit(client, MOON_UNSAFE, NULL);
     release(request);
@@ -161,6 +194,7 @@ static void rendering(WKPageRef page, WKPageRenderingProgressEvents events, WKTy
 }
 static WKPageRef popup_requested(WKPageRef page, WKURLRequestRef request, WKDictionaryRef features,
                                  WKEventModifiers modifiers, WKEventMouseButton button, const void *client) {
+    if (((const MoonView *)client)->extension_address) return NULL;
     if (!request || !supported_scheme(request) || !safe_method(request)) return NULL;
     char url[4096];
     copy_url(wk.WKURLRequestCopyURL(request),url,sizeof(url));
@@ -272,10 +306,6 @@ const char *moon_engine_init(void) {
     store = wk.WKWebsiteDataStoreCreateWithConfiguration(config);
     release(config);
     if (!store) return "Could not open website data.";
-    preferences = wk.WKPreferencesCreate();
-    if (!preferences) return "Could not create WebKit preferences.";
-    wk.WKPreferencesSetJavaScriptCanOpenWindowsAutomatically(preferences,false);
-
     WKContextDownloadClientV0 client = { .base={0,NULL}, .didStart=download_started,
         .decideDestinationWithSuggestedFilename=download_destination,.didFinish=download_finished,
         .didFail=download_failed,.didCancel=download_cancelled,.processDidCrash=download_cancelled };
@@ -284,32 +314,77 @@ const char *moon_engine_init(void) {
 }
 void moon_engine_shutdown(void) {
     if (context) wk.WKContextSetDownloadClient(context,NULL);
-    if (preferences) release(preferences);
     if (store) release(store);
     if (context) release(context);
-    preferences = NULL; store = NULL; context = NULL;
+    store = NULL; context = NULL;
     // WK's run loop can have posted completion callbacks. Let Windows unload
     // the DLL on process exit after the UI message pump has stopped.
 }
-MoonView *moon_engine_open(uint64_t token) {
+static void settings_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context) {
+    if (!reply) return;
+    const uintptr_t serial = (uintptr_t)context;
+    const MoonView *view = views;
+    while (view && view->extension_serial != serial) view = view->next;
+    char request[8192], response[8192];
+    const WKTypeRef data = wk.WKScriptMessageGetBody(message);
+    const WKFrameInfoRef frame = wk.WKScriptMessageGetFrameInfo(message);
+    bool ok = false;
+    if (view && frame && wk.WKFrameInfoGetIsMainFrame(frame) && data && wk.WKGetTypeID(data) == wk.WKStringGetTypeID()) {
+        size_t bytes = wk.WKStringGetUTF8CString((WKStringRef)data,request,sizeof(request));
+        if (bytes && bytes < sizeof(request) && strlen(request)+1 == bytes)
+            ok = moon_extension_settings(view->extension_id,request,response,sizeof(response));
+    }
+    WKStringRef value = wk.WKStringCreateWithUTF8CString(ok ? response : "{\"ok\":false}");
+    wk.WKCompletionListenerComplete(reply,value);
+    release(value);
+}
+
+static MoonView *open_view(uint64_t token, const char *extension_id, const char *address) {
     if (!context) return NULL;
     MoonView *view = calloc(1,sizeof(*view));
     if (!view) return NULL;
     WKPageConfigurationRef config = wk.WKPageConfigurationCreate();
     if (!config) { free(view); return NULL; }
     wk.WKPageConfigurationSetContext(config,context);
-    wk.WKPageConfigurationSetWebsiteDataStore(config,store);
-    wk.WKPageConfigurationSetPreferences(config,preferences);
+    if (address) {
+        view->extension_address = _strdup(address);
+        WKWebsiteDataStoreRef temporary = wk.WKWebsiteDataStoreCreateNonPersistentDataStore();
+        if (!view->extension_address || !temporary) {
+            release(temporary);
+            goto fail;
+        }
+        wk.WKPageConfigurationSetWebsiteDataStore(config,temporary);
+        release(temporary);
+        if (extension_id) {
+            if (strlen(extension_id)>=sizeof(view->extension_id)) goto fail;
+            view->extension_controller = wk.WKUserContentControllerCreate();
+            if (!view->extension_controller) goto fail;
+            strcpy(view->extension_id,extension_id);
+            view->extension_serial = ++extension_sequence;
+            WKStringRef channel = wk.WKStringCreateWithUTF8CString("moonSettings");
+            if (!channel) goto fail;
+            wk.WKUserContentControllerAddScriptMessageHandler(view->extension_controller,channel,settings_message,
+                (const void *)view->extension_serial);
+            release(channel);
+            wk.WKPageConfigurationSetUserContentController(config,view->extension_controller);
+        }
+    } else {
+        wk.WKPageConfigurationSetWebsiteDataStore(config,store);
+    }
+    view->view_preferences = wk.WKPreferencesCreate();
+    if (!view->view_preferences) goto fail;
+    wk.WKPreferencesSetJavaScriptCanOpenWindowsAutomatically(view->view_preferences,false);
+    wk.WKPageConfigurationSetPreferences(config,view->view_preferences);
     RECT bounds;
     HWND parent = moon_shell_content();
     GetClientRect(parent,&bounds);
     view->view = wk.WKViewCreate(bounds,config,parent);
-    release(config);
-    if (!view->view) { free(view); return NULL; }
+    if (!view->view) goto fail;
     view->page = wk.WKViewGetPage(view->view);
     view->hwnd = wk.WKViewGetWindow(view->view);
     view->token = token;
-    if (!view->page || !view->hwnd) { release(view->view); free(view); return NULL; }
+    if (!view->page || !view->hwnd) goto fail;
+    release(config);
     view->next = views;
     views = view;
     WKPageNavigationClientV1 navigation = { .base={1,view},
@@ -326,17 +401,55 @@ MoonView *moon_engine_open(uint64_t token) {
     wk.WKPageListenForLayoutMilestones(view->page,kWKDidFirstVisuallyNonEmptyLayout);
     ShowWindow(view->hwnd,SW_HIDE);
     return view;
+fail:
+    release(config);
+    release(view->view);
+    release(view->extension_controller);
+    release(view->view_preferences);
+    free(view->extension_address);
+    free(view);
+    return NULL;
+}
+MoonView *moon_engine_open(uint64_t token) {
+    return open_view(token,NULL,NULL);
+}
+MoonView *moon_engine_open_extension(uint64_t token, const char *plugin_id, const char *address) {
+    return open_view(token,plugin_id,address);
+}
+bool moon_engine_load_extension(MoonView *view, const char *html) {
+    if (!view->extension_address) return false;
+    static const char policy[] = "<!doctype html><meta charset=utf-8><meta http-equiv=\"Content-Security-Policy\" "
+        "content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; "
+        "connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'\">";
+    size_t size = sizeof(policy)+strlen(html);
+    char *document = malloc(size);
+    if (!document) return false;
+    snprintf(document,size,"%s%s",policy,html);
+    WKStringRef source = wk.WKStringCreateWithUTF8CString(document);
+    WKURLRef base = wk.WKURLCreateWithUTF8CString(view->extension_address);
+    free(document);
+    bool ok = source && base;
+    if (ok) wk.WKPageLoadHTMLString(view->page,source,base);
+    release(source);
+    release(base);
+    return ok;
 }
 void moon_engine_close(MoonView *view) {
     MoonView **link = &views;
     while (*link && *link != view) link = &(*link)->next;
     if (*link) *link = view->next;
+    if (view->extension_controller) {
+        wk.WKUserContentControllerRemoveAllUserMessageHandlers(view->extension_controller);
+        release(view->extension_controller);
+    }
     wk.WKPageSetPageStateClient(view->page,NULL);
     wk.WKPageSetPageNavigationClient(view->page,NULL);
     wk.WKPageSetPageUIClient(view->page,NULL);
     wk.WKPageClose(view->page);
     if (IsWindow(view->hwnd)) DestroyWindow(view->hwnd);
     release(view->view);
+    release(view->view_preferences);
+    free(view->extension_address);
     free(view);
 }
 void moon_engine_show(MoonView *view, bool visible) {
@@ -354,6 +467,19 @@ bool moon_engine_load(MoonView *view, const char *url) {
 void moon_engine_back(MoonView *view) { if (wk.WKPageCanGoBack(view->page)) wk.WKPageGoBack(view->page); }
 void moon_engine_forward(MoonView *view) { if (wk.WKPageCanGoForward(view->page)) wk.WKPageGoForward(view->page); }
 void moon_engine_reload(MoonView *view) { wk.WKPageReload(view->page); }
+bool moon_engine_inspect(MoonView *view, int panel) {
+    if (view->extension_address) return false;
+    wk.WKPreferencesSetDeveloperExtrasEnabled(view->view_preferences,true);
+    WKInspectorRef inspector = wk.WKPageGetInspector(view->page);
+    if (!inspector) return false;
+    switch (panel) {
+        case 0: wk.WKInspectorShow(inspector); break;
+        case 1: wk.WKInspectorShowConsole(inspector); break;
+        case 2: wk.WKInspectorShowResources(inspector); break;
+        default: return false;
+    }
+    return true;
+}
 void moon_engine_committed_url(MoonView *view, char *url, size_t cap) {
     if (!cap) return;
     url[0] = 0;

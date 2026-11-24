@@ -1,12 +1,14 @@
 """Exercise the packaged Windows host and real WebKit processes over loopback."""
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from threading import Event, Thread
 from time import monotonic, sleep
@@ -39,6 +41,8 @@ CHECKS = (
 class Fixture(BaseHTTPRequestHandler):
     seen_unicode = Event()
     seen_lua_demo = Event()
+    seen_editor_reload = Event()
+    seen_extension_network = Event()
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -47,6 +51,12 @@ class Fixture(BaseHTTPRequestHandler):
         elif path == "/lua-demo-verified":
             self.seen_lua_demo.set()
             data, content_type = b"ok", "text/plain"
+        elif path == "/editor-verified":
+            self.seen_editor_reload.set()
+            data, content_type = b"ok", "text/plain"
+        elif path == "/extension-network":
+            self.seen_extension_network.set()
+            data, content_type = b"unexpected", "text/plain"
         elif path.startswith("/page/"):
             name = path.removeprefix("/page/")
             if name == "中文":
@@ -67,6 +77,14 @@ class Fixture(BaseHTTPRequestHandler):
                     ' && document.getElementById("demo-banner").hidden) {'
                     'observer.disconnect(); fetch("/lua-demo-verified"); }'
                     '}).observe(document.body, {childList:true,subtree:true,attributes:true});</script>'
+                )
+            if name == "editor":
+                demo = (
+                    '<p id="editor-proof">Original</p><script>'
+                    'new MutationObserver(() => { '
+                    'if (document.querySelector("#editor-proof").textContent === "Lua editor reloaded") '
+                    'fetch("/editor-verified"); '
+                    '}).observe(document.querySelector("#editor-proof"), {childList:true});</script>'
                 )
             data = (
                 "<!doctype html><meta charset=utf-8>"
@@ -246,6 +264,44 @@ def run_win32(exe, base, root):
     user.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
     user.SetThreadDpiAwarenessContext.argtypes = [wt.HANDLE]
     user.SetThreadDpiAwarenessContext(wt.HANDLE(-4))
+    user.GetWindow.argtypes = [wt.HWND, wt.UINT]
+    user.GetWindow.restype = wt.HWND
+    user.IsWindow.argtypes = [wt.HWND]
+    profile = Path(preview_env(root)["MOON_BROWSER_PROFILE_DIR"])
+    manager = exe.parent / "plugins" / "lua-manager" / "MoonLuaManager.exe"
+    devtools = exe.parent / "plugins" / "devtools" / "MoonDevTools.exe"
+    if manager.exists():
+        fixture = profile / "plugins" / "settings"
+        fixture.mkdir(parents=True)
+        (profile / "plugin-state.json").write_text(json.dumps([
+            {"id": "moon.lua-manager", "enabled": True, "tabs_read": False, "lua_scripts_manage": True},
+            {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
+            {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
+        ]), encoding="utf-8")
+        (fixture / "plugin.json").write_text(json.dumps({
+            "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
+            "apiVersion": 2, "runtime": "native", "entry": "Unused.exe", "settingsPage": "settings.html",
+            "contributes": {"commands": [{"id": "open", "label": "Fixture"}]},
+        }), encoding="utf-8")
+        (fixture / "settings.html").write_text(
+            '<title>Extension fixture</title><script>(async()=>{'
+            'const api=window.webkit.messageHandlers.moonSettings;'
+            'const call=async op=>JSON.parse(await api.postMessage(JSON.stringify(op)));'
+            'const forged=await call({op:"write",value:{bad:true},pluginId:"moon.lua-manager"});'
+            'if(forged.ok)return;'
+            f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
+            'if(!blocked)return;'
+            'const write=await call({op:"write",value:{roundTrip:7}});'
+            'const read=await call({op:"read"});'
+            'if(write.ok&&read.ok&&read.value.roundTrip===7)await call({op:"write",value:{passed:true}});'
+            '})();</script>', encoding="utf-8")
+        lua_source = (
+            "-- ==MoonUserScript==\n-- @name Editor fixture\n-- @api 1\n"
+            f"-- @match {base}/page/editor\n-- ==/MoonUserScript==\n"
+            'moon.dom.setText("#editor-proof", "Old Lua source")\n'
+        )
+        (profile / "lua-userscripts.json").write_text(
+            json.dumps([{"source": lua_source, "enabled": True}]), encoding="utf-8")
     proc = subprocess.Popen([str(exe), "--gdi"], env=preview_env(root))
     frame = None
     try:
@@ -361,14 +417,105 @@ def run_win32(exe, base, root):
         sleep(0.2)
         print("native_home=ok command_palette=ok sidebar_focus_mode=ok")
 
-        address = ctypes.create_unicode_buffer(base + "/page/中文")
-        user.SendMessageW(home, 0x000C, 0, ctypes.addressof(address))  # WM_SETTEXT
-        user.PostMessageW(home, 0x0100, 0x0D, 1)  # WM_KEYDOWN / Enter
+        def wait_for(predicate, reason, seconds=10):
+            deadline = monotonic() + seconds
+            while monotonic() < deadline:
+                value = predicate()
+                if value:
+                    return value
+                sleep(0.05)
+            raise RuntimeError(reason)
+
+        def owned_window(class_name, title=None):
+            candidate = None
+            while candidate := user.FindWindowExW(None, candidate, class_name, title):
+                if user.GetWindow(candidate, 4) == frame and user.IsWindowVisible(candidate):  # GW_OWNER
+                    return candidate
+            return None
+
+        def set_control(control, text):
+            value = ctypes.create_unicode_buffer(text)
+            user.SendMessageW(control, 0x000C, 0, ctypes.addressof(value))  # WM_SETTEXT
+
+        def invoke(query):
+            click(px(70), px(65))
+            palette_window = find_palette()
+            query_edit = user.GetDlgItem(palette_window, 1003)
+            set_control(query_edit, query)
+            user.PostMessageW(query_edit, 0x0100, 0x0D, 1)
+
+        invoke("版本与更新")
+        popup = wait_for(lambda: owned_window("#32770", "版本与更新"), "Compact update dialog did not open")
+        popup_rect = wt.RECT()
+        user.GetWindowRect(popup, ctypes.byref(popup_rect))
+        if popup_rect.bottom - popup_rect.top > px(180) or user.GetWindowLongPtrW(popup, -16) & 0x00C00000 == 0x00C00000:
+            raise RuntimeError("Update info still uses a large system-framed window")
+        close = user.GetDlgItem(popup, 1)  # IDOK
+        user.PostMessageW(close, 0x0100, 0x1B, 1)  # Escape
+        wait_for(lambda: not user.IsWindow(popup), "Escape did not close the info dialog")
+        print("themed_dialog=ok", flush=True)
+
+        if manager.exists():
+            extension_address = "extension://moon.settings-fixture/settings.html"
+            set_control(edit, extension_address)
+            user.PostMessageW(edit, 0x0100, 0x0D, 1)
+            config = profile / f'extension-{sha256(b"moon.settings-fixture").hexdigest()}.json'
+            wait_for(lambda: config.exists() and json.loads(config.read_text(encoding="utf-8")).get("passed"),
+                     "Extension page did not complete its scoped settings round trip", 15)
+            foreign = profile / f'extension-{sha256(b"moon.lua-manager").hexdigest()}.json'
+            if foreign.exists() or Fixture.seen_extension_network.is_set():
+                raise RuntimeError("The extension page crossed its settings or network boundary")
+            print("extension_settings=ok", flush=True)
+
+            set_control(edit, base + "/page/editor")
+            user.PostMessageW(edit, 0x0100, 0x0D, 1)
+            sleep(1)
+            invoke("打开 Lua 脚本编辑器")
+            tool = wait_for(lambda: owned_window("MoonLuaEditor"), "Lua editor plugin did not open", 12)
+            user.PostMessageW(tool, 0x0111, 102, 0)  # OPEN_SCRIPT
+            source = user.GetDlgItem(tool, 104)
+            wait_for(lambda: user.SendMessageW(source, 0x000E, 0, 0) > 0, "Lua editor did not show the installed source")
+            set_control(source, lua_source.replace("Old Lua source", "Lua editor reloaded"))
+            user.PostMessageW(tool, 0x0111, 105, 0)  # SAVE_SCRIPT
+            if not Fixture.seen_editor_reload.wait(15):
+                raise RuntimeError("Saving through the system plugin did not reload the matching page")
+            user.PostMessageW(tool, 0x0010, 0, 0)
+            wait_for(lambda: not user.IsWindow(tool), "Lua editor did not close after save")
+            print("lua_editor_live_reload=ok", flush=True)
+
+        if manager.exists():
+            set_control(edit, base + "/page/中文")
+            user.PostMessageW(edit, 0x0100, 0x0D, 1)
+        else:
+            set_control(home, base + "/page/中文")
+            user.PostMessageW(home, 0x0100, 0x0D, 1)  # WM_KEYDOWN / Enter
         if not Fixture.seen_unicode.wait(15):
             raise RuntimeError("Unicode address did not reach the loopback fixture")
         if not user.IsWindowVisible(content) or user.IsWindowVisible(home):
             raise RuntimeError("The WebKit view did not replace the native new-tab view")
         print(f"win32_unicode_address=ok resized_dpi={dpi} chrome_px={expected_chrome} fallback=GDI+")
+        if devtools.exists():
+            sleep(0.3)
+            invoke("打开网页控制台")
+            def inspector_window():
+                candidate = None
+                while candidate := user.FindWindowExW(None, candidate, "WebInspectorUIProxyClass", None):
+                    owner = wt.DWORD()
+                    user.GetWindowThreadProcessId(candidate, ctypes.byref(owner))
+                    if owner.value == proc.pid and user.IsWindowVisible(candidate):
+                        return candidate
+                return None
+            inspector = wait_for(inspector_window,"The system plugin did not open the WebKit inspector",20)
+            user.PostMessageW(inspector,0x0010,0,0)
+            wait_for(lambda: not inspector_window(),"Web Inspector did not close")
+            print("devtools_system_plugin=ok", flush=True)
+            invoke("插件市场")
+            def market_address():
+                address = ctypes.create_unicode_buffer(256)
+                user.SendMessageW(edit, 0x000D, len(address), ctypes.addressof(address))
+                return address.value == "moon://market/"
+            wait_for(market_address,"Browser did not open the built-in plugin market")
+            print("plugin_market_entry=ok", flush=True)
     finally:
         if frame:
             user.PostMessageW(frame, 0x0010, 0, 0)
@@ -380,6 +527,7 @@ def run_win32(exe, base, root):
 
 
 def main():
+    sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("exe", type=Path)
     parser.add_argument("--pressure", action="store_true")

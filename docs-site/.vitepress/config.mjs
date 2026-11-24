@@ -9,6 +9,7 @@ export default defineConfig({
     nav: [
       { text: '快速开始', link: '/guide' },
       { text: 'Lua 用户脚本', link: '/lua-userscripts' },
+      { text: '插件市场', link: '/market' },
       { text: '插件 API', link: '/api' }
     ],
     sidebar: [
@@ -16,7 +17,9 @@ export default defineConfig({
         { text: '快速开始', link: '/guide' },
         { text: 'Lua 用户脚本', link: '/lua-userscripts' },
         { text: '插件 API 2', link: '/api' },
-        { text: '原生插件协议 1', link: '/protocol-v1' }
+        { text: '原生插件协议 1', link: '/protocol-v1' },
+        { text: '插件配置页', link: '/extension-pages' },
+        { text: '网页开发者工具', link: '/devtools' }
       ] },
       { text: '下一版设计', items: [
         { text: '插件体系与开发规范', link: '/plugin-system' }

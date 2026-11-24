@@ -3,6 +3,8 @@ const native = @import("native");
 const policy = @import("policy.zig");
 const plugins = @import("plugins.zig");
 const userscripts = @import("userscripts.zig");
+const extension_settings = @import("extension_settings.zig");
+const market = @import("market.zig");
 const updater = @import("updater.zig");
 
 const max_tabs = 128;
@@ -22,6 +24,7 @@ const Tab = struct {
     loading: bool = false,
     loaded: bool = false,
     has_document: bool = false,
+    extension: bool = false,
     download_count: usize = 0,
     activity: bool = false,
     opening: Opening = .none,
@@ -65,6 +68,7 @@ const shell_actions = [_]ShellAction{
     .{ .label = "内存诊断", .command = native.MOON_DIAGNOSTICS, .home = true },
     .{ .label = "本地插件", .command = native.MOON_OPEN_PLUGINS, .home = true },
     .{ .label = "版本与更新", .command = native.MOON_UPDATES, .home = true },
+    .{ .label = "插件市场", .command = native.MOON_MARKET },
 };
 
 const SmokeStep = enum { off, first, second, load_tabs, settle, warm_prepare, warm, restore, back, forward, plugin, download, crash, recover };
@@ -118,6 +122,8 @@ fn normalize(input: []const u8, buffer: []u8) ?[:0]const u8 {
     const value = std.mem.trim(u8, input, " \t\r\n");
     if (value.len == 0) return null;
     for (value) |ch| if (std.ascii.isControl(ch)) return null;
+    if (std.mem.startsWith(u8,value,"extension://") or equals(value,market.address))
+        return std.fmt.bufPrintSentinel(buffer,"{s}",.{value},0) catch null;
     if (safeURL(value)) {
         const scheme_len: usize = if (value[4] == ':') 7 else 8;
         const after = value[scheme_len..];
@@ -275,9 +281,60 @@ fn delayOpening(tab: *Tab, reason: Opening) bool {
 fn show(tab: *Tab) void {
     if (tab.view) |view| native.moon_engine_show(view, true);
 }
+
+fn loadInternal(tab: *Tab, address: [4096:0]u8, id: ?[:0]const u8, html: [*:0]const u8) void {
+    detach(tab);
+    forgetSession(tab);
+    tab.extension = true;
+    tab.unsafe_history = false;
+    tab.opening = .none;
+    tab.url = address;
+    tab.title[0] = 0;
+    tab.phase = .live;
+    tab.loading = true;
+    tab.deadline = 0;
+    error_text[0] = 0;
+    tab.view = native.moon_engine_open_extension(tab.id,if (id) |value| value.ptr else null,&address);
+    if (tab.view) |view| {
+        if (tab == &tabs[active]) show(tab);
+        if (native.moon_engine_load_extension(view,html)) {
+            updateChrome(true);
+            return;
+        }
+        detach(tab);
+    }
+    tab.phase = .failed;
+    tab.loading = false;
+    _ = copy(&error_text,"无法打开内置页面。");
+    updateChrome(true);
+}
+
 fn navigate(tab: *Tab, url: []const u8) void {
     var storage: [4096:0]u8 = @splat(0);
     if (!copy(&storage, url)) return;
+    const allocator = std.heap.page_allocator;
+    if (equals(url,market.address)) {
+        market.start();
+        const html = market.document(allocator) catch return;
+        defer allocator.free(html);
+        loadInternal(tab,storage,null,html.ptr);
+        return;
+    }
+    if (std.mem.startsWith(u8,url,"extension://")) {
+        const html = allocator.alloc(u8,128*1024+1) catch return;
+        defer allocator.free(html);
+        const id = plugins.readSettingsPage(url,html) orelse {
+            native.moon_shell_info("插件配置","此配置页不可用。请检查插件是否已启用及地址是否正确。");
+            return;
+        };
+        loadInternal(tab,storage,id,@ptrCast(html.ptr));
+        return;
+    }
+    if (tab.extension) {
+        detach(tab);
+        tab.extension = false;
+        tab.unsafe_history = false;
+    }
     const already_queued = tab.opening == .navigate and equals(slice(&tab.url), url);
     if (delayOpening(tab, .navigate)) {
         tab.url = storage;
@@ -389,11 +446,28 @@ fn sync(tab: *Tab) void {
     var title: [512:0]u8 = @splat(0);
     native.moon_engine_read(view, &title, title.len, &url, url.len);
     if (title[0] != 0) tab.title = title;
-    if (url[0] != 0 and !equals(slice(&url), "about:blank")) tab.url = url;
+    if (!tab.extension and url[0] != 0 and !equals(slice(&url), "about:blank")) tab.url = url;
 }
 fn protected(tab: *const Tab) bool {
     return tab.loading or !tab.loaded or tab.dirty or tab.unsafe_history or tab.download_count != 0 or
         tab.activity or !safeURL(slice(&tab.url));
+}
+export fn moon_userscript_reload_active(id: [*c]const u8) c_int {
+    if (stopped or count == 0) return native.MOON_RELOAD_NO_MATCH;
+    const tab = &tabs[active];
+    const view = tab.view orelse return native.MOON_RELOAD_NO_MATCH;
+    var address: [4096:0]u8 = @splat(0);
+    native.moon_engine_committed_url(view,&address,address.len);
+    if (!userscripts.matchesEnabled(slice(id),slice(&address))) return native.MOON_RELOAD_NO_MATCH;
+    if (protected(tab) or native.moon_engine_media(view)) return native.MOON_RELOAD_PROTECTED;
+    native.moon_engine_reload(view);
+    return native.MOON_RELOAD_OK;
+}
+export fn moon_devtools_open(panel: c_int, tab_id: u64) bool {
+    if (stopped or count == 0 or tabs[active].id != tab_id) return false;
+    const tab = &tabs[active];
+    if (tab.extension or !tab.has_document or !safeURL(slice(&tab.url))) return false;
+    return if (tab.view) |view| native.moon_engine_inspect(view,panel) else false;
 }
 fn sampleMemory() u64 {
     var samples: [1024]native.MoonSample = undefined;
@@ -456,6 +530,17 @@ fn maintenance() void {
     const now = native.moon_clock();
     if (smoke == .off) updater.tick(now);
     if (stopped) return;
+    if (market.changed()) {
+        const allocator = std.heap.page_allocator;
+        if (market.document(allocator)) |html| {
+            defer allocator.free(html);
+            for (tabs[0..count]) |*tab| {
+                if (tab.extension and equals(slice(&tab.url),market.address)) {
+                    if (tab.view) |view| _ = native.moon_engine_load_extension(view,html.ptr);
+                }
+            }
+        } else |_| {}
+    }
     collectRetirements();
     if (popup[0] != 0) {
         const target = popup;
@@ -603,7 +688,10 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_BACK => if (tab.view) |view| native.moon_engine_back(view),
         native.MOON_FORWARD => if (tab.view) |view| native.moon_engine_forward(view),
         native.MOON_RELOAD => {
-            if (tab.phase == .crashed or tab.phase == .dormant) {
+            if (tab.extension) {
+                const url = tab.url;
+                navigate(tab,slice(&url));
+            } else if (tab.phase == .crashed or tab.phase == .dormant) {
                 restore(tab);
             } else if (tab.view) |view| native.moon_engine_reload(view);
             updateChrome(false);
@@ -616,12 +704,18 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_PLUGIN_ENABLE => plugins.enable(index),
         native.MOON_PLUGIN_GRANT => plugins.toggleGrant(index, .@"tabs.read"),
         native.MOON_PLUGIN_GRANT_LUA => plugins.toggleGrant(index, .@"lua.scripts.manage"),
+        native.MOON_PLUGIN_GRANT_INSPECT => plugins.toggleGrant(index, .@"page.inspect"),
+        native.MOON_PLUGIN_SETTINGS => {
+            var address: [256]u8 = undefined;
+            if (plugins.settingsAddress(index,&address)) |url| addTab(url,false);
+        },
         native.MOON_PLUGIN_COMMAND => plugins.command(index >> 32, index & 0xffffffff, tabSnapshot()),
         native.MOON_FOCUS_ADDRESS => native.moon_shell_focus_address(),
         native.MOON_TOGGLE_SIDEBAR => native.moon_shell_toggle_sidebar(),
         native.MOON_TOGGLE_THEME => native.moon_shell_toggle_theme(),
         native.MOON_OPEN_PLUGINS => native.moon_shell_open_plugins(),
         native.MOON_UPDATES => updater.open(native.moon_clock()),
+        native.MOON_MARKET => addTab(market.address,false),
         native.MOON_SCRIPTS_INSTALL => userscripts.install(slice(c_text)),
         native.MOON_SCRIPTS_TOGGLE => userscripts.toggle(index),
         native.MOON_SCRIPTS_REMOVE => userscripts.remove(index),
@@ -650,8 +744,10 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             tab.phase = .live;
             tab.deadline = 0;
             sync(tab);
-            storeSession(tab);
-            if (tab.view) |view| userscripts.apply(view);
+            if (!tab.extension) {
+                storeSession(tab);
+                if (tab.view) |view| userscripts.apply(view);
+            }
         },
         native.MOON_FAILED => {
             const message = if (detail != null) slice(detail) else "";
@@ -743,6 +839,13 @@ export fn moon_plugin_action(index: usize, command: usize) [*:0]const u8 {
 }
 export fn moon_plugin_flags(index: usize) c_uint {
     return plugins.flags(index);
+}
+export fn moon_plugin_has_settings(index: usize) bool {
+    return plugins.hasSettings(index);
+}
+export fn moon_extension_settings(id: [*c]const u8, request: [*c]const u8, result: [*c]u8, cap: usize) bool {
+    if (stopped or !plugins.canUseSettings(slice(id))) return false;
+    return extension_settings.pageReply(slice(id),slice(request),result[0..cap]);
 }
 
 const Action = union(enum) { built_in: ShellAction, plugin: struct { index: usize, command: usize } };
@@ -905,7 +1008,7 @@ fn smokeTick(now: u64) void {
             if (!smokePage("Moon fixture second")) return;
             log("history_navigation=ok", .{});
             smoke = .plugin;
-            if (!plugins.smokeStart(0, 0, tabSnapshot())) return failSmoke("sample plugin unavailable");
+            if (!plugins.smokeStart(0, tabSnapshot())) return failSmoke("sample plugin unavailable");
         },
         .plugin => {
             const success = plugins.smokeStatus(plugin_step, slice(&tabs[active].title)) orelse return;
@@ -917,7 +1020,7 @@ fn smokeTick(now: u64) void {
             log("plugin_case_{d}=ok", .{plugin_step});
             plugin_step += 1;
             if (plugin_step < 5) {
-                if (!plugins.smokeStart(0, plugin_step, tabSnapshot())) return failSmoke("sample plugin launch");
+                if (!plugins.smokeStart(plugin_step, tabSnapshot())) return failSmoke("sample plugin launch");
                 return;
             }
             const api_fixture = plugins.smokeHasContract();

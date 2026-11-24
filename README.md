@@ -43,6 +43,8 @@ build 生成本地开发目录，package 打包本地开发用的自包含 ZIP�
 
 Lua 用户脚本可从工具栏「… → Lua 用户脚本」安装。随包的 `welcome.user.lua` 可作为网页定制起点。[Lua 用户脚本指南](https://docs.browser.moonl.cloud/lua-userscripts.html)
 
+启用随包的 Lua 脚本管理器可查看和编辑源码。网页开发者工具插件可打开 WebKit 的控制台、资源和站点数据。工具栏「插件市场」打开内置的 Moon 插件目录。[插件配置页](https://docs.browser.moonl.cloud/extension-pages.html) · [插件市场](https://docs.browser.moonl.cloud/market.html)
+
 协议使用 UTF-8、一行一个 JSON-RPC 2.0 消息。宿主每次启动独立进程进行一次交互，整个交互限时 2 秒，每帧小于 16 KiB。
 
 | 方向 | ID | 方法或返回值 |

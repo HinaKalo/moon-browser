@@ -22,6 +22,13 @@ bool moon_plugin_thread(void *task) {
     return true;
 }
 void moon_plugin_wait(void) { Sleep(8); }
+static DWORD WINAPI run_market(void *unused) { moon_market_worker(); return 0; }
+bool moon_market_thread(void) {
+    HANDLE thread = CreateThread(NULL,0,run_market,NULL,0,NULL);
+    if (!thread) return false;
+    CloseHandle(thread);
+    return true;
+}
 void moon_pipe_set_budget(MoonPipe *pipe, unsigned millis) { pipe->deadline = GetTickCount64() + millis; }
 MoonPipe *moon_pipe_open(const char *executable, uint32_t *error) {
     *error = ERROR_INVALID_PARAMETER;

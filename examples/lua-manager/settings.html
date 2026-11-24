@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lua 脚本管理器设置</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.6 system-ui, sans-serif; color: #14161d; background: #f5f6f9; }
+  main { max-width: 42rem; margin: 0 auto; padding: 48px 24px; }
+  h1 { margin: 0 0 24px; font-size: 29px; }
+  section { background: #fff; border: 1px solid #d9dce6; border-radius: 12px; padding: 20px; }
+  label { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  p { margin: 8px 0 16px; color: #51586a; }
+  button { border: 0; border-radius: 7px; padding: 8px 16px; background: #4359c5; color: #fff; cursor: pointer; }
+  [role=status] { margin-left: 12px; }
+  @media (prefers-color-scheme: dark) {
+    :root { color: #e9ebf2; background: #191c23; }
+    section { background: #1f222a; border-color: #363b49; }
+    p { color: #b9c1d4; }
+  }
+</style>
+<main>
+  <h1>Lua 脚本管理器设置</h1>
+  <section>
+    <label><input id="reload" type="checkbox" checked disabled> 保存源码后重载当前匹配网页</label>
+    <p>正在加载、含未提交输入或正在播放媒体的页面会保留现状。</p>
+    <button id="save" disabled>保存设置</button>
+    <span id="status" role="status">正在读取设置…</span>
+  </section>
+</main>
+<script>
+  const reload = document.querySelector('#reload');
+  const save = document.querySelector('#save');
+  const status = document.querySelector('#status');
+  async function settings(op, value) {
+    const reply = await window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({ op, value }));
+    const result = JSON.parse(reply);
+    if (!result.ok) throw new Error('Settings unavailable');
+    return result.value;
+  }
+  async function load() {
+    try {
+      const value = await settings('read');
+      reload.checked = value.refreshOnSave !== false;
+      reload.disabled = save.disabled = false;
+      status.textContent = '';
+    } catch { status.textContent = '无法读取设置'; }
+  }
+  save.onclick = async () => {
+    save.disabled = true;
+    try {
+      await settings('write', { refreshOnSave: reload.checked });
+      status.textContent = '已保存';
+    } catch { status.textContent = '保存失败'; }
+    finally { save.disabled = false; }
+  };
+  load();
+</script>
+</html>

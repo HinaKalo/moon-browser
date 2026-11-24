@@ -99,18 +99,23 @@ Invoke-Native 'zig' @('build','-Doptimize=ReleaseSafe','--prefix',$prefix)
 $exe = Join-Path $prefix 'bin\MoonBrowser.exe'
 $sample = Join-Path $prefix 'bin\MoonExamplePlugin.exe'
 $contractClient = Join-Path $prefix 'bin\MoonPluginContractClient.exe'
+$luaManager = Join-Path $prefix 'bin\MoonLuaManager.exe'
+$devTools = Join-Path $prefix 'bin\MoonDevTools.exe'
 $docs = @(
     $EngineLock
     (Join-Path $repo 'README.md')
     (Join-Path $repo 'THIRD-PARTY.md')
     (Join-Path $repo 'examples\plugin.json')
     (Join-Path $repo 'examples\welcome.user.lua')
+    (Join-Path $repo 'examples\lua-manager\plugin.json')
+    (Join-Path $repo 'examples\lua-manager\settings.html')
+    (Join-Path $repo 'examples\devtools\plugin.json')
 )
 if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $sample + $contractClient + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $sample + $contractClient + $luaManager + $devTools + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -130,6 +135,12 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $example = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\example')).FullName
     Copy-Item -LiteralPath $sample -Destination $example
     Copy-Item -LiteralPath (Join-Path $repo 'examples\plugin.json') -Destination $example
+    $manager = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\lua-manager')).FullName
+    Copy-Item -LiteralPath $luaManager -Destination $manager
+    Copy-Item -LiteralPath (Join-Path $repo 'examples\lua-manager\plugin.json'),(Join-Path $repo 'examples\lua-manager\settings.html') -Destination $manager
+    $inspector = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\devtools')).FullName
+    Copy-Item -LiteralPath $devTools -Destination $inspector
+    Copy-Item -LiteralPath (Join-Path $repo 'examples\devtools\plugin.json') -Destination $inspector
     $fixtures = [IO.Directory]::CreateDirectory((Join-Path $stage 'tests')).FullName
     Copy-Item -LiteralPath $contractClient -Destination $fixtures
     $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $artifact))

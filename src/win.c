@@ -16,7 +16,7 @@
 #include <string.h>
 #include <wchar.h>
 
-static HWND frame, content, address, home_edit, diagnostics, palette, palette_input, palette_list;
+static HWND frame, content, address, home_edit, palette, palette_input, palette_list;
 static HBRUSH address_brush;
 static HFONT edit_font, hero_font;
 static UINT dpi = 96;
@@ -48,8 +48,8 @@ static const Theme dark = {
 static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
-enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_PLUGIN_BASE = 100, MENU_PLUGIN_STRIDE = 11,
-       MENU_SCRIPTS_PICK = 300, MENU_SCRIPTS_BASE = 310 };
+enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_PLUGIN_BASE = 100, MENU_PLUGIN_STRIDE = 13,
+       MENU_SCRIPTS_PICK = 400, MENU_SCRIPTS_BASE = 410 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        PALETTE_TAB_OFFSET = 1000 };
 
@@ -170,11 +170,28 @@ static bool write_file(const char *path, const char *data, DWORD mode) {
     return ok;
 }
 void moon_log(const char *path, const char *line) { write_file(path, line, OPEN_ALWAYS); }
-bool moon_read_text(const char *path, char *output, size_t cap) {
+static bool read_text(const char *path, char *output, size_t cap, bool plain) {
     wchar_t buffer[2048];
     if (cap < 2 || !moon_utf16(path, buffer, ARRAYSIZE(buffer))) return false;
-    HANDLE file = CreateFileW(buffer, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (plain) {
+        wchar_t *slash = wcsrchr(buffer,L'\\');
+        if (!slash) return false;
+        *slash = 0;
+        DWORD parent = GetFileAttributesW(buffer);
+        *slash = L'\\';
+        if (parent == INVALID_FILE_ATTRIBUTES || (parent & FILE_ATTRIBUTE_REPARSE_POINT)) return false;
+    }
+    HANDLE file = CreateFileW(buffer, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | (plain ? FILE_FLAG_OPEN_REPARSE_POINT : 0), NULL);
     if (file == INVALID_HANDLE_VALUE) return false;
+    if (plain) {
+        BY_HANDLE_FILE_INFORMATION info;
+        if (!GetFileInformationByHandle(file,&info) ||
+            (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))) {
+            CloseHandle(file);
+            return false;
+        }
+    }
     LARGE_INTEGER length;
     DWORD got = 0;
     bool ok = GetFileSizeEx(file, &length) && length.QuadPart >= 0 && (uint64_t)length.QuadPart < cap &&
@@ -186,6 +203,8 @@ bool moon_read_text(const char *path, char *output, size_t cap) {
     }
     return ok;
 }
+bool moon_read_text(const char *path, char *output, size_t cap) { return read_text(path,output,cap,false); }
+bool moon_read_plain_text(const char *path, char *output, size_t cap) { return read_text(path,output,cap,true); }
 bool moon_write_text(const char *path, const char *data) {
     char temporary[4096];
     wchar_t from[2048], to[2048];
@@ -215,6 +234,15 @@ size_t moon_plugin_directories(const char *parent, char *names, size_t stride, s
 
 static int px(int value) { return MulDiv(value, dpi, 96); }
 static COLORREF rgb(unsigned color) { return RGB(color >> 16, color >> 8, color); }
+MoonDialogTheme moon_dialog_theme(void) {
+    return (MoonDialogTheme){
+        .panel=rgb(theme->panel), .field=rgb(theme->field), .border=rgb(theme->outline),
+        .text=rgb(theme->text), .muted=rgb(theme->muted), .accent=rgb(theme->accent),
+        .on_accent=rgb(theme==&dark ? 0x10152d : 0xffffff), .danger=rgb(theme->danger), .hover=rgb(theme->hover),
+    };
+}
+uint64_t moon_shell_window_handle(void) { return (uintptr_t)frame; }
+bool moon_shell_dark_mode(void) { return theme==&dark; }
 static D2D1_COLOR_F color_value(unsigned color) {
     return (D2D1_COLOR_F){ (float)((color >> 16) & 255) / 255, (float)((color >> 8) & 255) / 255,
         (float)(color & 255) / 255, 1 };
@@ -560,6 +588,7 @@ static void refresh_theme(void) {
     InvalidateRect(address,NULL,TRUE);
     InvalidateRect(home_edit,NULL,TRUE);
     InvalidateRect(content,NULL,TRUE);
+    moon_dialog_refresh();
 }
 static bool theme_path(char *path,size_t size) {
     int written=snprintf(path,size,"%s\\chrome-theme",moon_profile_dir());
@@ -572,28 +601,6 @@ void moon_shell_toggle_theme(void) {
     refresh_theme();
 }
 void moon_shell_refresh(void) { clamp_tab_strip(true); InvalidateRect(frame,NULL,FALSE); }
-void moon_shell_info(const char *title, const char *body) {
-    wchar_t heading[125], message[8192];
-    if (!moon_utf16(title,heading,ARRAYSIZE(heading)) || !moon_utf16(body,message,ARRAYSIZE(message))) return;
-    if (diagnostics && IsWindow(diagnostics)) DestroyWindow(diagnostics);
-    diagnostics = CreateWindowExW(WS_EX_TOOLWINDOW,L"MoonInfo",heading,WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        CW_USEDEFAULT,CW_USEDEFAULT,px(650),px(440),frame,NULL,GetModuleHandleW(NULL),NULL);
-    if (!diagnostics) return;
-    HWND edit = CreateWindowExW(0,L"EDIT",message,WS_CHILD | WS_VISIBLE | WS_VSCROLL |
-        ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,0,0,0,0,diagnostics,(HMENU)1,GetModuleHandleW(NULL),NULL);
-    SendMessageW(edit,WM_SETFONT,(WPARAM)GetStockObject(DEFAULT_GUI_FONT),TRUE);
-    SendMessageW(diagnostics,WM_SIZE,0,0);
-}
-bool moon_shell_confirm(const char *title, const char *body) {
-    wchar_t heading[125], message[2048];
-    if (!moon_utf16(title,heading,ARRAYSIZE(heading)) || !moon_utf16(body,message,ARRAYSIZE(message))) return false;
-    return MessageBoxW(frame,message,heading,MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION) == IDYES;
-}
-void moon_shell_error(const char *body) {
-    wchar_t message[2048];
-    if (moon_utf16(body,message,ARRAYSIZE(message)))
-        MessageBoxW(frame,message,L"Moon Browser",MB_OK | MB_ICONERROR);
-}
 void moon_quit(int status) {
     if (quitting) return;
     quitting = true;
@@ -646,6 +653,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     AppendMenuW(popup,MF_STRING,MENU_PALETTE,L"\u547d\u4ee4\u9762\u677f\tCtrl+K");
     AppendMenuW(popup,MF_STRING,MENU_DIAG,L"\u5185\u5b58\u8bca\u65ad\tCtrl+Shift+M");
     AppendMenuW(popup,MF_STRING,MENU_UPDATES,L"\u7248\u672c\u4e0e\u66f4\u65b0");
+    AppendMenuW(popup,MF_STRING,MENU_MARKET,L"插件市场");
     AppendMenuW(popup,MF_STRING|(theme==&dark?MF_CHECKED:0),MENU_THEME,L"\u6df1\u8272\u4e3b\u9898\tCtrl+Shift+L");
     AppendMenuW(popup,MF_STRING|(focus_mode?MF_CHECKED:0),MENU_FOCUS,L"\u4e13\u6ce8\u6a21\u5f0f\tCtrl+B");
     userscript_menu(popup);
@@ -660,9 +668,11 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
         AppendMenuW(sub,MF_STRING|(flags&1?MF_CHECKED:0),id,L"\u542f\u7528\u672c\u5730\u63d2\u4ef6");
         AppendMenuW(sub,MF_STRING|(flags&2?MF_CHECKED:0),id+1,L"\u5141\u8bb8\u8bfb\u53d6\u6807\u9898\u548c\u7f51\u5740");
         if (flags&8) AppendMenuW(sub,MF_STRING|(flags&4?MF_CHECKED:0),id+2,L"允许管理 Lua 用户脚本");
+        if (moon_plugin_has_settings(i)) AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+3,L"配置页面");
+        if (flags&32) AppendMenuW(sub,MF_STRING|(flags&16?MF_CHECKED:0),id+4,L"允许打开网页开发者工具");
         for(size_t j=0;j<moon_plugin_action_count(i);++j) {
             if (moon_utf16(moon_plugin_action(i,j),action,ARRAYSIZE(action)))
-                AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+3+j,action);
+                AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+5+j,action);
         }
         AppendMenuW(popup,MF_POPUP,(UINT_PTR)sub,name);
     }
@@ -680,6 +690,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     else if (command==MENU_FOCUS) moon_shell_toggle_sidebar();
     else if (command==MENU_PALETTE) open_palette();
     else if (command==MENU_UPDATES) moon_command(MOON_UPDATES,0,NULL);
+    else if (command==MENU_MARKET) moon_command(MOON_MARKET,0,NULL);
     else if (command==MENU_SCRIPTS_PICK) pick_userscript();
     else if (command>=MENU_SCRIPTS_BASE) {
         const unsigned value=command-MENU_SCRIPTS_BASE;
@@ -688,9 +699,9 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     else if (command>=MENU_PLUGIN_BASE) {
         unsigned value=command-MENU_PLUGIN_BASE;
         const unsigned offset=value%MENU_PLUGIN_STRIDE, plugin=value/MENU_PLUGIN_STRIDE;
-        const int grants[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_GRANT_LUA};
+        const int grants[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_GRANT_LUA,MOON_PLUGIN_SETTINGS,MOON_PLUGIN_GRANT_INSPECT};
         if (offset<ARRAYSIZE(grants)) moon_command(grants[offset],plugin,NULL);
-        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-3),NULL);
+        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-5),NULL);
         moon_shell_refresh();
     }
 }
@@ -886,16 +897,6 @@ static LRESULT CALLBACK content_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) 
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
-static LRESULT CALLBACK info_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
-    if (msg == WM_SIZE) {
-        RECT r;
-        GetClientRect(hwnd,&r);
-        HWND edit = GetDlgItem(hwnd,1);
-        if (edit) MoveWindow(edit,0,0,r.right,r.bottom,TRUE);
-        return 0;
-    }
-    return DefWindowProcW(hwnd,msg,wp,lp);
-}
 static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     switch (msg) {
         case WM_NCCALCSIZE:
@@ -1066,9 +1067,6 @@ int moon_shell_run(void) {
     class.lpfnWndProc = content_message;
     class.lpszClassName = L"MoonContent";
     if (!RegisterClassW(&class)) return 1;
-    class.lpfnWndProc = info_message;
-    class.lpszClassName = L"MoonInfo";
-    if (!RegisterClassW(&class)) return 1;
     class.lpfnWndProc = palette_message;
     class.lpszClassName = L"MoonPalette";
     class.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);
@@ -1104,6 +1102,7 @@ int moon_shell_run(void) {
     MSG msg = {0};
     BOOL next;
     while ((next=GetMessageW(&msg,NULL,0,0)) > 0) {
+        if (moon_dialog_message(&msg)) continue;
         if (palette && (msg.hwnd==palette || IsChild(palette,msg.hwnd)) && msg.message==WM_KEYDOWN &&
             !composing(msg.hwnd) && palette_key(&msg)) continue;
         if ((msg.hwnd==frame || IsChild(frame,msg.hwnd)) &&

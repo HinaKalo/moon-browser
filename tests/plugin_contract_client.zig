@@ -81,9 +81,26 @@ fn run(allocator: std.mem.Allocator) !void {
     for (enabled_entries) |entry| {
         if (same(entry.id, script.id) and entry.enabled) break;
     } else return error.ApprovalNotApplied;
-    _ = try result(try client.call(.@"lua.scripts.setEnabled", sdk.ScriptSwitch{ .id = script.id, .enabled = false }));
-    _ = try result(try client.call(.@"lua.scripts.remove", sdk.ScriptId{ .id = script.id }));
-    try expectReason(try client.call(.@"lua.scripts.remove", sdk.ScriptId{ .id = script.id }), .NotFound);
+    const original = try result(try client.call(.@"lua.scripts.getSource",sdk.ScriptId{ .id=script.id }));
+    const stored = try std.json.parseFromValueLeaky(sdk.ScriptSource,allocator,original,.{});
+    const encoder = std.base64.standard.Encoder;
+    var encoded: [1024]u8 = undefined;
+    if (!same(stored.sourceBase64,encoder.encode(&encoded,source))) return error.SourceMismatch;
+    try expectReason(try client.call(.@"lua.scripts.update",
+        sdk.ScriptUpdate{ .id=script.id,.sourceBase64=encoder.encode(&encoded,"return bad(") }),.InvalidScript);
+    const altered = try result(try client.call(.@"lua.scripts.update",
+        sdk.ScriptUpdate{ .id=script.id,.sourceBase64=encoder.encode(&encoded,source ++ "\nmoon.dom.hide('footer')") }));
+    const edited = try std.json.parseFromValueLeaky(sdk.Script,allocator,altered,.{});
+    if (!edited.enabled or same(edited.id,script.id)) return error.EditNotApplied;
+    const reload = try result(try client.call(.@"lua.scripts.reloadActive",sdk.ScriptId{ .id=edited.id }));
+    if (!same(sdk.string(reload) orelse "","noMatchingPage")) return error.ReloadedAnUnrelatedTab;
+    _ = try result(try client.call(.@"settings.write",.{ .value=.{ .fixture=true } }));
+    const stored_settings = try result(try client.call(.@"settings.read",.{}));
+    if (stored_settings != .object or (stored_settings.object.get("fixture") orelse return error.MissingSetting) != .bool)
+        return error.MissingSetting;
+    _ = try result(try client.call(.@"lua.scripts.setEnabled", sdk.ScriptSwitch{ .id = edited.id, .enabled = false }));
+    _ = try result(try client.call(.@"lua.scripts.remove", sdk.ScriptId{ .id = edited.id }));
+    try expectReason(try client.call(.@"lua.scripts.remove", sdk.ScriptId{ .id = edited.id }), .NotFound);
     return client.reply(invocation_id, sdk.CommandResult{ .message = "V2 contract passed" });
 }
 

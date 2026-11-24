@@ -1,0 +1,16 @@
+{
+  "id": "moon.devtools",
+  "name": "网页开发者工具",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonDevTools.exe",
+  "contributes": {
+    "commands": [
+      {"id": "inspector", "label": "打开网页开发者工具"},
+      {"id": "console", "label": "打开网页控制台"},
+      {"id": "resources", "label": "查看网页资源和站点数据"}
+    ]
+  },
+  "permissions": ["page.inspect"]
+}

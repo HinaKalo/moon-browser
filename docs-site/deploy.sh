@@ -20,10 +20,11 @@ cleanup() {
 }
 trap cleanup EXIT
 tar -xzf "$1" -C "$stage"
-for page in index guide protocol-v1 api lua-userscripts plugin-system lua-demo; do
+for page in index guide protocol-v1 api lua-userscripts plugin-system lua-demo extension-pages devtools market; do
     test -s "$stage/$page.html"
 done
 test -s "$stage/welcome.user.lua"
+test -s "$stage/plugin-market/catalog.json"
 chmod -R a+rX "$stage"
 
 if ! grep -Fxq "$import" "$config"; then

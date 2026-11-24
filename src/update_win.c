@@ -15,13 +15,13 @@ static void close_http(UpdateHttp *http) {
     if (http->session) WinHttpCloseHandle(http->session);
 }
 
-static int get(UpdateHttp *http, const char *path) {
+static int get(UpdateHttp *http, const wchar_t *host, const char *path) {
     wchar_t request_path[512];
     if (!path || path[0] != '/' || !moon_utf16(path, request_path, ARRAYSIZE(request_path))) return 0;
     http->session = WinHttpOpen(L"MoonBrowser Update", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
         WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!http->session || !WinHttpSetTimeouts(http->session, 10000, 10000, 15000, 15000)) return 0;
-    http->server = WinHttpConnect(http->session, L"release.moonl.cloud", INTERNET_DEFAULT_HTTPS_PORT, 0);
+    http->server = WinHttpConnect(http->session, host, INTERNET_DEFAULT_HTTPS_PORT, 0);
     if (!http->server) return 0;
     http->request = WinHttpOpenRequest(http->server, L"GET", request_path, NULL,
         WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
@@ -36,9 +36,9 @@ static int get(UpdateHttp *http, const char *path) {
     return (int)status;
 }
 
-int moon_update_read(const char *path, char *buffer, size_t capacity, size_t *length) {
+static int read_response(const wchar_t *host, const char *path, char *buffer, size_t capacity, size_t *length) {
     UpdateHttp http = {0};
-    int status = get(&http, path);
+    int status = get(&http, host, path);
     *length = 0;
     if (status == 200) {
         const uint64_t deadline = GetTickCount64() + 30000;
@@ -53,6 +53,12 @@ int moon_update_read(const char *path, char *buffer, size_t capacity, size_t *le
     }
     close_http(&http);
     return status;
+}
+int moon_update_read(const char *path, char *buffer, size_t capacity, size_t *length) {
+    return read_response(L"release.moonl.cloud",path,buffer,capacity,length);
+}
+bool moon_market_read(char *buffer, size_t capacity, size_t *length) {
+    return read_response(L"docs.browser.moonl.cloud","/plugin-market/catalog.json",buffer,capacity,length) == 200;
 }
 
 static bool plain(const wchar_t *path, bool directory) {
@@ -101,7 +107,7 @@ cleanup:
 
 static bool save_package(const char *path, HANDLE file, uint64_t expected) {
     UpdateHttp http = {0};
-    bool ok = get(&http, path) == 200;
+    bool ok = get(&http, L"release.moonl.cloud", path) == 200;
     const uint64_t deadline = GetTickCount64() + 120000;
     uint64_t total = 0;
     while (ok) {

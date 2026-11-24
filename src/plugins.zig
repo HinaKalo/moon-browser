@@ -17,7 +17,7 @@ const LegacyManifest = struct {
     permissions: []const []const u8 = &.{},
     events: []const []const u8 = &.{},
 };
-const Grant = struct { id: []const u8, enabled: bool, tabs_read: bool, lua_scripts_manage: bool = false };
+const Grant = struct { id: []const u8, enabled: bool, tabs_read: bool, lua_scripts_manage: bool = false, page_inspect: bool = false };
 const Outcome = enum { ok, failed, timed_out, crashed };
 const Trigger = enum { command, changed, timeout_test, crash_test };
 const CallState = enum(u8) { idle, queued, serving, ready };
@@ -34,21 +34,26 @@ const Task = struct {
     epoch: *const std.atomic.Value(u32),
     expected_epoch: u32,
     snapshot: ?Snapshot,
+    target_tab_id: u64,
     trigger: Trigger,
     plugin_id: [*:0]const u8,
     command_id: [*:0]const u8,
+    interactive: bool,
+    owner: u64,
+    dark: bool,
     grants: Permissions,
     rpc: ?*Rpc = null,
     outcome: Outcome = .failed,
     message: [512:0]u8 = @splat(0),
 };
-const Command = struct { id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0) };
+const Command = struct { id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false };
 const Plugin = struct {
     id: [96:0]u8,
     label: [256:0]u8,
     actions: [sdk.command_limit]Command = undefined,
     action_count: usize,
     executable: [4096:0]u8,
+    settings_page: [96:0]u8 = @splat(0),
     protocol: Protocol,
     requests: Permissions,
     subscribes: bool,
@@ -87,10 +92,13 @@ fn contains(items: []const []const u8, value: []const u8) bool {
     return false;
 }
 
-fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []const u8, entry: []const u8, commands: []const sdk.Command, requests: Permissions, subscribes: bool, protocol: Protocol) void {
+fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []const u8, entry: []const u8, settings_page: ?[]const u8, commands: []const sdk.Command, requests: Permissions, subscribes: bool, protocol: Protocol) void {
     if (!validComponent(id) or !validComponent(entry) or !std.ascii.endsWithIgnoreCase(entry, ".exe") or
         name.len == 0 or commands.len == 0 or commands.len > sdk.command_limit) return;
     if (protocol == .v2 and std.mem.indexOfScalar(u8, id, '.') == null) return;
+    if (settings_page) |page| {
+        if (!validComponent(page) or !std.mem.endsWith(u8,page,".html")) return;
+    }
     for (all[0..len]) |*existing| if (std.ascii.eqlIgnoreCase(std.mem.sliceTo(&existing.id, 0), id)) return;
     var path: [4096]u8 = undefined;
     const executable = std.fmt.bufPrint(&path, "{s}\\{s}\\{s}", .{ directory, sub, entry }) catch return;
@@ -100,10 +108,12 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         .protocol = protocol, .requests = requests, .subscribes = subscribes,
     };
     if (!copy(&plugin.id, id) or !copy(&plugin.label, name) or !copy(&plugin.executable, executable)) return;
+    if (!copy(&plugin.settings_page,settings_page orelse "")) return;
     for (commands, 0..) |item, index| {
         if (!validComponent(item.id) or item.label.len == 0) return;
         for (commands[0..index]) |prior| if (std.mem.eql(u8, prior.id, item.id)) return;
         plugin.actions[index] = .{};
+        plugin.actions[index].interactive = item.interactive;
         if (!copy(&plugin.actions[index].id, item.id) or !copy(&plugin.actions[index].label, item.label)) return;
     }
     len += 1;
@@ -131,7 +141,7 @@ fn discover(root: []const u8) void {
             for (manifest.permissions) |permission| requested.insert(permission);
             const subscribes = std.mem.indexOfScalar(sdk.Event, manifest.events, .@"tabs.changed") != null;
             if (subscribes and !requested.contains(.@"tabs.read")) continue;
-            addManifest(directory, sub, manifest.id, manifest.name, manifest.entry, manifest.contributes.commands, requested, subscribes, .v2);
+            addManifest(directory, sub, manifest.id, manifest.name, manifest.entry, manifest.settingsPage, manifest.contributes.commands, requested, subscribes, .v2);
         } else |_| {
             const parsed = std.json.parseFromSlice(LegacyManifest, allocator, bytes, .{}) catch continue;
             defer parsed.deinit();
@@ -139,7 +149,7 @@ fn discover(root: []const u8) void {
             if (manifest.api_version != 1) continue;
             var requested = Permissions.empty;
             if (contains(manifest.permissions, "tabs.read")) requested.insert(.@"tabs.read");
-            addManifest(directory, sub, manifest.id, manifest.name, manifest.executable, &.{.{ .id = "run", .label = manifest.command }},
+            addManifest(directory, sub, manifest.id, manifest.name, manifest.executable, null, &.{.{ .id = "run", .label = manifest.command }},
                 requested, contains(manifest.events, "tabs.changed"), .legacy);
         }
     }
@@ -158,6 +168,7 @@ pub fn init(app: []const u8, profile: []const u8) void {
         plugin.enabled = grant.enabled;
         if (grant.enabled and grant.tabs_read and plugin.requests.contains(.@"tabs.read")) plugin.grants.insert(.@"tabs.read");
         if (grant.enabled and grant.lua_scripts_manage and plugin.requests.contains(.@"lua.scripts.manage")) plugin.grants.insert(.@"lua.scripts.manage");
+        if (grant.enabled and grant.page_inspect and plugin.requests.contains(.@"page.inspect")) plugin.grants.insert(.@"page.inspect");
         break;
     };
 }
@@ -169,6 +180,7 @@ fn persist() bool {
         .enabled = plugin.enabled,
         .tabs_read = plugin.grants.contains(.@"tabs.read"),
         .lua_scripts_manage = plugin.grants.contains(.@"lua.scripts.manage"),
+        .page_inspect = plugin.grants.contains(.@"page.inspect"),
     };
     const bytes = std.json.Stringify.valueAlloc(allocator, items[0..len], .{}) catch return false;
     defer allocator.free(bytes);
@@ -192,12 +204,13 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
             const disclosure = switch (scope) {
                 .@"tabs.read" => "此插件可读取触发时的活动标签标题和网址。",
                 .@"lua.scripts.manage" => "此插件可导入、停用或移除 Lua 用户脚本。新脚本首次启用时，浏览器会单独确认网站范围。",
+                .@"page.inspect" => "此插件可为触发命令时的网页打开开发者工具。控制台和站点存储可在工具中查看。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
             plugin.grants.insert(scope);
         }
     } else {
-        if (!enabled and !native.moon_shell_confirm("Enable this local plugin?", &plugin.executable)) return;
+        if (!enabled and !native.moon_shell_confirm("启用本地插件？", &plugin.executable)) return;
         plugin.enabled = !plugin.enabled;
         if (!plugin.enabled) plugin.grants = .empty;
     }
@@ -234,7 +247,46 @@ pub fn flags(index: usize) c_uint {
     return @as(c_uint, @intFromBool(plugin.enabled)) |
         (@as(c_uint, @intFromBool(plugin.grants.contains(.@"tabs.read"))) << 1) |
         (@as(c_uint, @intFromBool(plugin.grants.contains(.@"lua.scripts.manage"))) << 2) |
-        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"lua.scripts.manage"))) << 3);
+        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"lua.scripts.manage"))) << 3) |
+        (@as(c_uint, @intFromBool(plugin.grants.contains(.@"page.inspect"))) << 4) |
+        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"page.inspect"))) << 5);
+}
+
+pub fn hasSettings(index: usize) bool {
+    return index < len and all[index].settings_page[0] != 0;
+}
+
+pub fn settingsAddress(index: usize, buffer: []u8) ?[:0]u8 {
+    if (!hasSettings(index) or !all[index].enabled) return null;
+    const plugin = &all[index];
+    return std.fmt.bufPrintSentinel(buffer,"extension://{s}/{s}",.{ std.mem.sliceTo(&plugin.id,0),std.mem.sliceTo(&plugin.settings_page,0) },0) catch null;
+}
+
+pub fn canUseSettings(id: []const u8) bool {
+    for (all[0..len]) |*plugin| {
+        if (plugin.enabled and plugin.settings_page[0] != 0 and std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),id)) return true;
+    }
+    return false;
+}
+
+pub fn readSettingsPage(address: []const u8, body: []u8) ?[:0]const u8 {
+    if (!std.mem.startsWith(u8,address,"extension://")) return null;
+    const route = address["extension://".len..];
+    const slash = std.mem.indexOfScalar(u8,route,'/') orelse return null;
+    const id = route[0..slash];
+    const page = route[slash+1..];
+    for (all[0..len]) |*plugin| {
+        if (!plugin.enabled or plugin.settings_page[0] == 0 or
+            !std.ascii.eqlIgnoreCase(std.mem.sliceTo(&plugin.id,0),id) or
+            !std.mem.eql(u8,std.mem.sliceTo(&plugin.settings_page,0),page)) continue;
+        const executable = std.mem.sliceTo(&plugin.executable,0);
+        const folder_end = std.mem.lastIndexOfScalar(u8,executable,'\\') orelse return null;
+        var filename: [4096]u8 = undefined;
+        const path = std.fmt.bufPrintSentinel(&filename,"{s}\\{s}",.{ executable[0..folder_end],page },0) catch return null;
+        if (!native.moon_read_plain_text(path.ptr,body.ptr,body.len)) return null;
+        return &plugin.id;
+    }
+    return null;
 }
 
 fn launch(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot) bool {
@@ -252,9 +304,13 @@ fn launch(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snaps
         .epoch = &plugin.epoch,
         .expected_epoch = plugin.epoch.load(.acquire),
         .snapshot = if (plugin.grants.contains(.@"tabs.read")) snapshot else null,
+        .target_tab_id = if (snapshot) |tab| tab.id else 0,
         .trigger = trigger,
         .plugin_id = &plugin.id,
         .command_id = &plugin.actions[command_index].id,
+        .interactive = plugin.actions[command_index].interactive,
+        .owner = native.moon_shell_window_handle(),
+        .dark = native.moon_shell_dark_mode(),
         .grants = plugin.grants,
         .rpc = rpc,
     };
@@ -294,6 +350,8 @@ fn serviceRpc(task: *Task, rpc: *Rpc) void {
     defer serving_rpc = false;
     const reply = api.dispatch(allocator, rpc.buffer[0..rpc.size], .{
         .grants = task.grants,
+        .plugin_id = std.mem.span(task.plugin_id),
+        .target_tab_id = task.target_tab_id,
         .tab = if (task.snapshot) |*snapshot| snapshot else null,
         .consent = .{ .context = task, .valid = invocationActive },
     }) catch {
@@ -413,6 +471,7 @@ fn exchangeV2(task: *Task, pipe: *native.MoonPipe, rpc: *Rpc) Outcome {
     }
     const hello = sdk.request(allocator, "h:1", "plugin.initialize", sdk.Initialization{
         .apiVersion = sdk.api_version, .pluginId = std.mem.span(task.plugin_id), .permissions = grants[0..count_grants],
+        .browserWindow = task.owner, .darkMode = task.dark,
     }) catch return .failed;
     defer allocator.free(hello);
     if (!sendRpc(rpc, pipe, hello)) return .failed;
@@ -428,7 +487,7 @@ fn exchangeV2(task: *Task, pipe: *native.MoonPipe, rpc: *Rpc) Outcome {
         if (ack.contains("method") or ack.contains("error") or (ack.get("result") orelse return .failed) != .null) return .failed;
     }
     if (task.epoch.load(.acquire) != task.expected_epoch) return .failed;
-    const budget: c_uint = if (task.trigger == .command) 120000 else 2000;
+    const budget: c_uint = if (task.trigger != .command) 2000 else if (task.interactive) 30*60*1000 else 120000;
     rpc.deadline = native.moon_clock() + budget;
     native.moon_pipe_set_budget(pipe, budget);
     const event = task.trigger == .changed;
@@ -501,8 +560,10 @@ pub fn worker(opaque_task: ?*anyopaque) void {
     if (task.outcome == .ok and !exited_cleanly) task.outcome = .crashed;
 }
 
-pub fn smokeStart(index: usize, step: usize, snapshot: ?Snapshot) bool {
-    if (index >= len) return false;
+pub fn smokeStart(step: usize, snapshot: ?Snapshot) bool {
+    const index = for (all[0..len],0..) |*plugin,i| {
+        if (plugin.protocol == .legacy and std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),"moon.example")) break i;
+    } else return false;
     smoke_outcome = null;
     all[index].enabled = true;
     all[index].grants = if (step == 0) .empty else .initOne(.@"tabs.read");
