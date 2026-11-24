@@ -61,6 +61,7 @@ pub const Command = struct {
     menu: ?MenuGroup = null,
     siteMenu: bool = false,
     linkMenu: ?LinkMenuAction = null,
+    inspectElementMenu: ?[]const u8 = null,
     tabDrop: bool = false,
 };
 pub const ShortcutScope = enum { browser, global };

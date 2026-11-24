@@ -649,10 +649,11 @@ def run_win32(exe, base, root):
     modern_example = json.loads(example_manifest.read_text(encoding="utf-8")).get("apiVersion") == 2
     manager = exe.parent / "plugins" / "lua-manager" / "MoonLuaManager.exe"
     devtools = exe.parent / "plugins" / "devtools" / "MoonDevTools.exe"
-    devtools_commands = {command["id"] for command in
-        json.loads(devtools.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"]} if devtools.exists() else set()
+    devtools_commands = {command["id"]: command for command in
+        json.loads(devtools.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"]} if devtools.exists() else {}
     docked_devtools = "window" in devtools_commands
     picker_devtools = "elements" in devtools_commands
+    inspect_menu = devtools_commands.get("elements",{}).get("inspectElementMenu")
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
@@ -1663,6 +1664,77 @@ def run_win32(exe, base, root):
         if not user.IsWindowVisible(content) or user.IsWindowVisible(home):
             raise RuntimeError("The WebKit view did not replace the native new-tab view")
         print(f"win32_unicode_address=ok resized_dpi={dpi} chrome_px={expected_chrome} fallback=GDI+")
+        def native_entries(trigger=None, choose=None, before_choose=None, popup_at=None, owner_window=None):
+            dimensions = wt.RECT()
+            user.GetClientRect(frame,ctypes.byref(dimensions))
+            if trigger:
+                trigger()
+            else:
+                click(dimensions.right-px(159),px(24))
+            def open_menu(expected=None):
+                menu = None
+                while menu := user.FindWindowExW(None,menu,"#32768",None):
+                    owner = wt.DWORD()
+                    user.GetWindowThreadProcessId(menu,ctypes.byref(owner))
+                    if owner.value==proc.pid and user.IsWindowVisible(menu) and (
+                            expected is None or user.SendMessageW(menu,0x01E1,0,0)==expected):
+                        return menu
+                return None
+            popup = wait_for(open_menu,"The native main menu did not open")
+            try:
+                if popup_at:
+                    bounds = wt.RECT()
+                    user.GetWindowRect(popup,ctypes.byref(bounds))
+                    if abs(bounds.left-popup_at.x)>px(16) or abs(bounds.top-popup_at.y)>px(16):
+                        raise RuntimeError(f"Site menu is not anchored to the address button: {bounds.left}, {bounds.top}")
+                handle = user.SendMessageW(popup,0x01E1,0,0)  # MN_GETHMENU
+                if user.GetMenuItemCount(handle)<1:
+                    raise RuntimeError("Could not read the native main menu entries")
+
+                def entries(menu):
+                    result = {}
+                    for index in range(user.GetMenuItemCount(menu)):
+                        label = ctypes.create_unicode_buffer(300)
+                        user.GetMenuStringW(menu,index,label,len(label),0x400)  # MF_BYPOSITION
+                        child = user.GetSubMenu(menu,index)
+                        result[label.value] = entries(child) if child else {}
+                    return result
+
+                result = entries(handle)
+                if choose:
+                    if before_choose:
+                        before_choose()
+                        if owner_window and not open_menu():
+                            return result
+                    path = (choose,) if isinstance(choose,str) else choose
+                    for depth,name in enumerate(path):
+                        menu_count = user.GetMenuItemCount(handle)
+                        for position in range(menu_count):
+                            label = ctypes.create_unicode_buffer(300)
+                            user.GetMenuStringW(handle,position,label,len(label),0x400)
+                            if label.value == name:
+                                break
+                        else:
+                            raise RuntimeError(f"Native menu entry {name!r} was missing: {result}")
+                        for _ in range(menu_count+1):
+                            if user.GetMenuState(handle,position,0x400)&0x80:  # MF_HILITE
+                                break
+                            user.SendMessageW(popup,0x0100,0x28,1)  # WM_KEYDOWN / VK_DOWN
+                        else:
+                            raise RuntimeError(f"Native menu entry {name!r} could not be selected")
+                        if depth+1<len(path):
+                            handle=user.GetSubMenu(handle,position)
+                            if not handle:
+                                raise RuntimeError(f"No submenu for {name!r}")
+                            user.PostMessageW(popup,0x0100,0x27,1)  # VK_RIGHT
+                            popup=wait_for(lambda: open_menu(handle),f"Submenu for {name!r} did not open")
+                    user.PostMessageW(popup,0x0100,0x0D,1)
+                    wait_for(lambda: not open_menu(),"Selecting the native menu item did not dismiss the menu")
+                return result
+            finally:
+                user.PostMessageW(owner_window or frame,0x001F,0,0)  # WM_CANCELMODE
+                wait_for(lambda: not open_menu(),"Main menu did not dismiss")
+
         if devtools.exists():
             sleep(0.3)
             def inspector_window():
@@ -1694,6 +1766,32 @@ def run_win32(exe, base, root):
                     user.GetWindowRect(surface,ctypes.byref(host))
                     return ((a.left,a.top,b.right,b.bottom)==(host.left,host.top,host.right,host.bottom)
                             and ((a.bottom==b.top and a.right==b.right) or (a.right==b.left and a.bottom==b.bottom)))
+
+                if inspect_menu:
+                    def right_click_element():
+                        point = px(36) | (px(33)<<16)
+                        user.PostMessageW(page,0x0204,2,point)
+                        user.PostMessageW(page,0x0205,0,point)
+
+                    offered = native_entries(trigger=right_click_element,owner_window=page)
+                    if inspect_menu not in offered or attached_inspector() or inspector_window():
+                        raise RuntimeError(f"Inspect Element was not offered before first use, or opened on dismissal: {offered}")
+                    native_entries(trigger=right_click_element,choose=inspect_menu,owner_window=page)
+                    panel = wait_for(attached_inspector,"Inspect Element did not open the dock",20)
+                    wait_for(lambda: covers_surface(panel),"Inspect Element did not reflow the page")
+                    user.PostMessageW(panel,0x0100,0x7B,1)
+                    wait_for(lambda: not attached_inspector(),"F12 could not close the right-click inspector")
+                    permission_entry = ("插件","网页开发者工具","允许打开网页开发者工具")
+                    native_entries(choose=permission_entry)
+                    if inspect_menu in native_entries(trigger=right_click_element,owner_window=page):
+                        raise RuntimeError("Inspect Element remained available after revoking permission")
+                    native_entries(choose=permission_entry)
+                    confirmation = wait_for(lambda: owned_window("#32770","授予插件权限？"),"The devtools grant prompt did not open")
+                    user.PostMessageW(confirmation,0x0111,6,0)
+                    wait_for(lambda: not user.IsWindow(confirmation),"The devtools grant prompt did not close")
+                    if inspect_menu not in native_entries(trigger=right_click_element,owner_window=page):
+                        raise RuntimeError("Inspect Element did not return after granting permission")
+                    print("devtools_context_menu=ok available_before_first_open=ok cancel=ok native_dock=ok f12_close=ok grant_refresh=ok",flush=True)
 
                 invoke("打开网页控制台")
                 panel = wait_for(attached_inspector,"The console did not dock in the source tab",20)
@@ -2522,68 +2620,6 @@ def run_win32(exe, base, root):
                 if result.get("error"):
                     raise RuntimeError(result["error"])
 
-            def native_entries(trigger=None, choose=None, before_choose=None, popup_at=None, owner_window=None):
-                dimensions = wt.RECT()
-                user.GetClientRect(frame,ctypes.byref(dimensions))
-                if trigger:
-                    trigger()
-                else:
-                    click(dimensions.right-px(159),px(24))
-                def open_menu():
-                    menu = None
-                    while menu := user.FindWindowExW(None,menu,"#32768",None):
-                        owner = wt.DWORD()
-                        user.GetWindowThreadProcessId(menu,ctypes.byref(owner))
-                        if owner.value==proc.pid and user.IsWindowVisible(menu):
-                            return menu
-                    return None
-                popup = wait_for(open_menu,"The native main menu did not open")
-                try:
-                    if popup_at:
-                        bounds = wt.RECT()
-                        user.GetWindowRect(popup,ctypes.byref(bounds))
-                        if abs(bounds.left-popup_at.x)>px(16) or abs(bounds.top-popup_at.y)>px(16):
-                            raise RuntimeError(f"Site menu is not anchored to the address button: {bounds.left}, {bounds.top}")
-                    handle = user.SendMessageW(popup,0x01E1,0,0)  # MN_GETHMENU
-                    if user.GetMenuItemCount(handle)<1:
-                        raise RuntimeError("Could not read the native main menu entries")
-
-                    def entries(menu):
-                        result = {}
-                        for index in range(user.GetMenuItemCount(menu)):
-                            label = ctypes.create_unicode_buffer(300)
-                            user.GetMenuStringW(menu,index,label,len(label),0x400)  # MF_BYPOSITION
-                            child = user.GetSubMenu(menu,index)
-                            result[label.value] = entries(child) if child else {}
-                        return result
-
-                    result = entries(handle)
-                    if choose:
-                        menu_count = user.GetMenuItemCount(handle)
-                        for position in range(menu_count):
-                            label = ctypes.create_unicode_buffer(300)
-                            user.GetMenuStringW(handle,position,label,len(label),0x400)
-                            if label.value == choose:
-                                break
-                        else:
-                            raise RuntimeError(f"Native menu entry {choose!r} was missing: {result}")
-                        if before_choose:
-                            before_choose()
-                            if owner_window and not open_menu():
-                                return result
-                        for _ in range(menu_count):
-                            user.SendMessageW(popup,0x0100,0x28,1)  # WM_KEYDOWN / VK_DOWN
-                            if user.GetMenuState(handle,position,0x400)&0x80:  # MF_HILITE
-                                break
-                        else:
-                            raise RuntimeError(f"Native menu entry {choose!r} could not be selected")
-                        user.PostMessageW(popup,0x0100,0x0D,1)
-                        wait_for(lambda: not open_menu(),"Selecting the native menu item did not dismiss the menu")
-                    return result
-                finally:
-                    user.PostMessageW(owner_window or frame,0x001F,0,0)  # WM_CANCELMODE
-                    wait_for(lambda: not open_menu(),"Main menu did not dismiss")
-
             if has_site_menu:
                 target = base + "/page/site-menu-contract"
                 moved = base + "/page/site-menu-after"
@@ -2646,6 +2682,8 @@ def run_win32(exe, base, root):
                 menu_items = link_menu()
                 if not actions.issubset(menu_items) or "未授权的书签链接命令" in menu_items:
                     raise RuntimeError(f"Unexpected link menu entries: {menu_items}")
+                if inspect_menu and inspect_menu not in menu_items:
+                    raise RuntimeError(f"Inspect Element did not coexist with link contributions: {menu_items}")
                 if actions & link_menu(y=54).keys():
                     raise RuntimeError("Plugins were offered for a non-HTTP link")
 

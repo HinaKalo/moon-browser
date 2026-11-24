@@ -110,6 +110,7 @@ static char engine_error[256];
 static char test_download_path[4096];
 static int test_download_result;
 static bool filter_bundle_available;
+static bool context_inspect_available;
 static WKStringRef current_request_policy;
 
 typedef enum { INSPECTOR_KEEP, INSPECTOR_DOCK, INSPECTOR_WINDOW } InspectorPlacement;
@@ -125,7 +126,7 @@ struct MoonView {
     uint64_t inspector_deadline;
     InspectorPicker picker;
     uint64_t picker_deadline;
-    bool docked;
+    bool docked, inspector_visible;
     uint64_t token;
     uintptr_t extension_serial;
     WKUserContentControllerRef extension_controller;
@@ -135,6 +136,8 @@ struct MoonView {
 };
 static MoonView *views;
 enum { LINK_COMMANDS = 32*MOON_LINK_MENU_STRIDE, LINK_MENU_GENERATIONS = 128 };
+_Static_assert(kWKContextMenuItemBaseApplicationTag+LINK_COMMANDS*LINK_MENU_GENERATIONS <= UINT16_MAX,
+    "Context menu command IDs must fit a Win32 menu command");
 static MoonLinkContext link_context;
 static unsigned link_menu_cycle, link_menu_base;
 static bool link_items[LINK_COMMANDS];
@@ -536,39 +539,22 @@ static bool add_message_handler(MoonView *view, const char *name, WKScriptMessag
     return true;
 }
 
-static void web_context_menu(WKPageRef page,WKArrayRef proposed,WKArrayRef *result,WKHitTestResultRef hit,
-                             WKTypeRef data,const void *client) {
-    const MoonView *view=client;
-    link_context.tab_id=0;
-    if (view->extension_address) {
-        *result=(WKArrayRef)wk.WKRetain(proposed);
-        return;
-    }
-    MoonLinkContext current={0};
+static size_t web_link_menu(MoonView *view,WKHitTestResultRef hit,WKTypeRef *items,MoonLinkContext *link,
+                            bool *replace_open,bool *replace_copy) {
     WKURLRef url=wk.WKHitTestResultCopyAbsoluteLinkURL(hit);
     WKStringRef text=url ? wk.WKURLCopyString(url) : NULL;
-    const size_t bytes=text ? wk.WKStringGetUTF8CString(text,current.url,sizeof(current.url)) : 0;
+    const size_t bytes=text ? wk.WKStringGetUTF8CString(text,link->url,sizeof(link->url)) : 0;
     release(text);
     release(url);
-    if (bytes<=1 || bytes>=sizeof(current.url) || strlen(current.url)+1!=bytes || !moon_link_capture(&current,view->token)) {
-        *result=(WKArrayRef)wk.WKRetain(proposed);
-        return;
-    }
+    if (bytes<=1 || bytes>=sizeof(link->url) || strlen(link->url)+1!=bytes || !moon_link_capture(link,view->token)) return 0;
     WKStringRef label=wk.WKHitTestResultCopyLinkLabel(hit);
-    if (label) wk.WKStringGetUTF8CStringNonStrict(label,current.label,sizeof(current.label));
+    if (label) wk.WKStringGetUTF8CStringNonStrict(label,link->label,sizeof(link->label));
     release(label);
 
-    const size_t existing=wk.WKArrayGetSize(proposed);
-    WKTypeRef items[LINK_COMMANDS+257];
-    if (existing>256) {
-        *result=(WKArrayRef)wk.WKRetain(proposed);
-        return;
-    }
     link_menu_cycle = (link_menu_cycle+1)%LINK_MENU_GENERATIONS;
     link_menu_base = kWKContextMenuItemBaseApplicationTag+link_menu_cycle*LINK_COMMANDS;
     memset(link_items,0,sizeof(link_items));
     size_t used=0;
-    bool replace_open=false, replace_copy=false;
     for (unsigned kind=MOON_LINK_OPEN;kind<=MOON_LINK_BOOKMARK;++kind) {
         for (size_t plugin=0;plugin<moon_plugin_count() && plugin<LINK_COMMANDS/MOON_LINK_MENU_STRIDE;++plugin) {
             for (size_t command=0;command<moon_plugin_action_count(plugin);++command) {
@@ -580,35 +566,59 @@ static void web_context_menu(WKPageRef page,WKArrayRef proposed,WKArrayRef *resu
                 if (!item) continue;
                 link_items[index]=true;
                 items[used++]=item;
-                replace_open |= kind==MOON_LINK_OPEN;
-                replace_copy |= kind==MOON_LINK_COPY;
+                *replace_open |= kind==MOON_LINK_OPEN;
+                *replace_copy |= kind==MOON_LINK_COPY;
             }
         }
     }
-    if (!used) {
+    return used;
+}
+
+static void web_context_menu(WKPageRef page,WKArrayRef proposed,WKArrayRef *result,WKHitTestResultRef hit,
+                             WKTypeRef data,const void *client) {
+    MoonView *view=(MoonView *)client;
+    link_context.tab_id=0;
+    const size_t existing=wk.WKArrayGetSize(proposed);
+    if (view->extension_address || existing>256) {
         *result=(WKArrayRef)wk.WKRetain(proposed);
         return;
     }
-    const size_t created=used;
-    bool separator=true;
+    WKTypeRef items[LINK_COMMANDS+257];
+    MoonLinkContext current={0};
+    bool replace_open=false, replace_copy=false;
+    const size_t created=web_link_menu(view,hit,items,&current,&replace_open,&replace_copy);
+    size_t used=created;
+    const char *inspect_label=context_inspect_available ? moon_context_inspect_label(view->token) : NULL;
+    WKContextMenuItemRef inspect_item=NULL;
+    WKContextMenuItemRef separator=created ? wk.WKContextMenuItemSeparatorItem() : NULL;
     for (size_t i=0;i<existing;++i) {
         WKContextMenuItemRef item=(WKContextMenuItemRef)wk.WKArrayGetItemAtIndex(proposed,i);
         if (!item) continue;
         WKContextMenuItemTag tag=wk.WKContextMenuItemGetTag(item);
         if ((replace_open && tag==kWKContextMenuItemTagOpenLinkInNewWindow) ||
             (replace_copy && tag==kWKContextMenuItemTagCopyLinkToClipboard)) continue;
-        if (separator && tag==kWKContextMenuItemTagNoAction) continue;
-        if (separator) {
-            WKContextMenuItemRef divider=wk.WKContextMenuItemSeparatorItem();
-            if (divider) items[used++]=divider;
-            separator=false;
+        if (tag==kWKContextMenuItemTagNoAction) {
+            if (used) separator=item;
+            continue;
         }
+        if (tag==kWKContextMenuItemTagInspectElement) {
+            if (!inspect_label || inspect_item) continue;
+            WKStringRef title=wk.WKStringCreateWithUTF8CString(inspect_label);
+            inspect_item=title ? wk.WKContextMenuItemCreateAsAction(tag,title,true) : NULL;
+            release(title);
+            if (!inspect_item) continue;
+            view->inspector=wk.WKPageGetInspector(view->page);
+            if (!view->inspector) continue;
+            item=inspect_item;
+        }
+        if (separator) items[used++]=separator;
+        separator=NULL;
         items[used++]=item;
     }
-    *result=wk.WKArrayCreate(items,used);
+    *result=(!created && !inspect_item && used==existing) ? (WKArrayRef)wk.WKRetain(proposed) : wk.WKArrayCreate(items,used);
     for (size_t i=0;i<created;++i) release(items[i]);
-    if (*result) link_context=current;
-    else *result=(WKArrayRef)wk.WKRetain(proposed);
+    release(inspect_item);
+    if (*result && created) link_context=current;
 }
 
 static void web_context_selected(WKPageRef page,WKContextMenuItemRef item,const void *client) {
@@ -701,6 +711,7 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
     if (!view->view_preferences) goto fail;
     // WebKit forwards scripted requests to our native policy, which decides whether to open a tab.
     wk.WKPreferencesSetJavaScriptCanOpenWindowsAutomatically(view->view_preferences,address==NULL);
+    if (!address && context_inspect_available) wk.WKPreferencesSetDeveloperExtrasEnabled(view->view_preferences,true);
     wk.WKPageConfigurationSetPreferences(config,view->view_preferences);
     RECT bounds={0};
     HWND parent = moon_shell_content();
@@ -923,15 +934,15 @@ static void update_picker(MoonView *view, uint64_t now, bool visible) {
 static void update_inspector(MoonView *view, uint64_t now) {
     if (!view->inspector) return;
     const bool visible=wk.WKInspectorIsVisible(view->inspector);
-    const bool opening=visible && view->inspector_placement!=INSPECTOR_KEEP;
-    if (view->inspector_placement!=INSPECTOR_KEEP) {
-        if (visible) {
-            const bool attached=wk.WKInspectorIsAttached(view->inspector);
-            if (view->inspector_placement==INSPECTOR_DOCK && !attached && can_dock(view)) wk.WKInspectorAttach(view->inspector);
-            if (view->inspector_placement==INSPECTOR_WINDOW && attached) wk.WKInspectorDetach(view->inspector);
-        }
-        if (visible || now>=view->inspector_deadline) view->inspector_placement=INSPECTOR_KEEP;
+    const bool opening=visible && (!view->inspector_visible || view->inspector_placement!=INSPECTOR_KEEP);
+    view->inspector_visible=visible;
+    if (opening) {
+        const bool attached=wk.WKInspectorIsAttached(view->inspector);
+        const bool dock=view->inspector_placement!=INSPECTOR_WINDOW && can_dock(view);
+        if (dock && !attached) wk.WKInspectorAttach(view->inspector);
+        if (!dock && attached) wk.WKInspectorDetach(view->inspector);
     }
+    if (visible || now>=view->inspector_deadline) view->inspector_placement=INSPECTOR_KEEP;
     const bool docked=visible && wk.WKInspectorIsAttached(view->inspector);
     if (docked!=view->docked) {
         view->docked=docked;
@@ -957,6 +968,15 @@ void moon_engine_update_inspectors(void) {
 
 bool moon_engine_inspecting(MoonView *view) {
     return view->inspector && (view->inspector_placement!=INSPECTOR_KEEP || wk.WKInspectorIsVisible(view->inspector));
+}
+
+void moon_engine_context_inspect_available(bool available) {
+    if (context_inspect_available==available) return;
+    context_inspect_available=available;
+    for (MoonView *view=views;view;view=view->next) {
+        if (view->extension_address || (!available && moon_engine_inspecting(view))) continue;
+        wk.WKPreferencesSetDeveloperExtrasEnabled(view->view_preferences,available);
+    }
 }
 
 bool moon_engine_close_inspector(MoonView *view) {

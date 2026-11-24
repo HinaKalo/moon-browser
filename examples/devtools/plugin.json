@@ -1,14 +1,14 @@
 {
   "id": "moon.devtools",
   "name": "网页开发者工具",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonDevTools.exe",
   "contributes": {
     "commands": [
       {"id": "inspector", "label": "切换网页开发者工具", "menu": "developer", "shortcut": "F12"},
-      {"id": "elements", "label": "拾取网页元素", "menu": "developer", "shortcut": "Ctrl+Shift+C"},
+      {"id": "elements", "label": "拾取网页元素", "menu": "developer", "shortcut": "Ctrl+Shift+C", "inspectElementMenu": "检查元素"},
       {"id": "console", "label": "打开网页控制台", "menu": "developer", "siteMenu": true, "shortcut": "Ctrl+Shift+J"},
       {"id": "resources", "label": "查看网页资源和站点数据", "menu": "developer"},
       {"id": "window", "label": "在独立窗口打开开发者工具", "menu": "developer"}

@@ -87,6 +87,7 @@ const Command = struct {
     menu_group: ?sdk.MenuGroup = null,
     site_menu: bool = false,
     link_menu: ?sdk.LinkMenuAction = null,
+    inspect_element_menu: [256:0]u8 = @splat(0),
     tab_drop: bool = false,
     menu_override: MenuOverride = .default,
     user_shortcut: ?Hotkey = null,
@@ -94,6 +95,9 @@ const Command = struct {
         return self.link_menu!=null or self.tab_drop;
     }
 };
+comptime {
+    if (native.MOON_LINK_MENU_STRIDE != sdk.command_limit) @compileError("WebKit link menu stride must match the plugin command limit");
+}
 const Hotkey = struct {
     action: usize, mods: c_uint, key: c_uint, scope: sdk.ShortcutScope,
     text: [24:0]u8 = @splat(0), slot: ?u1 = null,
@@ -177,12 +181,18 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     if (!copy(&plugin.settings_page,settings_page orelse "")) return;
     if (!copy(&plugin.network_rules,network_rules orelse "")) return;
     var has_tab_drop = false;
+    var has_inspect_element = false;
     for (commands, 0..) |item, index| {
         if (!validComponent(item.id) or item.label.len == 0) return;
         if ((item.linkMenu != null or item.tabDrop) and (item.shortcut != null or item.siteMenu or item.menu != null)) return;
         if (item.tabDrop) {
             if (has_tab_drop or item.linkMenu!=null or !requests.contains(.@"tabs.organize")) return;
             has_tab_drop = true;
+        }
+        if (item.inspectElementMenu) |menu_label| {
+            if (has_inspect_element or menu_label.len==0 or item.linkMenu!=null or item.tabDrop or
+                !requests.contains(.@"page.inspect")) return;
+            has_inspect_element = true;
         }
         for (commands[0..index]) |prior| if (std.mem.eql(u8, prior.id, item.id)) return;
         plugin.actions[index] = .{};
@@ -192,6 +202,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         plugin.actions[index].site_menu = item.siteMenu;
         plugin.actions[index].link_menu = item.linkMenu;
         plugin.actions[index].tab_drop = item.tabDrop;
+        if (!copy(&plugin.actions[index].inspect_element_menu,item.inspectElementMenu orelse "")) return;
         if (!copy(&plugin.actions[index].id, item.id) or !copy(&plugin.actions[index].label, item.label)) return;
     }
     if (bundled) {
@@ -681,6 +692,17 @@ pub fn tabDropProvider() ?struct { plugin: usize, command: usize } {
             (!plugin.bundled and !canContribute(plugin))) continue;
         for (plugin.actions[0..plugin.action_count],0..) |entry,command_index| {
             if (entry.tab_drop) return .{ .plugin=index,.command=command_index };
+        }
+    }
+    return null;
+}
+
+pub fn inspectElementLabel() ?[*:0]const u8 {
+    for (all[0..len]) |*plugin| {
+        if (!plugin.enabled or !plugin.grants.contains(.@"page.inspect") or
+            (!plugin.bundled and !canContribute(plugin))) continue;
+        for (plugin.actions[0..plugin.action_count]) |*entry| {
+            if (entry.inspect_element_menu[0]!=0) return &entry.inspect_element_menu;
         }
     }
     return null;

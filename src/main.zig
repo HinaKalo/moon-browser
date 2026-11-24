@@ -1369,6 +1369,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         search.init();
     }
     plugins.init(app, profile);
+    native.moon_engine_context_inspect_available(plugins.inspectElementLabel()!=null);
     var first_url: ?[:0]u8 = null;
     defer if (first_url) |allocated| allocator.free(allocated);
     var index: usize = 1;
@@ -1733,6 +1734,11 @@ fn hasSite(tab: *const Tab) bool {
     return tab.document_committed and tab.phase == .live and !tab.extension and tab.view != null and safeURL(slice(&tab.url));
 }
 
+export fn moon_context_inspect_label(tab: u64) ?[*:0]const u8 {
+    if (stopped or count==0 or tabs[active].id!=tab or !hasSite(&tabs[active])) return null;
+    return plugins.inspectElementLabel();
+}
+
 export fn moon_site_context(site: *native.MoonSiteContext) bool {
     if (stopped or count == 0) return false;
     const tab = &tabs[active];
@@ -1890,6 +1896,8 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     if (permission == null or permission == .@"network.filter") network.select(plugins.networkSource());
     if (permission == null or permission == .@"siteData.read" or permission == .@"siteData.cookieDetails") checkSiteDataGrant();
     if (permission == null or permission == .@"page.source") checkPageSourceGrant();
+    if (permission == null or permission == .@"page.inspect" or permission == .@"ui.commands")
+        native.moon_engine_context_inspect_available(plugins.inspectElementLabel()!=null);
     if (permission == null or permission == .@"page.reading") checkFindGrant();
     if (fullscreen_owner[0]!=0 and !plugins.hasGrant(slice(&fullscreen_owner),.@"window.fullscreen")) {
         native.moon_shell_leave_fullscreen();
