@@ -57,7 +57,7 @@
               "linkMenu": { "enum": ["open", "copy", "bookmark"] },
               "inspectElementMenu": { "type": "string", "minLength": 1, "maxLength": 255 },
               "tabDrop": { "type": "boolean", "default": false },
-              "shortcut": { "enum": ["Ctrl+H", "F9", "F11", "F12", "Ctrl+Shift+C", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+Shift+T", "Ctrl+Shift+Delete", "Ctrl+Shift+M", "Ctrl+Shift+N", "Ctrl+U", "Ctrl+S", "Ctrl+Shift+B"] }
+              "shortcut": { "enum": ["Ctrl+H", "F9", "F11", "F12", "Ctrl+Shift+C", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+Shift+T", "Ctrl+Shift+Delete", "Ctrl+Shift+M", "Ctrl+Shift+N", "Ctrl+U", "Ctrl+S", "Ctrl+Shift+B", "Ctrl+Shift+R"] }
             }
           }
         }

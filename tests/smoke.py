@@ -75,6 +75,10 @@ class Fixture(BaseHTTPRequestHandler):
     chrome_layout = None
     chrome_sequence = 0
     inspector_clicks = 0
+    reload_asset_version = 1
+    reload_asset_requests = []
+    reload_asset_observed = []
+    closed_submissions = 0
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -160,6 +164,26 @@ class Fixture(BaseHTTPRequestHandler):
         elif path == "/site-data-local-preserved":
             self.site_data_local_preserved.set()
             data, content_type = b"ok", "text/plain"
+        elif path == "/hard-reload-asset.js":
+            version = type(self).reload_asset_version
+            etag = f'"moon-hard-reload-{version}"'
+            validator = self.headers.get("If-None-Match")
+            self.reload_asset_requests.append((version,validator))
+            body = f'globalThis.moonReloadAsset={version};'.encode("ascii")
+            same = validator == etag
+            self.send_response(304 if same else 200)
+            self.send_header("Cache-Control","public, max-age=3600")
+            self.send_header("ETag",etag)
+            if not same:
+                self.send_header("Content-Type","application/javascript")
+                self.send_header("Content-Length",str(len(body)))
+            self.end_headers()
+            if not same:
+                self.wfile.write(body)
+            return
+        elif path.startswith("/hard-reload-observed/"):
+            self.reload_asset_observed.append(path.removeprefix("/hard-reload-observed/"))
+            data, content_type = b"ok", "text/plain"
         elif path == "/page-source-navigation":
             data, content_type = (b"change" if self.change_page_source.is_set() else b"wait"), "text/plain"
         elif path == "/page-save-navigation":
@@ -238,6 +262,11 @@ class Fixture(BaseHTTPRequestHandler):
             if name == "中文":
                 self.seen_unicode.set()
             demo = ""
+            if name in ("hard-reload-cold","hard-reload-warm"):
+                demo = (
+                    '<script src="/hard-reload-asset.js"></script>'
+                    '<script>addEventListener("load",()=>fetch("/hard-reload-observed/"+globalThis.moonReloadAsset,{cache:"no-store"}));</script>'
+                )
             if name.startswith("autoplay-"):
                 token = name.removeprefix("autoplay-")
                 silent = token.removesuffix("-retry").endswith("-silent")
@@ -488,6 +517,7 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        type(self).closed_submissions += 1
         data = b"<!doctype html><title>Posted fixture</title><p>Submitted</p>"
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -2180,6 +2210,50 @@ def run_win32(exe, base, root):
             found = user.FindWindowExW(frame,None,"MoonFind",None)
             return found if found and user.IsWindowVisible(found) else None
 
+        def hard_reload_menu():
+            native_entries(choose=("开发与诊断","强制刷新网页\tCtrl+Shift+R"))
+
+        def hard_reload_notice(reason):
+            def notice_or_failure():
+                failure = owned_window("#32770","Plugin")
+                if failure:
+                    raise RuntimeError(read_control(user.GetDlgItem(failure,101)))
+                return owned_window("#32770","网页开发者工具")
+            notice = wait_for(notice_or_failure,reason)
+            if user.GetDlgItem(notice,101):
+                raise RuntimeError("Hard reload interrupted browsing with a dialog")
+            user.PostMessageW(notice,0x0010,0,0)
+            wait_for(lambda: not user.IsWindow(notice),"The protection notice did not close")
+
+        if "hardReload" in devtools_commands:
+            for index,name in enumerate(("hard-reload-cold","hard-reload-warm"),1):
+                target = base+"/page/"+name
+                navigate_reading(target)
+                wait_for(lambda: len(Fixture.reload_asset_observed)>=index,"The cache fixture did not render")
+            if Fixture.reload_asset_observed!=["1","1"] or len(Fixture.reload_asset_requests)!=1:
+                raise RuntimeError(f"The cache fixture did not reuse the warm script: {Fixture.reload_asset_requests}")
+            user.PostMessageW(edit,0x0100,0x74,1)  # Ordinary F5 remains routed to the native reload.
+            wait_for(lambda: len(Fixture.reload_asset_observed)>=3,"Ordinary F5 did not reload the fixture")
+            if Fixture.reload_asset_observed[-1]!="1":
+                raise RuntimeError("Ordinary refresh did not display the existing asset")
+            Fixture.reload_asset_version = 2
+            previous = len(Fixture.reload_asset_requests)
+            hard_reload_menu()
+            wait_for(lambda: Fixture.reload_asset_observed[-1]=="2","Hard reload did not render the updated network asset")
+            if len(Fixture.reload_asset_requests)!=previous+1 or Fixture.reload_asset_requests[-1]!=(2,None):
+                raise RuntimeError(f"Hard reload failed to bypass cached asset validation: {Fixture.reload_asset_requests}")
+            wait_for(lambda: len(history_rows("SELECT id FROM visits WHERE url=?",(target,)))>=3,
+                     "The refreshed page did not finish")
+            web_view = wait_for(visible_page_view,"The hard-reload input fixture has no page view")
+            if not user.PostMessageW(web_view,0x0102,ord('x'),1):
+                raise RuntimeError("Could not post text input to the WebKit window")
+            previous = len(Fixture.reload_asset_observed)
+            hard_reload_menu()
+            hard_reload_notice("Hard reload did not report pending input")
+            if len(Fixture.reload_asset_observed)!=previous:
+                raise RuntimeError("Hard reload discarded pending input")
+            print("hard_reload=ok warm_cache=ok normal_f5=ok unconditional_fetch=ok edited_page_protected=ok",flush=True)
+
         if reader_page.is_file():
             article_url = base + "/page/reader-contract"
             navigate_reading(article_url)
@@ -2613,8 +2687,10 @@ def run_win32(exe, base, root):
                 options = {"origin":origin,"autoplayMode":mode} if autoplay else {"popupOrigin":origin,"popupMode":mode}
                 pending.write_text(json.dumps(options),encoding="utf-8")
                 pending.replace(path)
-                set_control(edit,"extension://moon.history-fixture/history.html")
+                address = "extension://moon.history-fixture/history.html"
+                set_control(edit,address)
                 user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: read_address()==address,f"Site rule panel did not open for {mode}")
                 if confirm is not None:
                     try:
                         prompt = "允许有声自动播放？" if autoplay else "允许网站弹窗？"
@@ -2624,7 +2700,10 @@ def run_win32(exe, base, root):
                         raise RuntimeError(f"{error}: address={read_address()}, fixture={read_settings(path)}") from error
                     user.SendMessageW(question,0x0111,confirm,0)
                 result_key = "autoplayResult" if autoplay else "popupResult"
-                result = wait_for(lambda: (saved := read_settings(path)).get(result_key) and saved,"Site rule request did not complete")
+                result = wait_for(lambda: ((saved := read_settings(path)).get(result_key) or saved.get("error")) and saved,
+                                  f"Site rule request did not complete for {mode}")
+                if result.get("error"):
+                    raise RuntimeError(f"Site rule fixture for {mode}: {result['error']}")
                 if result[result_key] != expected:
                     raise RuntimeError(f"Site rule result was {result[result_key]!r}, expected {expected!r}")
                 return result.get("rules")
@@ -2923,10 +3002,17 @@ def run_win32(exe, base, root):
             user.PostMessageW(web_view,0x0102,ord('x'),1)  # WM_CHAR delivered to the protected page
             close_first()
 
+            previous_submits = Fixture.closed_submissions
             set_control(edit,base + "/page/closed-post")
             user.PostMessageW(edit,0x0100,0x0D,1)
             wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(base + "/closed-submit",)),
                      "The non-GET fixture did not finish")
+            if "hardReload" in devtools_commands:
+                hard_reload_menu()
+                hard_reload_notice("Hard reload did not report possible form resubmission")
+                if Fixture.closed_submissions!=previous_submits+1:
+                    raise RuntimeError("Hard reload repeated a POST submission")
+                print("hard_reload_post_protected=ok",flush=True)
             close_first()
 
             invoke("最近关闭的标签")

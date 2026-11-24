@@ -1181,6 +1181,19 @@ export fn moon_devtools_open(panel: c_int, independent: bool, tab_id: u64, navig
     const view = devtoolsTarget(tab_id,navigation) orelse return false;
     return native.moon_engine_inspect(view,panel,independent);
 }
+
+export fn moon_devtools_hard_reload(tab_id: u64, navigation: u64) c_int {
+    const result: sdk.HardReloadResult = result: {
+        const view = devtoolsTarget(tab_id,navigation) orelse break :result .unavailable;
+        const tab = &tabs[active];
+        if (tab.loading or !tab.loaded) break :result .unavailable;
+        if (tab.unsafe_history) break :result .resubmission;
+        if (tab.dirty) break :result .edited;
+        native.moon_engine_reload_from_origin(view);
+        break :result .started;
+    };
+    return @intFromEnum(result);
+}
 export fn moon_devtools_toggle(tab_id: u64, navigation: u64) c_int {
     const view = devtoolsTarget(tab_id,navigation) orelse return -1;
     if (native.moon_engine_close_inspector(view)) return 0;

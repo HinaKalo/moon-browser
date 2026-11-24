@@ -950,6 +950,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
     const ctrl_shift = ctrl | 0x0004;
     const plus = vk==0xbb or vk==0x6b; // VK_OEM_PLUS, VK_ADD
     if (plus and (mods==ctrl or mods==ctrl_shift)) return .@"Ctrl++";
+    if (mods==0x0004 and vk==0x74) return .@"Ctrl+Shift+R"; // Shift+F5
     return switch (mods) {
         0 => switch (vk) { 0x78 => .F9, 0x7a => .F11, 0x7b => .F12, else => null },
         ctrl => switch (vk) {
@@ -968,6 +969,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
             'C' => .@"Ctrl+Shift+C",
             'I' => .F12,
             'J' => .@"Ctrl+Shift+J",
+            'R' => .@"Ctrl+Shift+R",
             'O' => .@"Ctrl+Shift+O",
             'T' => .@"Ctrl+Shift+T",
             'M' => .@"Ctrl+Shift+M",
@@ -1013,7 +1015,9 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
             if (entry.shortcut!=key or entry.user_shortcut!=null or registeredShortcut(index,command_index)!=null) continue;
             if (key==.F11 and ((!plugin.bundled and !canContribute(plugin)) or
                 !plugin.grants.contains(.@"window.fullscreen"))) continue;
-            if (!repeated or (key!=.F9 and key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C" and key!=.@"Ctrl+S"))
+            if (key==.@"Ctrl+Shift+R" and (!plugin.grants.contains(.@"page.inspect") or
+                (!plugin.bundled and !canContribute(plugin)))) continue;
+            if (!repeated or (key!=.F9 and key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C" and key!=.@"Ctrl+S" and key!=.@"Ctrl+Shift+R"))
                 runShortcut(index,command_index,snapshot,repeated);
             return true;
         }

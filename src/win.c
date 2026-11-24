@@ -1696,6 +1696,10 @@ static bool keyboard(MSG *msg) {
         if (!repeated) moon_tab_nudge(msg->wParam==VK_NEXT);
         return true;
     }
+    const bool hard_reload=(modifiers==(MOD_CONTROL|MOD_SHIFT) && msg->wParam=='R') ||
+        (modifiers==MOD_SHIFT && msg->wParam==VK_F5);
+    if (hard_reload && (moon_ime_composing(msg->hwnd) ||
+        moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated))) return true;
     if (msg->wParam == VK_F5 || (ctrl && msg->wParam == 'R')) { moon_command(MOON_RELOAD,0,NULL); return true; }
     if (alt && msg->wParam == VK_LEFT) { moon_command(MOON_BACK,0,NULL); return true; }
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }

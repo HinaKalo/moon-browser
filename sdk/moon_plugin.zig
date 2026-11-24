@@ -54,6 +54,7 @@ pub const Shortcut = enum {
     @"Ctrl+Shift+C",
     @"Ctrl+S",
     @"Ctrl+Shift+B",
+    @"Ctrl+Shift+R",
     F9,
 };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
@@ -175,6 +176,7 @@ pub const ScriptSource = struct { sourceBase64: []const u8 };
 pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
 pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
 pub const InspectorPanel = enum(c_int) { inspector, console, resources, elements };
+pub const HardReloadResult = enum(c_int) { started, unavailable, edited, resubmission };
 pub const InspectorPlacement = enum { docked, window };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
 pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
@@ -305,6 +307,7 @@ pub const Method = enum {
     @"settings.write",
     @"devtools.open",
     @"devtools.toggle",
+    @"devtools.hardReload",
     @"pageSource.open",
     @"pageSource.status",
     @"pageSource.read",

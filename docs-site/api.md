@@ -46,6 +46,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `settings.write` | 本插件 | 传入 `{ value }` 写入最多 4 KiB 的 JSON 对象。 |
 | `devtools.open` | `page.inspect` | 用户命令传入 `{ panel, placement? }`。`panel` 可选 `inspector`、`console`、`resources`、`elements`（开始拾取）。`placement` 可选 `docked`（默认）或 `window`，空间不足时使用独立窗口。返回是否已发起打开请求。 |
 | `devtools.toggle` | `page.inspect` | 用户命令传入 `{}`。返回 `true`（请求打开）、`false`（已请求关闭）或 `null`（网页已切换或不可用）。 |
+| `devtools.hardReload` | `page.inspect` | 用户命令传入 `{}`，让 WebKit 对原活动网页执行源站重载。返回 `started`、`unavailable`、`edited` 或 `resubmission`。 |
 | `pageSource.open` | `page.source` | 从用户命令传入 `{}`，将插件专属页面与当前已加载的 HTTP(S) 主文档绑定并请求源码。返回是否接受请求。 |
 | `page.saveHtml` | `page.save` | 用户触发的原生命令传入 `{}`。保存位置由系统对话框选择。返回 `started`、`cancelled`、`unavailable`、`unsupported`、`invalidFilename`、`busy` 或 `failed`。实际完成结果由浏览器提示。 |
 | `pageSource.status` | `page.source` | 由绑定的插件页面传入 `{}`。返回 `{ state, generation, url, bytes, truncated }`。未绑定时返回 `idle`，已绑定的状态包括 `pending`、`ready`、`stale` 和 `unavailable`。 |

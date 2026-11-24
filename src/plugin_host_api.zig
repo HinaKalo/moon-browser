@@ -60,7 +60,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"tabs.getActive" => .@"tabs.read",
         .@"lua.scripts.list", .@"lua.scripts.install", .@"lua.scripts.setEnabled", .@"lua.scripts.remove" => .@"lua.scripts.manage",
         .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive" => .@"lua.scripts.manage",
-        .@"devtools.open", .@"devtools.toggle" => .@"page.inspect",
+        .@"devtools.open", .@"devtools.toggle", .@"devtools.hardReload" => .@"page.inspect",
         .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
         .@"page.saveHtml" => .@"page.save",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
@@ -334,6 +334,12 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const state = native.moon_devtools_toggle(context.target_tab_id,context.target_navigation);
             const result: ?bool = if (state<0) null else state==1;
             return sdk.result(output,id,result);
+        },
+        .@"devtools.hardReload" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+            const outcome = native.moon_devtools_hard_reload(context.target_tab_id,context.target_navigation);
+            return sdk.result(output,id,std.enums.fromInt(sdk.HardReloadResult,outcome) orelse .unavailable);
         },
         .@"pageSource.open" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

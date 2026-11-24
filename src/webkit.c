@@ -90,7 +90,7 @@ extern void WKWebsitePoliciesSetAutoplayPolicy(WKWebsitePoliciesRef, enum WKWebs
     X(WKInspectorIsElementSelectionActive) X(WKInspectorToggleElementSelection) \
     X(WKPageGetMainFrame) X(WKPageGetSourceForFrame) X(WKStringGetUTF8CStringNonStrict) \
     X(WKFrameCopyMIMEType) X(WKStringGetMaximumUTF8CStringSize) \
-    X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
+    X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) X(WKPageReloadFromOrigin) \
     X(WKPageSetPageFindClient) X(WKPageFindString) X(WKPageHideFindUI) \
     X(WKPageGetPageZoomFactor) X(WKPageSetPageZoomFactor) \
     X(WKPageCopySessionState) X(WKPageRestoreFromSessionState) X(WKPageGetProcessIdentifier) X(WKPageGetMediaState) X(WKPageSetMuted) \
@@ -895,6 +895,7 @@ bool moon_engine_load(MoonView *view, const char *url) {
 void moon_engine_back(MoonView *view) { if (wk.WKPageCanGoBack(view->page)) wk.WKPageGoBack(view->page); }
 void moon_engine_forward(MoonView *view) { if (wk.WKPageCanGoForward(view->page)) wk.WKPageGoForward(view->page); }
 void moon_engine_reload(MoonView *view) { wk.WKPageReload(view->page); }
+void moon_engine_reload_from_origin(MoonView *view) { wk.WKPageReloadFromOrigin(view->page); }
 void moon_engine_find(MoonView *view, const char *query, bool backwards) {
     WKStringRef string = wk.WKStringCreateWithUTF8CString(query);
     if (!string) return;
