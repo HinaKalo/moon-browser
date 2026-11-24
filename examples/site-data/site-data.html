@@ -86,6 +86,7 @@
   const newKey=el('key'), storageActions=el('storage-actions'), clearStorage=el('clear-storage');
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
   let clearing=false;
+  let dismissedMutation;
   const isCatalog=() => group==='indexedDB' || group==='cacheStorage';
   async function host(method,params={}) {
     const id='sites:' + ++seq;
@@ -143,6 +144,7 @@
     if (!page?.available || storageActions.hidden || clearing) return;
     const current=page;
     const currentGroup=group;
+    dismissedMutation=current.generation;
     clearing=true;
     clearStorage.disabled=el('create').disabled=true;
     feedback.textContent='';
@@ -321,7 +323,8 @@
       selected=current.state;
       request++;
       closeEditor();
-      feedback.textContent=messages[current.mutation] || '';
+      if (current.state!=='ready' || current.generation!==dismissedMutation)
+        feedback.textContent=messages[current.mutation] || '';
       if (selected==='ready') await load();
       else { clear(); details.textContent=''; status.textContent=states[selected] || ''; }
     } catch {
