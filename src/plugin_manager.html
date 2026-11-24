@@ -61,6 +61,11 @@
   .switch-row label { cursor:pointer; }
   input[type=checkbox] { flex:none; width:17px; height:17px; margin:0 2px 0 0; accent-color:var(--accent); }
   .command { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:5px 8px; padding:4px 0; }
+  .command-actions,.shortcut-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+  .command-actions .action { font-size:12px; padding:3px 7px; }
+  .shortcut-editor { margin:4px 0 8px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--surface); }
+  .shortcut-editor .hint { margin-bottom:7px; }
+  .shortcut-editor [role=status] { margin-top:6px; color:var(--accent); }
   kbd { background:var(--surface); border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--muted); white-space:nowrap; }
   #empty { padding:22px; }
   @media(max-width:550px) {
@@ -96,6 +101,7 @@
   const filters = [...document.querySelectorAll('[data-filter]')];
   const cancelled = { enable:'已取消启用。', grant:'已取消授权。' };
   let items = [], selected, source = 'all', busy = false, loading = false, generation = 0;
+  let shortcutEditor;
 
   function make(tag, text, css) {
     const node = document.createElement(tag);
@@ -149,8 +155,102 @@
     area.append(row);
   }
 
+  function editShortcut(plugin, command, row, trigger) {
+    shortcutEditor?.close();
+    const editor = make('div', '', 'shortcut-editor');
+    const hint = make('p', '使用 Ctrl+Shift 或 Alt+Shift，再加一个字母或数字。', 'hint');
+    const actions = make('div', '', 'shortcut-actions');
+    const record = make('button', '录制快捷键', 'action');
+    const save = make('button', '保存', 'action');
+    const cancel = make('button', '取消', 'action');
+    const feedback = make('p');
+    feedback.setAttribute('role', 'status');
+    save.disabled = true;
+    actions.append(record, save, cancel);
+    if (command.custom) {
+      const reset = make('button', '恢复原快捷键', 'action');
+      reset.onclick = () => submit(null);
+      actions.append(reset);
+    }
+    editor.append(hint, actions, feedback);
+    row.after(editor);
+    trigger.setAttribute('aria-expanded', 'true');
+
+    let draft, timer, recording = false;
+    function stopRecording() {
+      if (!recording) return;
+      recording = false;
+      clearTimeout(timer);
+      record.textContent = draft || '录制快捷键';
+      host({op:'capture', enabled:false}).catch(() => {});
+    }
+    const session = {
+      captured(chord) {
+        if (!recording) return;
+        if (chord) draft = chord;
+        stopRecording();
+        save.disabled = !draft;
+        feedback.textContent = chord ? '录制完成，点击保存应用。' : '已结束录制。';
+      },
+      close() {
+        stopRecording();
+        editor.remove();
+        trigger.setAttribute('aria-expanded', 'false');
+        if (shortcutEditor === session) shortcutEditor = null;
+      }
+    };
+    shortcutEditor = session;
+    record.onclick = async () => {
+      if (recording) { stopRecording(); return; }
+      record.focus();
+      recording = true;
+      record.textContent = '按下组合键…';
+      feedback.textContent = '';
+      try {
+        await host({op:'capture', enabled:true});
+        if (recording) timer = setTimeout(() => session.captured(null), 10000);
+      } catch {
+        stopRecording();
+        feedback.textContent = '无法开始录制。';
+      }
+    };
+    record.onblur = stopRecording;
+    save.onclick = () => { if (draft) submit(draft); };
+    cancel.onclick = () => { session.close(); trigger.focus(); };
+    record.focus();
+
+    async function submit(shortcut) {
+      if (busy) return;
+      busy = true;
+      stopRecording();
+      try {
+        const {result} = await host({op:'shortcut', id:plugin.id, command:command.id, shortcut});
+        if (result !== 'saved') {
+          feedback.textContent = ({
+            reserved:'这是浏览器保留的快捷键，请换一个。',
+            conflict:'该组合键已被其他命令占用，请换一个。',
+            invalidShortcut:'组合键格式无效。'
+          })[result] || '快捷键未保存。请重试。';
+          return;
+        }
+        status.textContent = shortcut ? '快捷键已保存。' : '已恢复原快捷键。';
+        if (shortcutEditor === session) {
+          session.close();
+          await showDetails(plugin, trigger.id);
+        }
+      } catch {
+        feedback.textContent = '快捷键未保存。请重试。';
+      } finally {
+        busy = false;
+      }
+    }
+  }
+
+  window.addEventListener('moon-shortcut', event => shortcutEditor?.captured(event.detail));
+
   async function showDetails(plugin, focus) {
     const seq = ++generation;
+    shortcutEditor?.close();
     details.hidden = !plugin;
     details.replaceChildren();
     if (!plugin) return;
@@ -186,7 +286,21 @@
       for (const command of data.commands) {
         const row = make('div', '', 'command');
         row.append(make('span', command.label));
-        if (command.shortcut) row.append(make('kbd', command.shortcut));
+        const tools = make('div', '', 'command-actions');
+        if (command.shortcut) tools.append(make('kbd', command.shortcut));
+        if (command.globalShortcut) tools.append(make('kbd', '全局 ' + command.globalShortcut));
+        if (data.enabled) {
+          const trigger = make('button', command.shortcut ? '修改' : '添加', 'action');
+          trigger.id = 'shortcut-' + command.id;
+          trigger.setAttribute('aria-label', '设置「' + command.label + '」的浏览器快捷键');
+          trigger.setAttribute('aria-expanded', 'false');
+          trigger.onclick = () => {
+            if (trigger.getAttribute('aria-expanded') === 'true') { shortcutEditor?.close(); return; }
+            editShortcut(plugin, command, row, trigger);
+          };
+          tools.append(trigger);
+        }
+        row.append(tools);
         commands.append(row);
       }
       details.append(commands);

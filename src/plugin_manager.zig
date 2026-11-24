@@ -7,16 +7,24 @@ pub const address: [:0]const u8 = native.MOON_PLUGIN_MANAGER_ADDRESS;
 pub const document: [:0]const u8 = @embedFile("plugin_manager.html");
 
 pub const Request = struct {
-    op: enum { list, details, enable, grant, settings, market },
+    op: enum { list, details, enable, grant, settings, market, shortcut, capture },
     offset: usize = 0,
     id: ?[]const u8 = null,
     permission: ?sdk.Permission = null,
     enabled: ?bool = null,
+    command: ?[]const u8 = null,
+    shortcut: ?[]const u8 = null,
 };
 
 const Entry = struct { id: []const u8, name: []const u8, enabled: bool, bundled: bool };
 const Permission = struct { id: sdk.Permission, label: []const u8, granted: bool };
-const Command = struct { label: []const u8, shortcut: []const u8 };
+const Command = struct {
+    id: []const u8,
+    label: []const u8,
+    shortcut: []const u8,
+    custom: bool,
+    globalShortcut: ?[]const u8,
+};
 
 pub fn reply(allocator: std.mem.Allocator, output: []u8, data: anytype) bool {
     const json = std.json.Stringify.valueAlloc(allocator, data, .{}) catch return false;
@@ -55,10 +63,17 @@ pub fn details(allocator: std.mem.Allocator, output: []u8, index: usize) bool {
     }
     var commands: [sdk.command_limit]Command = undefined;
     const used = plugins.actionCount(index);
-    for (commands[0..used], 0..) |*command, i| command.* = .{
-        .label = std.mem.span(plugins.action(index, i)),
-        .shortcut = std.mem.span(native.moon_plugin_action_shortcut(index, i)),
-    };
+    for (commands[0..used], 0..) |*command, i| {
+        const user = plugins.userShortcut(index,i);
+        const global = plugins.pluginGlobalShortcut(index,i);
+        command.* = .{
+            .id = plugins.actionId(index,i),
+            .label = std.mem.span(plugins.action(index,i)),
+            .shortcut = if (global != null and user == null) "" else std.mem.span(native.moon_plugin_action_shortcut(index,i)),
+            .custom = user != null,
+            .globalShortcut = if (global) |key| std.mem.span(key) else null,
+        };
+    }
     return reply(allocator, output, .{
         .enabled = plugins.isEnabled(index),
         .settings = plugins.hasSettings(index),

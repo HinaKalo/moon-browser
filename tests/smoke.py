@@ -457,7 +457,7 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
                         progress = report.read_text(encoding="utf-8")
                     except OSError:
                         progress = ""
-                    if "process_terminated tab=1\n" in progress.partition("download=ok")[0]:
+                    if "process_terminated tab=1\n" in progress.partition("fixture_crash_requested=1\n")[0]:
                         browser.kill()
                         browser.wait()
                         print("WebKit terminated before the intentional crash test.",flush=True)
@@ -474,7 +474,7 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
     if contract_client.exists() and "plugin_api_v2=ok" not in log:
         missing.append("plugin_api_v2=ok")
     if status or missing:
-        if quick and "process_terminated tab=1\n" in log.partition("download=ok")[0]:
+        if quick and "process_terminated tab=1\n" in log.partition("fixture_crash_requested=1\n")[0]:
             print("WebKit terminated before the intentional crash test.",flush=True)
             raise SystemExit(75)
         contract_error = profile / "plugins" / "api-contract" / "contract-error.txt"
@@ -571,6 +571,12 @@ def run_win32(exe, base, root):
     if manager.exists():
         fixture = profile / "plugins" / "settings"
         fixture.mkdir(parents=True)
+        if page_source.exists():
+            (profile / "plugin-shortcuts.json").write_text(json.dumps([
+                {"plugin": "moon.source", "command": "open", "shortcut": "Ctrl+Shift+7"},
+                {"plugin": "moon.devtools", "command": "console", "shortcut": "Ctrl+Shift+7"},
+                {"plugin": "moon.bookmarks", "command": "open", "shortcut": "Ctrl+Shift+L"},
+            ]), encoding="utf-8")
         (profile / "plugin-state.json").write_text(json.dumps([
             {"id": "moon.lua-manager", "enabled": True, "tabs_read": False, "lua_scripts_manage": True},
             {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
@@ -1939,7 +1945,7 @@ def run_win32(exe, base, root):
             if private_window.exists():
                 expected["隐私与安全"].add("新建隐私窗口\tCtrl+Shift+N")
             if page_source.exists():
-                expected["开发与诊断"].add("查看网页源代码\tCtrl+U")
+                expected["开发与诊断"].add("查看网页源代码\tCtrl+Shift+7")
             for group, labels in expected.items():
                 if missing := labels - groups.get(group,{}).keys():
                     raise RuntimeError(f"Native menu group {group} is missing {missing}")
@@ -1981,8 +1987,13 @@ def run_win32(exe, base, root):
             if user.RegisterHotKey(None,902,modifiers,ord('8')):
                 user.UnregisterHotKey(None,902)
                 raise RuntimeError("The global registration did not survive a restart")
-            if "显示 Moon 命令提示\tCtrl+Shift+8" not in native_entries():
+            restarted_menu = native_entries()
+            if "显示 Moon 命令提示\tCtrl+Shift+8" not in restarted_menu:
                 raise RuntimeError("The menu registration did not survive a restart")
+            if page_source.exists():
+                if "查看网页源代码\tCtrl+Shift+7" not in restarted_menu["开发与诊断"]:
+                    raise RuntimeError("The user shortcut did not survive a restart")
+                print("user_shortcuts=ok menu_override=ok reserved_and_conflicting_preferences_rejected=ok restart=ok",flush=True)
             set_control(edit,address)
             user.PostMessageW(edit,0x0100,0x0D,1)
             registration_phase("removed")

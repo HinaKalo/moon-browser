@@ -1173,6 +1173,8 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             }
             return 0;
         case WM_HOTKEY:
+            if (GetForegroundWindow()==frame && IsChild(content,GetFocus()) &&
+                moon_plugin_capture_key(LOWORD(lp),HIWORD(lp))) return 0;
             if (moon_plugin_global_key((unsigned)wp,LOWORD(lp),HIWORD(lp))) return 0;
             break;
         case WM_CLOSE: moon_quit(0); return 0;
@@ -1192,6 +1194,17 @@ bool moon_ime_composing(HWND input) {
 static bool keyboard(MSG *msg) {
     bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0;
     bool alt = (msg->lParam & (1L<<29)) != 0;
+    const unsigned modifiers=(ctrl?MOD_CONTROL:0)|(alt?MOD_ALT:0)|(shift?MOD_SHIFT:0);
+    static WPARAM captured_key;
+    const bool repeated=(msg->lParam&(1L<<30))!=0;
+    if (IsChild(content,msg->hwnd)) {
+        if (repeated && captured_key==msg->wParam) return true;
+        captured_key=0;
+        if (moon_plugin_capture_key(modifiers,(unsigned)msg->wParam)) {
+            captured_key=msg->wParam;
+            return true;
+        }
+    }
     if ((msg->hwnd==address || msg->hwnd==home_edit) && msg->wParam==VK_RETURN && !ctrl && !alt && !moon_ime_composing(msg->hwnd)) {
         wchar_t wide[4096];
         char value[16384];
@@ -1209,9 +1222,8 @@ static bool keyboard(MSG *msg) {
     if (msg->wParam == VK_F5 || (ctrl && msg->wParam == 'R')) { moon_command(MOON_RELOAD,0,NULL); return true; }
     if (alt && msg->wParam == VK_LEFT) { moon_command(MOON_BACK,0,NULL); return true; }
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
-    const unsigned modifiers=(ctrl?MOD_CONTROL:0)|(alt?MOD_ALT:0)|(shift?MOD_SHIFT:0);
     if ((ctrl || alt || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
-        moon_plugin_key(modifiers,(unsigned)msg->wParam,(msg->lParam&(1L<<30))!=0)) return true;
+        moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
     return false;
 }
 bool moon_shell_register_hotkey(unsigned id, unsigned modifiers, unsigned key) {

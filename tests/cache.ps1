@@ -56,6 +56,20 @@ try {
     }
     Write-Host 'PASS latest-two retention'
 
+    & {
+        function Get-ChildItem {
+            [CmdletBinding()]
+            param([string]$LiteralPath, [switch]$Force, [switch]$Directory)
+            Microsoft.PowerShell.Management\Get-ChildItem @PSBoundParameters
+            if ($LiteralPath -eq $cache -and !$Directory) {
+                # A sampler may still hold information for a directory the worker just promoted.
+                [IO.DirectoryInfo]::new((Join-Path $cache 'stage-already-promoted'))
+            }
+        }
+        & $entry cache-status -CacheDir $cache
+    }
+    Write-Host 'PASS moved staging entries do not look like junctions'
+
     $junction = Join-Path $cache 'engine\escape'
     $null = New-Item -ItemType Junction -Path $junction -Target $outside
     try {

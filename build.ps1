@@ -41,7 +41,14 @@ function Get-CacheEntries([string]$Path) {
         throw
     }
     foreach ($entry in $entries) {
-        if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        $attributes = $entry.Attributes
+        if ([int]$attributes -eq -1) {
+            # FileSystemInfo can return -1 when a staged entry has already moved.
+            # Recheck the path so only genuinely missing entries are skipped.
+            try { $attributes = [IO.File]::GetAttributes($entry.FullName) }
+            catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { continue }
+        }
+        if ($attributes -band [IO.FileAttributes]::ReparsePoint) {
             throw "Refusing reparse point $($entry.FullName)"
         }
         $entry

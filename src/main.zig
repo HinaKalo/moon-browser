@@ -77,6 +77,8 @@ var peak_commit: u64 = 0;
 var retiring: [max_tabs]Retiring = undefined;
 var retiring_count: usize = 0;
 var stopped = false;
+const ShortcutCapture = struct { tab: u64, deadline: u64 };
+var shortcut_capture: ?ShortcutCapture = null;
 var popup: [4096:0]u8 = @splat(0);
 var error_text: [512:0]u8 = @splat(0);
 
@@ -249,6 +251,9 @@ fn storeSession(tab: *Tab) void {
     }
 }
 fn detach(tab: *Tab) void {
+    if (shortcut_capture) |capture| {
+        if (capture.tab == tab.id) shortcut_capture = null;
+    }
     site_data.invalidate(tab.id);
     page_source.invalidate(tab.id);
     if (find_tab == tab.id) moon_find_dismiss(false);
@@ -428,6 +433,7 @@ fn restore(tab: *Tab) void {
 }
 fn chooseTab(index: usize, notify: bool) void {
     if (index >= count or index == active) return;
+    shortcut_capture = null;
     moon_find_dismiss(false);
     const now = native.moon_clock();
     tabs[active].last_used = now;
@@ -1366,6 +1372,7 @@ export fn moon_plugin_action(index: usize, command: usize) [*:0]const u8 {
     return plugins.action(index, command);
 }
 export fn moon_plugin_action_shortcut(index: usize, command: usize) [*:0]const u8 {
+    if (plugins.userShortcut(index,command)) |shortcut| return shortcut;
     if (plugins.registeredShortcut(index,command)) |shortcut| return shortcut;
     return if (plugins.actionShortcut(index,command)) |key| @tagName(key) else "";
 }
@@ -1449,6 +1456,16 @@ export fn moon_plugins_request(panel: u64, raw: [*c]const u8, response: [*c]u8, 
     const input = std.json.parseFromSliceLeaky(plugin_manager.Request,allocator,slice(raw),.{}) catch return false;
     const output = response[0..cap];
     if (input.op == .list) return plugin_manager.list(allocator,output,input.offset);
+    if (input.op == .capture) {
+        const enabled = input.enabled orelse return false;
+        if (enabled and active != tab) return false;
+        if (enabled) {
+            shortcut_capture = .{ .tab=panel, .deadline=native.moon_clock()+10_000 };
+        } else if (shortcut_capture) |capture| {
+            if (capture.tab == panel) shortcut_capture = null;
+        }
+        return plugin_manager.reply(allocator,output,.{ .recording = enabled });
+    }
     if (input.op == .market) {
         if (active != tab) return false;
         return plugin_manager.reply(allocator,output,.{ .opened = openInternalPage(market.address) });
@@ -1458,6 +1475,11 @@ export fn moon_plugins_request(panel: u64, raw: [*c]const u8, response: [*c]u8, 
     if (input.op == .details) return plugin_manager.details(allocator,output,index);
     if (active != tab) return false;
     switch (input.op) {
+        .shortcut => {
+            const result = plugins.setUserShortcut(index,input.command orelse return false,input.shortcut);
+            if (result == .saved) native.moon_shell_refresh();
+            return plugin_manager.reply(allocator,output,.{ .result = result });
+        },
         .settings => {
             var buffer: [256]u8 = undefined;
             const address = plugins.settingsAddress(index,&buffer) orelse return false;
@@ -1476,6 +1498,32 @@ export fn moon_plugins_request(panel: u64, raw: [*c]const u8, response: [*c]u8, 
         },
         else => unreachable,
     }
+}
+
+export fn moon_plugin_capture_key(modifiers: c_uint, key: c_uint) bool {
+    const capture = shortcut_capture orelse return false;
+    if (stopped or count == 0 or tabs[active].id != capture.tab or native.moon_clock() >= capture.deadline) {
+        shortcut_capture = null;
+        return false;
+    }
+    const view = tabs[active].view orelse return false;
+    if (key == 0x1b) {
+        shortcut_capture = null;
+        native.moon_engine_apply_dom(view,"dispatchEvent(new CustomEvent('moon-shortcut',{detail:null}))");
+        return true;
+    }
+    const prefix = switch (modifiers) {
+        0x0006 => "Ctrl+Shift+",
+        0x0005 => "Alt+Shift+",
+        else => return false,
+    };
+    if (key > 127 or (!std.ascii.isUpper(@intCast(key)) and !std.ascii.isDigit(@intCast(key)))) return false;
+    var buffer: [128]u8 = undefined;
+    const script = std.fmt.bufPrintSentinel(&buffer,"dispatchEvent(new CustomEvent('moon-shortcut',{{detail:'{s}{c}'}}))",
+        .{ prefix, @as(u8,@intCast(key)) },0) catch unreachable;
+    shortcut_capture = null;
+    native.moon_engine_apply_dom(view,script.ptr);
+    return true;
 }
 
 export fn moon_privacy_allowed(tab: u64, owner: [*c]const u8) bool {
@@ -1890,6 +1938,7 @@ fn smokeTick(now: u64) void {
         },
         .crash => {
             if (!smokePage(initial_title)) return;
+            log("fixture_crash_requested=1", .{});
             if (!native.moon_engine_test_crash(tabs[active].view.?)) return failSmoke("could not terminate fixture web process");
             smoke = .recover;
         },

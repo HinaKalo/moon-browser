@@ -175,6 +175,7 @@ bool moon_extension_settings(const char *id, const char *request, char *result, 
 bool moon_extension_request(uint64_t page, const char *id, const char *request, char *result, size_t cap);
 #define MOON_PLUGIN_MANAGER_ADDRESS "moon://plugins/"
 bool moon_plugins_request(uint64_t panel, const char *request, char *result, size_t cap);
+bool moon_plugin_capture_key(unsigned modifiers, unsigned key);
 bool moon_site_data_open(const char *id, uint64_t source, const char *expected);
 bool moon_page_source_open(const char *id, uint64_t source, const char *expected);
 void moon_page_source_result(uint64_t generation, const char *html, size_t bytes);

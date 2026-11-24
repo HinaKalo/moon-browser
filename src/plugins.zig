@@ -70,11 +70,13 @@ const Task = struct {
     toast: bool = false,
 };
 const MenuOverride = enum { default, pinned, hidden };
+const UserShortcut = struct { plugin: []const u8, command: []const u8, shortcut: []const u8 };
 const Command = struct {
     id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false,
     shortcut: ?sdk.Shortcut = null,
     menu_group: ?sdk.MenuGroup = null,
     menu_override: MenuOverride = .default,
+    user_shortcut: ?Hotkey = null,
 };
 const Hotkey = struct {
     action: usize, mods: c_uint, key: c_uint, scope: sdk.ShortcutScope,
@@ -106,6 +108,7 @@ const Plugin = struct {
 var all: [32]Plugin = undefined;
 var len: usize = 0;
 var file_path: [4096:0]u8 = @splat(0);
+var shortcut_path: [4096:0]u8 = @splat(0);
 var smoke_message: [512:0]u8 = @splat(0);
 var smoke_outcome: ?Outcome = null;
 var serving_rpc = false;
@@ -254,6 +257,9 @@ pub fn init(app: []const u8, profile: []const u8) void {
     if (profile.len==0) return;
     discover(profile,false);
     _ = std.fmt.bufPrintSentinel(&file_path, "{s}\\plugin-state.json", .{profile}, 0) catch return;
+    _ = std.fmt.bufPrintSentinel(&shortcut_path, "{s}\\plugin-shortcuts.json", .{profile}, 0) catch return;
+    // Load user choices after the plugin registrations, even when there is no grant file.
+    defer loadUserShortcuts();
     var raw: [32768]u8 = undefined;
     if (!native.moon_read_text(&file_path, &raw, raw.len)) return;
     const saved = std.json.parseFromSlice([]Grant, allocator, std.mem.sliceTo(&raw, 0), .{}) catch return;
@@ -473,6 +479,19 @@ pub fn actionCount(index: usize) usize {
 pub fn action(index: usize, command_index: usize) [*:0]const u8 {
     return &all[index].actions[command_index].label;
 }
+pub fn actionId(index: usize, command_index: usize) []const u8 {
+    return std.mem.sliceTo(&all[index].actions[command_index].id,0);
+}
+pub fn userShortcut(index: usize, command_index: usize) ?[*:0]const u8 {
+    if (all[index].actions[command_index].user_shortcut) |*key| return &key.text;
+    return null;
+}
+pub fn pluginGlobalShortcut(index: usize, command_index: usize) ?[*:0]const u8 {
+    if (all[index].hotkey) |key| {
+        if (key.scope==.global) return registeredShortcut(index,command_index);
+    }
+    return null;
+}
 pub fn actionShortcut(index: usize, command_index: usize) ?sdk.Shortcut {
     return all[index].actions[command_index].shortcut;
 }
@@ -611,10 +630,78 @@ fn hotkeyReserved(key: Hotkey) bool {
 
 fn hotkeyConflict(candidate: Hotkey, exclude: *const Plugin) bool {
     for (all[0..len]) |*plugin| {
+        for (plugin.actions[0..plugin.action_count],0..) |*entry,command_index| {
+            const key = entry.user_shortcut orelse continue;
+            if (plugin == exclude and candidate.scope == .browser and command_index == candidate.action) continue;
+            if (sameChord(key,candidate)) return true;
+        }
         if (plugin==exclude or !canContribute(plugin)) continue;
         if (plugin.hotkey) |key| if (sameChord(key,candidate)) return true;
     }
     return false;
+}
+
+fn userShortcutConflict(plugin: *const Plugin, candidate: Hotkey) bool {
+    if (plugin.hotkey) |existing| {
+        if (sameChord(existing,candidate) and (existing.scope != .browser or existing.action != candidate.action))
+            return true;
+    }
+    return hotkeyConflict(candidate,plugin);
+}
+
+fn loadUserShortcuts() void {
+    const capacity = 96 * 1024;
+    const raw = allocator.alloc(u8, capacity) catch return;
+    defer allocator.free(raw);
+    if (!native.moon_read_text(&shortcut_path,raw.ptr,raw.len)) return;
+    const saved = std.json.parseFromSlice([]UserShortcut,allocator,std.mem.sliceTo(raw,0),.{}) catch return;
+    defer saved.deinit();
+    for (saved.value) |item| {
+        const plugin = &all[indexOf(item.plugin) orelse continue];
+        const action_index = findAction(plugin,item.command) orelse continue;
+        if (plugin.actions[action_index].user_shortcut != null) continue;
+        const key = parseHotkey(action_index,item.shortcut,.browser) orelse continue;
+        if (hotkeyReserved(key) or userShortcutConflict(plugin,key)) continue;
+        plugin.actions[action_index].user_shortcut = key;
+    }
+}
+
+fn persistUserShortcuts() bool {
+    var entries: [all.len * sdk.command_limit]UserShortcut = undefined;
+    var used: usize = 0;
+    for (all[0..len],0..) |*plugin,index| {
+        for (plugin.actions[0..plugin.action_count],0..) |*entry,command_index| {
+            const key = if (entry.user_shortcut) |*value| value else continue;
+            entries[used] = .{ .plugin=idAt(index), .command=actionId(index,command_index), .shortcut=std.mem.sliceTo(&key.text,0) };
+            used += 1;
+        }
+    }
+    const json = std.json.Stringify.valueAlloc(allocator,entries[0..used],.{}) catch return false;
+    defer allocator.free(json);
+    const document = allocator.dupeSentinel(u8,json,0) catch return false;
+    defer allocator.free(document);
+    return native.moon_write_text(&shortcut_path,document.ptr);
+}
+
+pub fn setUserShortcut(index: usize, id: []const u8, text: ?[]const u8) sdk.UiRegistration {
+    if (changing_state or confirming_hotkey or index >= len) return .unavailable;
+    const plugin = &all[index];
+    if (!plugin.enabled) return .unavailable;
+    const action_index = findAction(plugin,id) orelse return .notFound;
+    const entry = &plugin.actions[action_index];
+    const previous = entry.user_shortcut;
+    const key: ?Hotkey = if (text) |value| blk: {
+        const candidate = parseHotkey(action_index,value,.browser) orelse return .invalidShortcut;
+        if (hotkeyReserved(candidate)) return .reserved;
+        if (userShortcutConflict(plugin,candidate)) return .conflict;
+        break :blk candidate;
+    } else null;
+    entry.user_shortcut = key;
+    if (!persistUserShortcuts()) {
+        entry.user_shortcut = previous;
+        return .unavailable;
+    }
+    return .saved;
 }
 
 pub fn setHotkey(owner: []const u8, id: []const u8, text: ?[]const u8, scope: sdk.ShortcutScope, consent: userscripts.Consent) sdk.UiRegistration {
@@ -698,8 +785,18 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
 
 pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snapshot) bool {
     for (all[0..len],0..) |*plugin,index| {
+        if (!plugin.enabled) continue;
+        for (plugin.actions[0..plugin.action_count]) |entry| {
+            const key = entry.user_shortcut orelse continue;
+            if (key.mods != mods or key.key != vk) continue;
+            if (!repeated and plugin.work == null) _ = launch(index,key.action,.command,snapshot);
+            return true;
+        }
+    }
+    for (all[0..len],0..) |*plugin,index| {
         const key = plugin.hotkey orelse continue;
         if (!canContribute(plugin) or key.scope!=.browser or key.mods!=mods or key.key!=vk) continue;
+        if (plugin.actions[key.action].user_shortcut != null) continue;
         if (!repeated and plugin.work==null) _ = launch(index,key.action,.command,snapshot);
         return true;
     }
@@ -707,7 +804,7 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
     for (all[0..len],0..) |*plugin,index| {
         if (!plugin.enabled) continue;
         for (plugin.actions[0..plugin.action_count],0..) |entry,command_index| {
-            if (entry.shortcut!=key or registeredShortcut(index,command_index)!=null) continue;
+            if (entry.shortcut!=key or entry.user_shortcut!=null or registeredShortcut(index,command_index)!=null) continue;
             if (plugin.work==null) command(index,command_index,snapshot);
             return true;
         }
