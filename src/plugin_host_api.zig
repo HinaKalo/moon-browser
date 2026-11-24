@@ -39,6 +39,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
+        .@"tabs.togglePinned", .@"tabs.toggleMuted" => .@"tabs.organize",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => .@"taskManager.manage",
         .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => .@"ui.commands",
@@ -165,7 +166,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find",
-        .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status" => {
+        .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"tabs.togglePinned", .@"tabs.toggleMuted" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -373,6 +374,11 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const percent = native.moon_reading_zoom(context.target_tab_id,@intFromEnum(value.action));
             const result: ?c_uint = if (percent == 0) null else percent;
             return sdk.result(output,id,result);
+        },
+        .@"tabs.togglePinned", .@"tabs.toggleMuted" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const outcome = native.moon_tabs_organize(context.target_tab_id,method==.@"tabs.toggleMuted");
+            return sdk.result(output,id,@as(sdk.TabOrganization,@enumFromInt(outcome)));
         },
         .@"tabs.closed.list" => {
             var items: [recent_tabs.limit]sdk.ClosedTab = undefined;

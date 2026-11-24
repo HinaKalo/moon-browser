@@ -76,7 +76,7 @@ extern void WKHTTPCookieStoreDeleteAllCookies(WKHTTPCookieStoreRef, void *, void
     X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
     X(WKPageSetPageFindClient) X(WKPageFindString) X(WKPageHideFindUI) \
     X(WKPageGetPageZoomFactor) X(WKPageSetPageZoomFactor) \
-    X(WKPageCopySessionState) X(WKPageRestoreFromSessionState) X(WKPageGetProcessIdentifier) X(WKPageGetMediaState) \
+    X(WKPageCopySessionState) X(WKPageRestoreFromSessionState) X(WKPageGetProcessIdentifier) X(WKPageGetMediaState) X(WKPageSetMuted) \
     X(WKNavigationActionCopyRequest) X(WKNavigationActionShouldPerformDownload) \
     X(WKNavigationActionGetNavigationType) X(WKNavigationActionHasUnconsumedUserGesture) \
     X(WKNavigationResponseCopyResponse) X(WKNavigationResponseCanShowMIMEType) \
@@ -727,6 +727,9 @@ bool moon_engine_restore(MoonView *view, const void *state) {
 }
 void moon_engine_release_state(const void *state) { release(state); }
 uint32_t moon_engine_pid(MoonView *view) { return (uint32_t)wk.WKPageGetProcessIdentifier(view->page); }
+void moon_engine_mute(MoonView *view, bool muted) {
+    wk.WKPageSetMuted(view->page, muted ? kWKMediaAudioMuted : kWKMediaNoneMuted);
+}
 bool moon_engine_media(MoonView *view) {
     WKMediaState state = wk.WKPageGetMediaState(view->page);
     return state & (kWKMediaIsPlayingAudio | kWKMediaIsPlayingVideo | kWKMediaHasActiveAudioCaptureDevice |

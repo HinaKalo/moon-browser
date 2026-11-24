@@ -17,6 +17,8 @@ const market = @import("market.zig");
 const updater = @import("updater.zig");
 
 const max_tabs = 128;
+const max_pinned = 24;
+const PinnedEntry = struct { url: []const u8, title: []const u8 };
 const Phase = sdk.TaskTabPhase;
 const Opening = enum { none, navigate, restore };
 const Tab = struct {
@@ -38,6 +40,8 @@ const Tab = struct {
     history_visit: ?u32 = null,
     download_count: usize = 0,
     activity: bool = false,
+    pinned: bool = false,
+    muted: bool = false,
     opening: Opening = .none,
     requested_at: u64 = 0,
 };
@@ -49,6 +53,8 @@ var active: usize = 0;
 var find_tab: u64 = 0;
 var find_owner: [96:0]u8 = @splat(0);
 var next_id: u64 = 1;
+var pins_path: [4096:0]u8 = @splat(0);
+var pins_save_at: ?u64 = null;
 var boot: u64 = 0;
 var settings: policy.Settings = .{};
 var pressure = false;
@@ -205,7 +211,9 @@ fn jsonSetting(field: ?std.json.Value, default: u64, min: u64, max: u64) u64 {
 }
 fn tabSnapshot() ?plugins.Snapshot {
     if (count == 0) return null;
-    const tab = &tabs[active];
+    return snapshotFor(&tabs[active]);
+}
+fn snapshotFor(tab: *const Tab) plugins.Snapshot {
     return .{
         .id = tab.id, .title = tab.title, .url = tab.url,
         .bookmarkable = tab.has_document and !tab.extension and !tab.loading,
@@ -232,7 +240,9 @@ fn updateChrome(force_address: bool) void {
 fn openView(tab: *Tab) bool {
     if (tab.phase == .crashed and tab.view != null) detach(tab);
     if (tab.view != null) return true;
-    tab.view = native.moon_engine_open(tab.id) orelse return false;
+    const view = native.moon_engine_open(tab.id) orelse return false;
+    tab.view = view;
+    if (tab.muted) native.moon_engine_mute(view,true);
     tab.has_document = false;
     return true;
 }
@@ -308,6 +318,7 @@ fn loadInternal(tab: *Tab, address: [4096:0]u8, id: ?[:0]const u8, html: [*:0]co
     detach(tab);
     forgetSession(tab);
     tab.extension = true;
+    if (tab.pinned and pins_save_at==null) pins_save_at = native.moon_clock()+750;
     tab.unsafe_history = false;
     tab.opening = .none;
     tab.url = address;
@@ -432,6 +443,120 @@ fn chooseTab(index: usize, notify: bool) void {
     updateChrome(false);
     if (notify) plugins.changed(tabSnapshot());
 }
+
+fn readPinnedTabs() void {
+    if (pins_path[0]==0) return;
+    const allocator = std.heap.page_allocator;
+    // JSON escaping can increase the size of the stored URL and title.
+    const data = allocator.alloc(u8,max_pinned*(4096*2+512*6+32)+1) catch return;
+    defer allocator.free(data);
+    if (!native.moon_read_text(&pins_path,data.ptr,data.len)) return;
+    const parsed = std.json.parseFromSlice([]PinnedEntry,allocator,slice(data),.{}) catch return;
+    defer parsed.deinit();
+    for (parsed.value[0..@min(parsed.value.len,max_pinned)]) |entry| {
+        if (!history.validURL(entry.url)) continue;
+        var tab: Tab = .{ .id=next_id, .phase=.dormant, .pinned=true, .has_document=true, .loaded=true, .last_used=native.moon_clock() };
+        if (!copy(&tab.url,entry.url)) continue;
+        _ = copy(&tab.title,entry.title);
+        tabs[count] = tab;
+        count += 1;
+        next_id += 1;
+    }
+}
+
+fn pinnedAddress(tab: *const Tab, buffer: *[4096:0]u8) ?[]const u8 {
+    if (tab.extension or tab.unsafe_history or !tab.has_document) return null;
+    if (tab.view) |view| {
+        native.moon_engine_committed_url(view,buffer,buffer.len);
+        const address = slice(buffer);
+        return if (history.validURL(address)) address else null;
+    }
+    const address = slice(&tab.url);
+    return if (history.validURL(address)) address else null;
+}
+
+fn savePinnedTabs() bool {
+    if (pins_path[0]==0) return false;
+    var addresses: [max_pinned][4096:0]u8 = undefined;
+    var entries: [max_pinned]PinnedEntry = undefined;
+    var used: usize = 0;
+    for (tabs[0..count]) |*tab| {
+        if (!tab.pinned) break;
+        const address = pinnedAddress(tab,&addresses[used]) orelse continue;
+        entries[used] = .{ .url=address, .title=slice(&tab.title) };
+        used += 1;
+    }
+    const allocator = std.heap.page_allocator;
+    const bytes = std.json.Stringify.valueAlloc(allocator,entries[0..used],.{}) catch return false;
+    defer allocator.free(bytes);
+    const file = allocator.dupeSentinel(u8,bytes,0) catch return false;
+    defer allocator.free(file);
+    if (!native.moon_write_text(&pins_path,file.ptr)) return false;
+    pins_save_at = null;
+    return true;
+}
+
+fn moveTab(from: usize, to: usize) void {
+    if (from==to) return;
+    const active_id = tabs[active].id;
+    const moved = tabs[from];
+    if (from<to) {
+        std.mem.copyForwards(Tab,tabs[from..to],tabs[from+1..to+1]);
+    } else {
+        std.mem.copyBackwards(Tab,tabs[to+1..from+1],tabs[to..from]);
+    }
+    tabs[to] = moved;
+    active = tabIndex(active_id).?;
+}
+
+export fn moon_tabs_organize(id: u64, mute: bool) c_int {
+    return @intFromEnum(organizeTab(id,mute));
+}
+
+fn organizeTab(id: u64, mute: bool) sdk.TabOrganization {
+    const index = tabIndex(id) orelse return .unavailable;
+    if (stopped) return .unavailable;
+    const tab = &tabs[index];
+    if (mute) {
+        if (!tab.muted and (tab.extension or !safeURL(slice(&tab.url)))) return .unavailable;
+        tab.muted = !tab.muted;
+        if (tab.view) |view| {
+            if (!tab.extension) native.moon_engine_mute(view,tab.muted);
+        }
+        native.moon_shell_refresh();
+        return if (tab.muted) .muted else .unmuted;
+    }
+    const was_pinned = tab.pinned;
+    const pinned_count = for (tabs[0..count],0..) |*entry,position| {
+        if (!entry.pinned) break position;
+    } else count;
+    if (!was_pinned) {
+        var buffer: [4096:0]u8 = undefined;
+        if (tab.loading or pinnedAddress(tab,&buffer)==null) return .unavailable;
+        if (pinned_count==max_pinned) return .limitReached;
+    }
+    tab.pinned = !was_pinned;
+    const destination = if (was_pinned) pinned_count-1 else pinned_count;
+    moveTab(index,destination);
+    if (!savePinnedTabs()) {
+        moveTab(destination,index);
+        tabs[index].pinned = was_pinned;
+        return .saveFailed;
+    }
+    native.moon_shell_refresh();
+    return if (was_pinned) .unpinned else .pinned;
+}
+
+fn checkTabToolsGrant() void {
+    if (plugins.systemEnabled(.@"tabs.organize")) return;
+    for (tabs[0..count]) |*tab| {
+        if (!tab.muted) continue;
+        tab.muted = false;
+        if (tab.view) |view| {
+            if (!tab.extension) native.moon_engine_mute(view,false);
+        }
+    }
+}
 fn addTab(url: ?[]const u8, notify: bool) void {
     if (count == tabs.len) {
         if (smoke == .off) native.moon_shell_info("Tab limit", "This preview supports up to 128 open tabs.");
@@ -453,11 +578,13 @@ fn closeTab(index: usize) void {
     if (index >= count) return;
     site_data.closed(tabs[index].id);
     const was_active = index == active;
+    const was_pinned = tabs[index].pinned;
     rememberClosedTab(&tabs[index]);
     detach(&tabs[index]);
     forgetSession(&tabs[index]);
     count -= 1;
     if (index < count) std.mem.copyForwards(Tab, tabs[index..count], tabs[index + 1 .. count + 1]);
+    if (was_pinned and !savePinnedTabs()) pins_save_at = native.moon_clock()+2000;
     if (count == 0) {
         active = 0;
         addTab(null, true);
@@ -624,6 +751,9 @@ fn maintenance() void {
     const now = native.moon_clock();
     if (smoke == .off) updater.tick(now);
     if (stopped) return;
+    if (pins_save_at) |save_at| {
+        if (now>=save_at and !savePinnedTabs()) pins_save_at = now+5000;
+    }
     downloads.flush();
     site_data.tick(now);
     if (market.changed()) {
@@ -782,6 +912,11 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         return false;
     }
     network.select(plugins.networkSource());
+    if (smoke==.off) {
+        if (std.fmt.bufPrintSentinel(&pins_path,"{s}\\pinned-tabs.json",.{profile},0)) |_|
+            readPinnedTabs()
+        else |_| pins_path[0] = 0;
+    }
     addTab(null, false);
     if (smoke != .off) {
         smoke_deadline = native.moon_clock() + 300000;
@@ -789,13 +924,14 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         smokeNavigate(&tabs[0], "/page/initial");
     } else if (first_url) |initial| {
         var buffer: [4096]u8 = undefined;
-        if (normalize(initial, &buffer)) |url| navigate(&tabs[0], url);
+        if (normalize(initial, &buffer)) |url| navigate(&tabs[active], url);
     }
     return true;
 }
 export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void {
     if (stopped) return;
     if (command == native.MOON_SHUTDOWN) {
+        if (pins_save_at!=null) _ = savePinnedTabs();
         stopped = true;
         history.close();
         bookmarks.close();
@@ -819,6 +955,12 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_NEW => addTab(null, true),
         native.MOON_CLOSE => closeTab(index),
         native.MOON_SELECT => chooseTab(index, true),
+        native.MOON_TAB_PIN, native.MOON_TAB_MUTE => {
+            if (!moon_tab_tools_enabled()) return;
+            const target = tabIndex(argument) orelse return;
+            _ = plugins.namedCommand("moon.tab-tools",if (command==native.MOON_TAB_PIN) "pin" else "mute",snapshotFor(&tabs[target]));
+        },
+        native.MOON_TAB_CLOSE_TARGET => closeTab(tabIndex(argument) orelse return),
         native.MOON_KEY_NEXT => chooseTab((active + 1) % count, true),
         native.MOON_KEY_PREV => chooseTab((active + count - 1) % count, true),
         native.MOON_ADDRESS => {
@@ -851,6 +993,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             checkSiteDataGrant();
             checkFindGrant();
             checkClosedTabGrant();
+            checkTabToolsGrant();
         },
         native.MOON_PLUGIN_GRANT => {
             const permission = std.enums.fromInt(sdk.Permission,index & 0xffffffff) orelse return;
@@ -859,6 +1002,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             if (permission == .@"siteData.read") checkSiteDataGrant();
             if (permission == .@"page.reading") checkFindGrant();
             if (permission == .@"tabs.closed.manage") checkClosedTabGrant();
+            if (permission == .@"tabs.organize") checkTabToolsGrant();
         },
         native.MOON_PLUGIN_SETTINGS => {
             var address: [256]u8 = undefined;
@@ -974,6 +1118,11 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         },
         else => {},
     }
+    if (tab.pinned and pins_save_at==null) switch (kind) {
+        native.MOON_COMMITTED, native.MOON_FINISHED, native.MOON_SAME_DOCUMENT, native.MOON_UNSAFE =>
+            pins_save_at = native.moon_clock()+750,
+        else => {},
+    };
     if (index == active) updateChrome(false) else native.moon_shell_refresh();
 }
 export fn moon_download_begin() u32 {
@@ -1021,9 +1170,20 @@ export fn moon_tab_label(index: usize) [*:0]const u8 {
 export fn moon_tab_flags(index: usize) c_uint {
     if (index >= count) return 0;
     const tab = &tabs[index];
-    return @as(c_uint, @intFromBool(tab.phase == .dormant)) |
-        (@as(c_uint, @intFromBool(tab.phase == .crashed or tab.phase == .failed)) << 1) |
-        (@as(c_uint, @intFromBool(tab.loading)) << 2);
+    return (if (tab.phase==.dormant) @as(c_uint,native.MOON_TAB_DORMANT) else 0) |
+        (if (tab.phase==.crashed or tab.phase==.failed) @as(c_uint,native.MOON_TAB_FAILED) else 0) |
+        (if (tab.loading) @as(c_uint,native.MOON_TAB_LOADING) else 0) |
+        (if (tab.pinned) @as(c_uint,native.MOON_TAB_PINNED) else 0) |
+        (if (tab.muted) @as(c_uint,native.MOON_TAB_MUTED) else 0) |
+        (if (tab.pinned or (!tab.extension and tab.has_document and !tab.unsafe_history and !tab.loading and safeURL(slice(&tab.url))))
+            @as(c_uint,native.MOON_TAB_CAN_PIN) else 0) |
+        (if (tab.muted or (!tab.extension and safeURL(slice(&tab.url)))) @as(c_uint,native.MOON_TAB_CAN_MUTE) else 0);
+}
+export fn moon_tab_id(index: usize) u64 {
+    return if (index<count) tabs[index].id else 0;
+}
+export fn moon_tab_tools_enabled() bool {
+    return plugins.systemEnabled(.@"tabs.organize");
 }
 export fn moon_controls() c_uint {
     if (count == 0) return 0;
@@ -1065,6 +1225,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"privacy.clear" => "允许在确认后清除浏览数据",
         .@"taskManager.manage" => "允许查看和管理标签与进程",
         .@"ui.commands" => "允许添加主菜单入口和注册快捷键",
+        .@"tabs.organize" => "允许固定标签和切换标签静音",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {

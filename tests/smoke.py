@@ -187,7 +187,8 @@ class Fixture(BaseHTTPRequestHandler):
                     '};addEventListener("scroll",report);addEventListener("resize",report);'
                     'addEventListener("load",report);</script>'
                 )
-            if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected"):
+            if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
+                        "pinned-first", "pinned-second"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "chrome-window":
                 demo = (
@@ -478,6 +479,7 @@ def run_win32(exe, base, root):
     privacy = exe.parent / "plugins" / "privacy" / "MoonPrivacy.exe"
     task_manager = exe.parent / "plugins" / "task-manager" / "MoonTaskManager.exe"
     commands = exe.parent / "plugins" / "ui-commands" / "MoonCommandExample.exe"
+    tab_tools = exe.parent / "plugins" / "tab-tools" / "MoonTabTools.exe"
     if task_manager.exists():
         profile.mkdir(parents=True,exist_ok=True)
         (profile / "memory.json").write_text(
@@ -1464,10 +1466,13 @@ def run_win32(exe, base, root):
                 if result.get("error"):
                     raise RuntimeError(result["error"])
 
-            def native_entries():
+            def native_entries(trigger=None, choose=None):
                 dimensions = wt.RECT()
                 user.GetClientRect(frame,ctypes.byref(dimensions))
-                click(dimensions.right-px(159),px(24))
+                if trigger:
+                    trigger()
+                else:
+                    click(dimensions.right-px(159),px(24))
                 def open_menu():
                     menu = None
                     while menu := user.FindWindowExW(None,menu,"#32768",None):
@@ -1491,7 +1496,14 @@ def run_win32(exe, base, root):
                             result[label.value] = entries(child) if child else {}
                         return result
 
-                    return entries(handle)
+                    result = entries(handle)
+                    if choose:
+                        labels = [label for label in result if label]
+                        for _ in range(labels.index(choose)+1):
+                            user.PostMessageW(popup,0x0100,0x28,1)  # WM_KEYDOWN / VK_DOWN
+                        user.PostMessageW(popup,0x0100,0x0D,1)
+                        wait_for(lambda: not open_menu(),"Selecting the native menu item did not dismiss the menu")
+                    return result
                 finally:
                     user.PostMessageW(frame,0x001F,0,0)  # WM_CANCELMODE
                     wait_for(lambda: not open_menu(),"Main menu did not dismiss")
@@ -1504,6 +1516,8 @@ def run_win32(exe, base, root):
                 "开发与诊断": {"打开网页开发者工具\tF12","打开网页控制台\tCtrl+Shift+J","浏览器任务管理器\tCtrl+Shift+M"},
                 "扩展工具": {"打开 Lua 脚本编辑器","配置菜单与快捷键示例","显示 Moon 命令提示"},
             }
+            if tab_tools.exists():
+                expected["标签与页面"].update({"切换当前标签的固定状态","切换当前标签的静音状态"})
             for group, labels in expected.items():
                 if missing := labels - groups.get(group,{}).keys():
                     raise RuntimeError(f"Native menu group {group} is missing {missing}")
@@ -1559,6 +1573,64 @@ def run_win32(exe, base, root):
             if "显示 Moon 命令提示" not in groups["插件"]["命令唤醒验收"]:
                 raise RuntimeError("Removing the main menu placement also removed the plugin's command")
             print("command_contributions=ok native_groups=ok pin_no_duplicate=ok global_wake=ok conflict_cancel=ok restart=ok removal=ok",flush=True)
+        if tab_tools.exists():
+            pins = profile / "pinned-tabs.json"
+
+            def restart_tabs():
+                user.PostMessageW(frame,0x0010,0,0)
+                if proc.wait(8)!=0:
+                    raise RuntimeError("Browser did not exit before the pinned tab check")
+                restarted = subprocess.Popen([str(exe),"--gdi"],env=preview_env(root))
+                return restarted,browser_frame(restarted)
+
+            def tab_menu(row, choose=None):
+                point = wt.POINT(px(100),px(148+37*row))
+                user.ClientToScreen(frame,ctypes.byref(point))
+                coords = ((point.y & 0xFFFF)<<16) | (point.x & 0xFFFF)
+                return native_entries(lambda: user.PostMessageW(frame,0x007B,frame,coords),choose)
+
+            proc,frame = restart_tabs()
+            edit = user.GetDlgItem(frame,1001)
+            wait_for(lambda: user.IsWindowVisible(user.GetDlgItem(frame,1002)),"Fresh shell did not show its new-tab page")
+            first = closed_page("pinned-first")
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(user.GetDlgItem(frame,1002)),"Opening a second test tab failed")
+            second = closed_page("pinned-second")
+            click(px(110),px(148))
+            wait_for(lambda: read_address()==first,"Switching to the first tab failed")
+            if "固定标签" not in tab_menu(1,"固定标签"):
+                raise RuntimeError("No pin action on the background tab")
+            wait_for(lambda: pins.exists() and json.loads(pins.read_text(encoding="utf-8"))[0]["url"]==second,
+                     "The background tab was not saved as pinned")
+            if read_address()!=first or "取消固定标签" not in tab_menu(0):
+                raise RuntimeError("Pinning activated the background tab or did not move it to the top")
+            tab_menu(0,"静音此标签")
+            wait_for(lambda: "取消标签静音" in tab_menu(0),"Selected background tab was not muted")
+            if "静音此标签" not in tab_menu(1):
+                raise RuntimeError("Muting a background tab also muted the active tab")
+            click(px(110),px(148))
+            wait_for(lambda: read_address()==second,"Pinned tab did not activate for reload")
+            previous = Fixture.closed_loaded.get("pinned-second",0)
+            user.PostMessageW(edit,0x0100,0x74,1)  # F5
+            wait_for(lambda: Fixture.closed_loaded.get("pinned-second",0)>previous,"Reloading the muted tab failed")
+            if "取消标签静音" not in tab_menu(0):
+                raise RuntimeError("Reloading the tab lost its mute state")
+            tab_menu(0,"取消标签静音")
+            wait_for(lambda: "静音此标签" in tab_menu(0),"Selected background tab stayed muted")
+
+            loads = Fixture.closed_loaded.get("pinned-second",0)
+            proc,frame = restart_tabs()
+            edit = user.GetDlgItem(frame,1001)
+            home = user.GetDlgItem(frame,1002)
+            wait_for(lambda: user.IsWindowVisible(home),"Restarted shell did not show its new-tab page")
+            if "取消固定标签" not in tab_menu(0) or Fixture.closed_loaded.get("pinned-second",0)!=loads:
+                raise RuntimeError("The pinned tab was not restored dormant")
+            click(px(110),px(148))
+            wait_for(lambda: read_address()==second and Fixture.closed_loaded.get("pinned-second",0)>loads,
+                     "Selecting the restored pinned tab did not load its page")
+            tab_menu(0,"取消固定标签")
+            wait_for(lambda: json.loads(pins.read_text(encoding="utf-8"))==[],"Unpinning did not clear the saved pin")
+            print("tab_tools=ok background_target=ok single_tab_mute_state=ok mute_reload=ok pinned_order=ok restart_lazy_restore=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

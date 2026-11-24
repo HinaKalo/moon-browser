@@ -26,6 +26,7 @@ export default defineConfig({
         { text: '浏览器任务管理器', link: '/task-manager' },
         { text: '查找与缩放', link: '/reading' },
         { text: '最近关闭的标签', link: '/recent-tabs' },
+        { text: '固定与静音标签', link: '/tab-tools' },
         { text: '浏览历史', link: '/history' },
         { text: '严格去广告', link: '/blocker' },
         { text: '书签与下载', link: '/library' }

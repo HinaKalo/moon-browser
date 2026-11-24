@@ -28,6 +28,7 @@ const Grant = struct {
     privacy_clear: bool = false,
     task_manager_manage: bool = false,
     ui_commands: bool = false,
+    tabs_organize: bool = false,
     menu_items: []const []const u8 = &.{},
     hidden_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
@@ -163,7 +164,8 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             else if (std.mem.eql(u8,id,"moon.reading")) .@"page.reading"
             else if (std.mem.eql(u8,id,"moon.recent-tabs")) .@"tabs.closed.manage"
             else if (std.mem.eql(u8,id,"moon.privacy")) .@"privacy.clear"
-            else if (std.mem.eql(u8,id,"moon.task-manager")) .@"taskManager.manage" else null;
+            else if (std.mem.eql(u8,id,"moon.task-manager")) .@"taskManager.manage"
+            else if (std.mem.eql(u8,id,"moon.tab-tools")) .@"tabs.organize" else null;
         if (default_permission) |scope| {
             if (requests.contains(scope)) {
                 plugin.enabled = true;
@@ -238,6 +240,7 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.privacy_clear and plugin.requests.contains(.@"privacy.clear")) plugin.grants.insert(.@"privacy.clear");
         if (grant.enabled and grant.task_manager_manage and plugin.requests.contains(.@"taskManager.manage")) plugin.grants.insert(.@"taskManager.manage");
         if (grant.enabled and grant.ui_commands and plugin.requests.contains(.@"ui.commands")) plugin.grants.insert(.@"ui.commands");
+        if (grant.enabled and grant.tabs_organize and plugin.requests.contains(.@"tabs.organize")) plugin.grants.insert(.@"tabs.organize");
         if (canContribute(plugin)) {
             for (grant.hidden_menu_items) |id| {
                 if (findAction(plugin,id)) |index| {
@@ -299,6 +302,7 @@ fn persist() bool {
         .privacy_clear = plugin.grants.contains(.@"privacy.clear"),
         .task_manager_manage = plugin.grants.contains(.@"taskManager.manage"),
         .ui_commands = plugin.grants.contains(.@"ui.commands"),
+        .tabs_organize = plugin.grants.contains(.@"tabs.organize"),
         .menu_items = menus[index][0..used],
         .hidden_menu_items = hidden_menus[index][0..hidden],
         .hotkey = saved_key,
@@ -341,6 +345,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"privacy.clear" => "此插件可以请求清除所选浏览数据。浏览器会在删除前单独确认。",
                 .@"taskManager.manage" => "此插件可查看标签标题和浏览器进程内存，以及切换标签和卸载可回收的后台标签。",
                 .@"ui.commands" => "此插件可为已声明的命令添加主菜单入口，并设置一个快捷键。系统全局快捷键需要单独确认。",
+                .@"tabs.organize" => "此插件可固定或取消固定触发命令的标签，也可切换该标签的音频静音。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
             plugin.grants.insert(scope);

@@ -1,0 +1,15 @@
+{
+  "id": "moon.tab-tools",
+  "name": "标签管理",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonTabTools.exe",
+  "contributes": {
+    "commands": [
+      { "id": "pin", "label": "切换当前标签的固定状态", "menu": "page" },
+      { "id": "mute", "label": "切换当前标签的静音状态", "menu": "page" }
+    ]
+  },
+  "permissions": ["tabs.organize"]
+}

@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.tab-tools",
+      "name": "标签管理",
+      "description": "从标签右键菜单固定、取消固定或静音单个标签。",
+      "permission": "固定标签和切换标签静音",
+      "url": "https://docs.browser.moonl.cloud/tab-tools.html"
+    },
+    {
       "id": "moon.ui-commands-example",
       "name": "菜单与快捷键示例",
       "description": "为已声明的命令添加主菜单入口，并试用浏览器内或系统全局快捷键。",

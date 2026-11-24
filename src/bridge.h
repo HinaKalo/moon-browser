@@ -9,7 +9,8 @@ enum MoonCommand {
     MOON_ADDRESS, MOON_TICK, MOON_INPUT, MOON_DIAGNOSTICS, MOON_PLUGIN_COMMAND,
     MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
     MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES,
-    MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_SETTINGS, MOON_MARKET
+    MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_SETTINGS, MOON_MARKET,
+    MOON_TAB_PIN, MOON_TAB_MUTE, MOON_TAB_CLOSE_TARGET
 };
 enum MoonEngineEvent {
     MOON_STARTED = 1, MOON_COMMITTED, MOON_FINISHED, MOON_FAILED, MOON_CHANGED,
@@ -103,6 +104,7 @@ const void *moon_engine_save(MoonView *view);
 void moon_engine_release_state(const void *state);
 uint32_t moon_engine_pid(MoonView *view);
 bool moon_engine_media(MoonView *view);
+void moon_engine_mute(MoonView *view, bool muted);
 void moon_engine_read(MoonView *view, char *title, size_t title_cap, char *url, size_t url_cap);
 void moon_engine_committed_url(MoonView *view, char *url, size_t cap);
 void moon_engine_apply_dom(MoonView *view, const char *javascript);
@@ -140,6 +142,12 @@ size_t moon_tab_count(void);
 size_t moon_active_index(void);
 const char *moon_tab_label(size_t index);
 unsigned moon_tab_flags(size_t index);
+uint64_t moon_tab_id(size_t index);
+enum {
+    MOON_TAB_DORMANT = 1, MOON_TAB_FAILED = 2, MOON_TAB_LOADING = 4, MOON_TAB_PINNED = 8,
+    MOON_TAB_MUTED = 16, MOON_TAB_CAN_PIN = 32, MOON_TAB_CAN_MUTE = 64
+};
+bool moon_tab_tools_enabled(void);
 unsigned moon_controls(void);
 size_t moon_plugin_count(void);
 const char *moon_plugin_label(size_t index);
@@ -175,6 +183,7 @@ unsigned moon_plugin_ui_shortcut(const char *owner, const char *command, const c
 bool moon_reading_find(uint64_t tab, const char *owner);
 unsigned moon_reading_zoom(uint64_t tab, int action);
 int moon_recent_reopen(uint64_t tab, bool specific, uint32_t entry);
+int moon_tabs_organize(uint64_t tab, bool mute);
 enum { MOON_ERASE_SITE = 1, MOON_ERASE_CACHE = 2 };
 unsigned moon_engine_erase_data(unsigned requested);
 void moon_privacy_engine_done(unsigned category);
