@@ -59,7 +59,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"browser.openDefaultApps" => .@"browser.defaultApp",
         .@"tabs.getActive" => .@"tabs.read",
         .@"lua.scripts.list", .@"lua.scripts.install", .@"lua.scripts.setEnabled", .@"lua.scripts.remove" => .@"lua.scripts.manage",
-        .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive" => .@"lua.scripts.manage",
+        .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive", .@"lua.scripts.lastError" => .@"lua.scripts.manage",
         .@"devtools.open", .@"devtools.toggle", .@"devtools.hardReload" => .@"page.inspect",
         .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
         .@"page.saveHtml" => .@"page.save",
@@ -270,7 +270,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const value = decode(sdk.ScriptSource, allocator, params) catch return sdk.failure(output, id, .InvalidParams);
             const source = decodeSource(allocator,value.sourceBase64) catch |err|
                 return sdk.failure(output,id,if (err == error.LimitExceeded) .LimitExceeded else .InvalidParams);
-            const script = userscripts.register(source, false) catch |err| return serviceFailure(output, id, err);
+            const script = userscripts.register(source) catch |err| return serviceFailure(output, id, err);
             break :install sdk.result(output, id, script);
         },
         .@"lua.scripts.setEnabled" => enabled: {
@@ -280,10 +280,16 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             break :enabled sdk.result(output, id, null);
         },
         .@"lua.scripts.remove" => remove: {
-            const value = decode(sdk.ScriptId, allocator, params) catch return sdk.failure(output, id, .InvalidParams);
+            const value = decode(sdk.ScriptRemoval, allocator, params) catch return sdk.failure(output, id, .InvalidParams);
             if (!validScriptId(value.id)) return sdk.failure(output, id, .InvalidParams);
-            userscripts.unregister(value.id) catch |err| return serviceFailure(output, id, err);
+            userscripts.unregister(value.id,if (value.confirm) context.consent else null) catch |err| return serviceFailure(output, id, err);
             break :remove sdk.result(output, id, null);
+        },
+        .@"lua.scripts.lastError" => {
+            const value = decode(sdk.ScriptId,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (!validScriptId(value.id)) return sdk.failure(output,id,.InvalidParams);
+            const message = userscripts.runtimeError(value.id) catch |err| return serviceFailure(output,id,err);
+            return sdk.result(output,id,message);
         },
         .@"lua.scripts.getSource" => get_source: {
             const value = decode(sdk.ScriptId,allocator,params) catch return sdk.failure(output,id,.InvalidParams);

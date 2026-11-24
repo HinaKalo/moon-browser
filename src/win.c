@@ -73,12 +73,9 @@ enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48,
 enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, FULLSCREEN_HINT_TIMER = 3, TAB_DRAG_TIMER = 4,
        ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
 enum { MENU_ADD = 11, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_MANAGE_PLUGINS,
-       MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 2 + MOON_PLUGIN_MENU_PERMISSION_LIMIT, MENU_PLUGIN_STRIDE = 64,
-       MENU_SCRIPTS_PICK = 0x2000, MENU_SCRIPTS_BASE = 0x2010 };
+       MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 2 + MOON_PLUGIN_MENU_PERMISSION_LIMIT, MENU_PLUGIN_STRIDE = 64 };
 _Static_assert(MENU_PLUGIN_ACTIONS + MOON_LINK_MENU_STRIDE <= MENU_PLUGIN_STRIDE,
     "Native menu plugin command and permission IDs must fit within the plugin slot");
-_Static_assert(MENU_PLUGIN_BASE + MOON_PLUGIN_LIMIT * MENU_PLUGIN_STRIDE <= MENU_SCRIPTS_PICK,
-    "Native plugin command IDs must not overlap the Lua script menu");
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        FULLSCREEN_EXIT_CONTROL = 1005,
        PALETTE_TAB_OFFSET = 1000 };
@@ -955,37 +952,6 @@ int moon_shell_pick_html(const char *title,char *path,size_t capacity,bool *repl
     *replace=GetFileAttributesW(file)!=INVALID_FILE_ATTRIBUTES;
     return moon_utf8(file,path,capacity)?1:-1;
 }
-static void pick_userscript(void) {
-    wchar_t file[2048] = {0};
-    char path[4096];
-    OPENFILENAMEW dialog = {.lStructSize = sizeof(dialog), .hwndOwner = frame,
-        .lpstrFilter = L"Lua 脚本 (*.lua)\0*.lua\0\0", .lpstrFile = file, .nMaxFile = ARRAYSIZE(file),
-        .lpstrTitle = L"安装 Lua 用户脚本",
-        .Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER};
-    if (GetOpenFileNameW(&dialog) && moon_utf8(file, path, ARRAYSIZE(path)))
-        moon_command(MOON_SCRIPTS_INSTALL, 0, path);
-}
-static void userscript_menu(HMENU popup) {
-    HMENU scripts = CreatePopupMenu();
-    if (!scripts) return;
-    AppendMenuW(scripts, MF_STRING, MENU_SCRIPTS_PICK, L"安装 Lua 脚本…");
-    const size_t count = moon_userscript_count();
-    if (count) AppendMenuW(scripts, MF_SEPARATOR, 0, NULL);
-    for (size_t i = 0; i < count; ++i) {
-        wchar_t name[96], error[200];
-        if (!moon_utf16(moon_userscript_label(i), name, ARRAYSIZE(name))) continue;
-        HMENU item = CreatePopupMenu();
-        if (!item) continue;
-        const UINT id = MENU_SCRIPTS_BASE + (UINT)i * 2;
-        const bool enabled = moon_userscript_enabled(i);
-        AppendMenuW(item, MF_STRING | (enabled ? MF_CHECKED : 0), id, L"启用");
-        AppendMenuW(item, MF_STRING, id + 1, L"移除…");
-        if (moon_utf16(moon_userscript_error(i), error, ARRAYSIZE(error)) && *error)
-            AppendMenuW(item, MF_STRING | MF_GRAYED, 0, error);
-        AppendMenuW(scripts, MF_POPUP, (UINT_PTR)item, name);
-    }
-    AppendMenuW(popup, MF_POPUP, (UINT_PTR)scripts, L"Lua 用户脚本");
-}
 static void plugin_menu_item(HMENU menu, size_t plugin, size_t entry, bool enabled) {
     wchar_t action[300];
     if (!moon_utf16(moon_plugin_action(plugin,entry),action,256)) return;
@@ -1063,7 +1029,6 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
         AppendMenuW(popup,MF_STRING,MENU_MARKET,L"插件市场");
         AppendMenuW(popup,MF_STRING,MENU_MANAGE_PLUGINS,L"管理插件");
     }
-    if (!private_window) userscript_menu(popup);
     size_t count=moon_plugin_count();
     if (count) {
         AppendMenuW(popup,MF_SEPARATOR,0,NULL);
@@ -1104,11 +1069,6 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     else if (command==MENU_UPDATES) moon_command(MOON_UPDATES,0,NULL);
     else if (command==MENU_MARKET) moon_command(MOON_MARKET,0,NULL);
     else if (command==MENU_MANAGE_PLUGINS) moon_command(MOON_OPEN_PLUGINS,0,NULL);
-    else if (command==MENU_SCRIPTS_PICK) pick_userscript();
-    else if (command>=MENU_SCRIPTS_BASE) {
-        const unsigned value=command-MENU_SCRIPTS_BASE;
-        moon_command(value%2?MOON_SCRIPTS_REMOVE:MOON_SCRIPTS_TOGGLE,value/2,NULL);
-    }
     else if (command>=MENU_PLUGIN_BASE) {
         unsigned value=command-MENU_PLUGIN_BASE;
         const unsigned offset=value%MENU_PLUGIN_STRIDE, plugin=value/MENU_PLUGIN_STRIDE;

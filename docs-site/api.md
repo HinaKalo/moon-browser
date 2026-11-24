@@ -38,7 +38,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `lua.scripts.list` | `lua.scripts.manage` | 返回 `{ id, name, enabled }[]`。结果包含状态和名称。 |
 | `lua.scripts.install` | `lua.scripts.manage` | 传入 `{ sourceBase64 }`，内容为 UTF-8 源码的标准 Base64，返回保存后的脚本记录。新导入的脚本默认停用。 |
 | `lua.scripts.setEnabled` | `lua.scripts.manage` | 传入 `{ id, enabled }`，成功返回 `null`。首次启用时由浏览器展示网站范围并等待用户确认。 |
-| `lua.scripts.remove` | `lua.scripts.manage` | 传入 `{ id }`，成功返回 `null`。删除不存在的脚本返回 `NOT_FOUND`。 |
+| `lua.scripts.remove` | `lua.scripts.manage` | 传入 `{ id, confirm? }`，成功返回 `null`。设为 `confirm: true` 时由浏览器询问后再删除。 |
+| `lua.scripts.lastError` | `lua.scripts.manage` | 传入 `{ id }`，返回最近一次执行留下的错误文本，或在无错误时返回 `null`。 |
 | `lua.scripts.getSource` | `lua.scripts.manage` | 传入 `{ id }`，返回 `{ sourceBase64 }`。 |
 | `lua.scripts.update` | `lua.scripts.manage` | 传入 `{ id, sourceBase64 }`，语法校验通过后返回新记录。更改匹配范围会停用脚本，需重新确认。 |
 | `lua.scripts.reloadActive` | `lua.scripts.manage` | 传入 `{ id }`。结果为 `reloaded`、`noMatchingPage` 或 `protectedPage`。含未提交输入、非 GET 历史、下载或媒体活动的标签受到保护。 |
@@ -130,7 +131,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 
 - 菜单、命令面板和快捷键发送 `commands.run`。`params.id` 是清单中的命令。插件用同一请求 ID 回复 `{ message?: string, toast?: boolean }`，再以退出码 0 退出。0.1.0-preview.10 起，`toast: true` 将消息显示为短暂的原生通知。
 - `tabs.changed` 是无 ID 通知，`params.tabId` 是标签 ID 或 `null`。只有声明该事件并获得 `tabs.read` 的插件会收到通知。插件处理后直接退出，繁忙时标签切换可合并。
-- 插件以 `p:1`、`p:2` 递增发送请求并逐条收取回复。宿主请求使用 `h:` 前缀。一行须小于 32 KiB，每次调用最多 24 个请求。初始化与通知有约 2 秒处理窗口，普通命令最多 120 秒。0.1.0-preview.7 起，清单可用 `interactive: true` 声明本地交互命令，时间上限为 30 分钟。
+- 插件以 `p:1`、`p:2` 递增发送请求并逐条收取回复。宿主请求使用 `h:` 前缀，每行小于 32 KiB。普通调用最多 24 个请求，初始化与通知有约 2 秒处理窗口，普通命令最多 120 秒。声明 `interactive: true` 的命令最多运行 30 分钟，从 0.1.0-preview.57 起最多可发送 256 个请求。读取握手的 `requestLimit`，即可用实际宿主上限配置 SDK 的 `Client.request_budget`。
 
 ~~~json
 {"jsonrpc":"2.0","id":"h:1","method":"plugin.initialize","params":{"apiVersion":2,"pluginId":"example.system-tools","permissions":["tabs.read"]}}

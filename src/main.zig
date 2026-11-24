@@ -1575,9 +1575,6 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_OPEN_PLUGINS => if (!native.moon_shell_private()) { _ = openInternalPage(plugin_manager.address); },
         native.MOON_UPDATES => if (!native.moon_shell_private()) updater.open(native.moon_clock()),
         native.MOON_MARKET => if (!native.moon_shell_private()) { _ = openInternalPage(market.address); },
-        native.MOON_SCRIPTS_INSTALL => if (!native.moon_shell_private()) userscripts.install(slice(c_text)),
-        native.MOON_SCRIPTS_TOGGLE => if (!native.moon_shell_private()) userscripts.toggle(index),
-        native.MOON_SCRIPTS_REMOVE => if (!native.moon_shell_private()) userscripts.remove(index),
         else => {},
     }
 }
@@ -2706,7 +2703,9 @@ fn beginWarm() void {
 }
 fn smokeTick(now: u64) void {
     if (now >= smoke_deadline) return failSmoke("timeout");
-    const lua_fixture = equals(slice(native.moon_userscript_label(0)), "Moon Lua smoke budget");
+    var script_records: [userscripts.max_scripts]sdk.Script = undefined;
+    const records = userscripts.list(&script_records);
+    const lua_fixture = records.len != 0 and equals(records[0].name,"Moon Lua smoke budget");
     const initial_title = if (lua_fixture) "Moon fixture initial Lua ✓" else "Moon fixture initial";
     switch (smoke) {
         .off => {},
@@ -2720,7 +2719,7 @@ fn smokeTick(now: u64) void {
         .second => {
             if (!smokePage("Moon fixture second")) return;
             if (lua_fixture) {
-                const failure = slice(native.moon_userscript_error(0));
+                const failure = (userscripts.runtimeError(records[0].id) catch null) orelse "";
                 if (std.mem.indexOf(u8, failure, "instruction limit exceeded") == null) return failSmoke("Lua instruction budget");
                 log("lua_userscripts=ok", .{});
             }

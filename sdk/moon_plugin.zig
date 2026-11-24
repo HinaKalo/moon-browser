@@ -4,6 +4,7 @@ pub const api_version = 2;
 pub const frame_limit = 32 * 1024;
 pub const command_limit = 12;
 pub const request_limit = 24;
+pub const interactive_request_limit = 256;
 pub const lua_source_limit = 16 * 1024;
 pub const rpc_version = "2.0";
 
@@ -101,6 +102,7 @@ pub const Initialization = struct {
     permissions: []const Permission,
     browserWindow: u64 = 0,
     darkMode: bool = false,
+    requestLimit: u32 = request_limit,
 };
 pub const HostInfo = struct { apiVersion: u32, browserVersion: []const u8, luaVersion: []const u8 };
 pub const PageSourceState = enum { idle, pending, ready, stale, unavailable };
@@ -178,6 +180,7 @@ pub const TaskSnapshot = struct {
 pub const TaskAction = enum(c_uint) { done, notFound, protected, unavailable };
 pub const Script = struct { id: []const u8, name: []const u8, enabled: bool };
 pub const ScriptId = struct { id: []const u8 };
+pub const ScriptRemoval = struct { id: []const u8, confirm: bool = false };
 pub const ScriptSwitch = struct { id: []const u8, enabled: bool };
 pub const ScriptSource = struct { sourceBase64: []const u8 };
 pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
@@ -307,6 +310,7 @@ pub const Method = enum {
     @"lua.scripts.install",
     @"lua.scripts.setEnabled",
     @"lua.scripts.remove",
+    @"lua.scripts.lastError",
     @"lua.scripts.getSource",
     @"lua.scripts.update",
     @"lua.scripts.reloadActive",
@@ -479,6 +483,7 @@ extern "c" fn fflush(?*anyopaque) c_int;
 pub const Client = struct {
     allocator: std.mem.Allocator,
     sequence: u32 = 0,
+    request_budget: u32 = request_limit,
 
     // Parsed messages use the supplied allocator. An arena scoped to one invocation is convenient.
     pub fn receive(self: Client) !std.json.ObjectMap {
@@ -523,7 +528,7 @@ pub const Client = struct {
     }
 
     pub fn call(self: *Client, method: Method, params: anytype) !std.json.ObjectMap {
-        if (self.sequence == request_limit) return error.RequestLimit;
+        if (self.sequence >= @min(self.request_budget,interactive_request_limit)) return error.RequestLimit;
         self.sequence += 1;
         var buffer: [20]u8 = undefined;
         const id = try std.fmt.bufPrint(&buffer, "p:{d}", .{self.sequence});

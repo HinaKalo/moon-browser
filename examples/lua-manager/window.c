@@ -12,12 +12,18 @@ bool moon_manager_read(size_t index, char *output, size_t cap);
 bool moon_manager_import(const char *source, size_t size);
 bool moon_manager_save(const char *source, size_t size);
 bool moon_manager_toggle(void);
+bool moon_manager_remove(size_t index);
+void moon_manager_error(void);
 
-enum { SELECT_SCRIPT=101, OPEN_SCRIPT, IMPORT_SCRIPT, SOURCE, SAVE_SCRIPT, SWITCH_SCRIPT };
-static HWND combo, open_button, import_button, editor, save, toggle, status;
+enum { SELECT_SCRIPT=101, OPEN_SCRIPT, IMPORT_SCRIPT, SOURCE, SAVE_SCRIPT, SWITCH_SCRIPT, REMOVE_SCRIPT, SCRIPT_ERROR, STATUS };
+enum { DECISION_DONE = WM_APP + 1 };
+typedef struct { HWND window; unsigned command; size_t index; } Decision;
+static HWND combo, open_button, import_button, editor, save, toggle, remove_button, error_button, status;
 static HFONT ui_font, code_font;
 static HBRUSH background, field;
-static bool changing, dirty, has_source, dark;
+static bool changing, dirty, has_source, dark, deciding;
+static Decision pending_decision;
+static LRESULT loaded_index = CB_ERR;
 static UINT dpi = 96;
 static wchar_t status_text[256];
 
@@ -41,7 +47,7 @@ static void update_fonts(void) {
     if (code_font) DeleteObject(code_font);
     ui_font = CreateFontW(-px(14),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
     code_font = CreateFontW(-px(15),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Consolas");
-    HWND controls[] = {combo,open_button,import_button,save,toggle,status};
+    HWND controls[] = {combo,open_button,import_button,save,toggle,remove_button,error_button,status};
     for (size_t i=0;i<ARRAYSIZE(controls);++i) SendMessageW(controls[i],WM_SETFONT,(WPARAM)ui_font,TRUE);
     SendMessageW(editor,WM_SETFONT,(WPARAM)code_font,TRUE);
 }
@@ -50,26 +56,54 @@ static void layout(HWND window) {
     GetClientRect(window,&r);
     const int pad=px(20), row=px(32), gap=px(8), button=px(100);
     const int right=r.right-pad, bottom=r.bottom-pad;
-    MoveWindow(combo,pad,pad,right-pad-2*(button+gap),px(220),TRUE);
-    MoveWindow(open_button,right-2*button-gap,pad,button,row,TRUE);
-    MoveWindow(import_button,right-button,pad,button,row,TRUE);
-    MoveWindow(editor,pad,pad+row+gap,right-pad,bottom-pad-2*row-2*gap,TRUE);
-    MoveWindow(status,pad,bottom-row+px(7),right-pad-2*button-2*gap,row,TRUE);
+    MoveWindow(combo,pad,pad,right-pad-3*(button+gap),px(220),TRUE);
+    MoveWindow(open_button,right-3*button-2*gap,pad,button,row,TRUE);
+    MoveWindow(import_button,right-2*button-gap,pad,button,row,TRUE);
+    MoveWindow(remove_button,right-button,pad,button,row,TRUE);
+    const int status_height=px(42);
+    MoveWindow(editor,pad,pad+row+gap,right-pad,bottom-pad-2*row-3*gap-status_height,TRUE);
+    MoveWindow(status,pad,bottom-row-gap-status_height,right-pad,status_height,TRUE);
+    MoveWindow(error_button,pad,bottom-row,button+px(14),row,TRUE);
     MoveWindow(toggle,right-2*button-gap,bottom-row,button,row,TRUE);
     MoveWindow(save,right-button,bottom-row,button,row,TRUE);
 }
 
-static void add_name(size_t index) {
-    wchar_t name[256];
-    if (MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,moon_manager_name(index),-1,name,ARRAYSIZE(name)))
-        SendMessageW(combo,CB_ADDSTRING,0,(LPARAM)name);
+static void refresh_list(LRESULT selection) {
+    SendMessageW(combo,CB_RESETCONTENT,0,0);
+    const size_t count=moon_manager_count();
+    for (size_t index=0;index<count;++index) {
+        wchar_t name[256];
+        if (MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,moon_manager_name(index),-1,name,ARRAYSIZE(name)))
+            SendMessageW(combo,CB_ADDSTRING,0,(LPARAM)name);
+    }
+    if (selection>=(LRESULT)count) selection=(LRESULT)count-1;
+    SendMessageW(combo,CB_SETCURSEL,selection,0);
+    EnableWindow(combo,count!=0);
+    EnableWindow(open_button,count!=0);
+    EnableWindow(remove_button,count!=0);
 }
 
-static void open_source(void) {
+static bool discard_changes(HWND window) {
+    return !dirty || MessageBoxW(window,L"丢弃未保存的源码改动？",L"Lua 脚本编辑器",
+        MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION)==IDYES;
+}
+
+static void edit_controls(bool enabled) {
+    EnableWindow(editor,enabled);
+    EnableWindow(save,enabled);
+    EnableWindow(toggle,enabled);
+    EnableWindow(error_button,enabled);
+    SetWindowTextW(toggle,enabled && moon_manager_enabled() ? L"停用脚本" : L"启用脚本");
+}
+
+static void open_source(HWND window) {
     const LRESULT choice = SendMessageW(combo,CB_GETCURSEL,0,0);
-    if (choice == CB_ERR) return;
+    if (choice==CB_ERR || choice==loaded_index) return;
     char bytes[16385];
-    if (!moon_manager_read((size_t)choice,bytes,sizeof(bytes))) return;
+    if (!discard_changes(window) || !moon_manager_read((size_t)choice,bytes,sizeof(bytes))) {
+        if (has_source) SendMessageW(combo,CB_SETCURSEL,loaded_index,0);
+        return;
+    }
     wchar_t source[16385], display[32769];
     if (!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,bytes,-1,source,ARRAYSIZE(source))) return;
     size_t used=0;
@@ -82,9 +116,9 @@ static void open_source(void) {
     SetWindowTextW(editor,display);
     changing=false;
     has_source=true;
-    SetWindowTextW(toggle,moon_manager_enabled() ? L"停用脚本" : L"启用脚本");
-    EnableWindow(combo,FALSE); EnableWindow(open_button,FALSE); EnableWindow(import_button,FALSE);
-    EnableWindow(editor,TRUE); EnableWindow(save,TRUE); EnableWindow(toggle,TRUE);
+    dirty=false;
+    loaded_index=choice;
+    edit_controls(true);
     SetFocus(editor);
     set_status(L"编辑 Lua 源码，Ctrl+S 保存并重载。");
 }
@@ -103,10 +137,47 @@ static void import_script(HWND window) {
     CloseHandle(input);
     if (!ok) { set_status(L"请选择 16 KiB 以内的 UTF-8 Lua 文件。"); return; }
     if (moon_manager_import(buffer,size)) {
-        const size_t index=moon_manager_count()-1;
-        add_name(index);
-        SendMessageW(combo,CB_SETCURSEL,index,0);
-        EnableWindow(open_button,TRUE);
+        refresh_list((LRESULT)moon_manager_count()-1);
+        if (!dirty) {
+            open_source(window);
+            set_status(L"已导入。启用前需要确认网站范围。");
+        } else SendMessageW(combo,CB_SETCURSEL,loaded_index,0);
+    }
+}
+
+static DWORD WINAPI decide(void *context) {
+    const Decision decision=*(const Decision *)context;
+    const bool changed=decision.command==REMOVE_SCRIPT ?
+        moon_manager_remove(decision.index) : moon_manager_toggle();
+    PostMessageW(decision.window,DECISION_DONE,decision.command,changed);
+    return 0;
+}
+
+static void finish_decision(unsigned command, bool changed) {
+    LRESULT selection=SendMessageW(combo,CB_GETCURSEL,0,0);
+    if (command==REMOVE_SCRIPT && changed) {
+        has_source=dirty=false;
+        loaded_index=CB_ERR;
+        SetWindowTextW(editor,L"");
+    }
+    deciding=false;
+    EnableWindow(import_button,TRUE);
+    refresh_list(selection);
+    edit_controls(has_source);
+}
+
+static void request_decision(HWND window, unsigned command) {
+    const LRESULT choice=SendMessageW(combo,CB_GETCURSEL,0,0);
+    if (choice==CB_ERR || (command==SWITCH_SCRIPT && !has_source)) return;
+    deciding=true;
+    HWND controls[]={combo,open_button,import_button,remove_button,editor,save,toggle,error_button};
+    for (size_t i=0;i<ARRAYSIZE(controls);++i) EnableWindow(controls[i],FALSE);
+    pending_decision=(Decision){.window=window,.command=command,.index=(size_t)choice};
+    HANDLE worker=CreateThread(NULL,0,decide,&pending_decision,0,NULL);
+    if (worker) CloseHandle(worker);
+    else {
+        set_status(L"无法处理脚本请求。");
+        finish_decision(command,false);
     }
 }
 
@@ -123,7 +194,8 @@ static void save_source(void) {
     if (length<=0 || length>16384) { set_status(L"脚本内容为空、编码无效或超过 16 KiB。"); return; }
     if (moon_manager_save(bytes,(size_t)length)) {
         dirty=false;
-        SetWindowTextW(toggle,moon_manager_enabled() ? L"停用脚本" : L"启用脚本");
+        refresh_list(loaded_index);
+        edit_controls(true);
     }
 }
 
@@ -135,16 +207,17 @@ static LRESULT CALLBACK window_message(HWND window, UINT msg, WPARAM wp, LPARAM 
             combo=control(window,L"COMBOBOX",L"",CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL,SELECT_SCRIPT);
             open_button=control(window,L"BUTTON",L"打开源码",WS_TABSTOP,OPEN_SCRIPT);
             import_button=control(window,L"BUTTON",L"导入脚本…",WS_TABSTOP,IMPORT_SCRIPT);
+            remove_button=control(window,L"BUTTON",L"移除脚本…",WS_TABSTOP,REMOVE_SCRIPT);
             editor=control(window,L"EDIT",L"",WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,SOURCE);
             save=control(window,L"BUTTON",L"保存并重载",WS_TABSTOP,SAVE_SCRIPT);
             toggle=control(window,L"BUTTON",L"启用脚本",WS_TABSTOP,SWITCH_SCRIPT);
-            status=control(window,L"STATIC",L"",SS_LEFT,0);
-            if (!combo || !editor || !save || !toggle || !status || !open_button || !import_button) return -1;
+            error_button=control(window,L"BUTTON",L"查看运行错误",WS_TABSTOP,SCRIPT_ERROR);
+            status=control(window,L"STATIC",L"",SS_LEFT,STATUS);
+            if (!combo || !editor || !save || !toggle || !status || !open_button || !import_button ||
+                !remove_button || !error_button) return -1;
             SendMessageW(editor,EM_SETLIMITTEXT,32768,0);
-            for (size_t i=0;i<moon_manager_count();++i) add_name(i);
-            SendMessageW(combo,CB_SETCURSEL,0,0);
-            EnableWindow(open_button,moon_manager_count()!=0);
-            EnableWindow(editor,FALSE); EnableWindow(save,FALSE); EnableWindow(toggle,FALSE);
+            refresh_list(0);
+            edit_controls(false);
             set_status(moon_manager_count() ? L"选择一个已安装的 Lua 用户脚本。" : L"导入 .lua 文件后可查看和编辑源码。");
             update_fonts();
             return 0;
@@ -164,19 +237,22 @@ static LRESULT CALLBACK window_message(HWND window, UINT msg, WPARAM wp, LPARAM 
             SetBkColor((HDC)wp,(HWND)lp==editor ? (dark ? RGB(37,39,47) : RGB(255,255,255)) : (dark ? RGB(25,28,35) : RGB(242,244,249)));
             return (LRESULT)((HWND)lp==editor ? field : background);
         case WM_COMMAND:
+            if (deciding) return 0;
             switch (LOWORD(wp)) {
-                case OPEN_SCRIPT: if (!has_source) open_source(); break;
-                case IMPORT_SCRIPT: if (!has_source) import_script(window); break;
+                case SELECT_SCRIPT: if (HIWORD(wp)==CBN_SELENDOK) open_source(window); break;
+                case OPEN_SCRIPT: open_source(window); break;
+                case IMPORT_SCRIPT: import_script(window); break;
+                case REMOVE_SCRIPT: case SWITCH_SCRIPT: request_decision(window,LOWORD(wp)); break;
+                case SCRIPT_ERROR: moon_manager_error(); break;
                 case SOURCE: if (has_source && !changing && HIWORD(wp)==EN_CHANGE) dirty=true; break;
                 case SAVE_SCRIPT: save_source(); break;
-                case SWITCH_SCRIPT:
-                    if (moon_manager_toggle()) SetWindowTextW(toggle,moon_manager_enabled() ? L"停用脚本" : L"启用脚本");
-                    break;
             }
             return 0;
+        case DECISION_DONE:
+            if (deciding) finish_decision((unsigned)wp,lp!=0);
+            return 0;
         case WM_CLOSE:
-            if (!dirty || MessageBoxW(window,L"丢弃未保存的源码改动？",L"关闭 Lua 编辑器",
-                    MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION)==IDYES) DestroyWindow(window);
+            if (!deciding && discard_changes(window)) DestroyWindow(window);
             return 0;
         case WM_DESTROY: PostQuitMessage(0); return 0;
     }
@@ -201,7 +277,7 @@ bool moon_manager_window(uint64_t owner, bool dark_mode) {
     MSG message;
     while (GetMessageW(&message,NULL,0,0)>0) {
         if (message.message==WM_KEYDOWN && message.wParam=='S' && (GetKeyState(VK_CONTROL)&0x8000)) {
-            save_source();
+            if (!deciding) save_source();
             continue;
         }
         if (IsDialogMessageW(window,&message)) continue;

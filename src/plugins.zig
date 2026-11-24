@@ -216,6 +216,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     }
     if (bundled) {
         const default_permission: ?sdk.Permission = if (std.mem.eql(u8,id,"moon.history")) .@"history.manage"
+            else if (std.mem.eql(u8,id,"moon.lua-manager")) .@"lua.scripts.manage"
             else if (std.mem.eql(u8,id,"moon.devtools")) .@"page.inspect"
             else if (std.mem.eql(u8,id,"moon.source")) .@"page.source"
             else if (std.mem.eql(u8,id,"moon.popups")) .@"popups.manage"
@@ -1326,9 +1327,10 @@ fn exchangeV2(task: *Task, pipe: *native.MoonPipe, rpc: *Rpc) Outcome {
         grants[count_grants] = scope;
         count_grants += 1;
     }
+    const request_limit: u32 = if (task.trigger == .command and task.interactive) sdk.interactive_request_limit else sdk.request_limit;
     const hello = sdk.request(allocator, "h:1", "plugin.initialize", sdk.Initialization{
         .apiVersion = sdk.api_version, .pluginId = std.mem.span(task.plugin_id), .permissions = grants[0..count_grants],
-        .browserWindow = task.owner, .darkMode = task.dark,
+        .browserWindow = task.owner, .darkMode = task.dark, .requestLimit = request_limit,
     }) catch return .failed;
     defer allocator.free(hello);
     if (!sendRpc(rpc, pipe, hello)) return .failed;
@@ -1360,7 +1362,7 @@ fn exchangeV2(task: *Task, pipe: *native.MoonPipe, rpc: *Rpc) Outcome {
     if (!sendRpc(rpc, pipe, invocation)) return .failed;
 
     var sequence: u32 = 0;
-    for (0..sdk.request_limit + 1) |_| {
+    for (0..request_limit + 1) |_| {
         if (!invocationActive(task)) return .timed_out;
         const read = native.moon_pipe_read_active(pipe, &frame, frame.len, invocationActive, task);
         if (event and read == -3) return .ok;
@@ -1381,7 +1383,7 @@ fn exchangeV2(task: *Task, pipe: *native.MoonPipe, rpc: *Rpc) Outcome {
         if (!std.mem.startsWith(u8, id, "p:") or id.len > 11) return .failed;
         for (id[2..]) |ch| if (!std.ascii.isDigit(ch)) return .failed;
         const next = std.fmt.parseUnsigned(u32, id[2..], 10) catch return .failed;
-        if (next != sequence + 1 or sequence >= sdk.request_limit) return .failed;
+        if (next != sequence + 1 or sequence >= request_limit) return .failed;
         sequence = next;
         if (!invocationActive(task)) return .timed_out;
         @memcpy(rpc.buffer[0..bytes.len], bytes);

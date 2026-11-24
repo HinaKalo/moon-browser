@@ -9,7 +9,7 @@ enum MoonCommand {
     MOON_ADDRESS, MOON_TICK, MOON_INPUT, MOON_DIAGNOSTICS, MOON_PLUGIN_COMMAND,
     MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
     MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_OPEN_PLUGINS, MOON_UPDATES,
-    MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_SETTINGS, MOON_MARKET,
+    MOON_PLUGIN_SETTINGS, MOON_MARKET,
     MOON_TAB_PIN, MOON_TAB_MUTE, MOON_TAB_CLOSE_TARGET, MOON_TAB_DUPLICATE, MOON_TAB_COPY_ADDRESS,
     MOON_TAB_CLOSE_OTHERS, MOON_TAB_CLOSE_BELOW, MOON_TAB_GROUP_NEW, MOON_TAB_GROUP_PANEL, MOON_TAB_GROUP_REMOVE
 };
@@ -172,10 +172,6 @@ void moon_plugin_wait(void);
 const char *moon_lua_version(void);
 bool moon_lua_check(const char *source, char *error, size_t cap);
 int moon_lua_userscript(const char *source, const char *url, MoonDomOp *ops, char *error, size_t cap);
-size_t moon_userscript_count(void);
-const char *moon_userscript_label(size_t index);
-const char *moon_userscript_error(size_t index);
-bool moon_userscript_enabled(size_t index);
 
 bool moon_start(int argc, const uint16_t *const *argv);
 void moon_command(int command, uint64_t argument, const char *text);

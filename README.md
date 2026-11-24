@@ -49,9 +49,9 @@ Ctrl+Shift+M 打开浏览器任务管理器，查看进程内存、标签保护�
 
 [插件开发文档](https://docs.browser.moonl.cloud/) · [插件 API 2](https://docs.browser.moonl.cloud/api.html) · [Zig SDK](sdk/README.md)
 
-Lua 用户脚本可从工具栏「… → Lua 用户脚本」安装。随包的 `welcome.user.lua` 可作为网页定制起点。[Lua 用户脚本指南](https://docs.browser.moonl.cloud/lua-userscripts.html)
+从「… → 扩展工具 → 打开 Lua 脚本编辑器」导入用户脚本，再确认允许脚本访问的网站。随包的 `welcome.user.lua` 可作为网页定制起点。[Lua 用户脚本指南](https://docs.browser.moonl.cloud/lua-userscripts.html)
 
-启用随包的 Lua 脚本管理器可查看和编辑源码。网页开发者工具插件可打开 WebKit 的控制台、资源和站点数据。工具栏「插件市场」打开内置的 Moon 插件目录。[插件配置页](https://docs.browser.moonl.cloud/extension-pages.html) · [插件市场](https://docs.browser.moonl.cloud/market.html)
+Lua 脚本管理器也可查看、编辑和移除脚本。网页开发者工具插件可打开 WebKit 的控制台、资源和站点数据。工具栏「插件市场」打开内置的 Moon 插件目录。[插件配置页](https://docs.browser.moonl.cloud/extension-pages.html) · [插件市场](https://docs.browser.moonl.cloud/market.html)
 
 协议使用 UTF-8、一行一个 JSON-RPC 2.0 消息。宿主每次启动独立进程进行一次交互，整个交互限时 2 秒，每帧小于 16 KiB。
 

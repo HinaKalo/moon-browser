@@ -35,7 +35,10 @@ fn record(value: std.json.Value) ?sdk.Script {
 export fn moon_manager_count() usize { return count; }
 export fn moon_manager_name(index: usize) [*:0]const u8 {
     if (index >= count) return "";
-    return (client.allocator.dupeSentinel(u8,scripts[index].name,0) catch return "").ptr;
+    const script = scripts[index];
+    return (std.fmt.allocPrintSentinel(client.allocator,"{s}  ·  {s}",.{
+        script.name,if (script.enabled) "已启用" else "已停用",
+    },0) catch return "").ptr;
 }
 export fn moon_manager_enabled() bool {
     return if (selected) |index| scripts[index].enabled else false;
@@ -112,11 +115,33 @@ export fn moon_manager_toggle() bool {
     return true;
 }
 
+export fn moon_manager_remove(index: usize) bool {
+    if (index>=count) return false;
+    const query: sdk.ScriptRemoval = .{ .id=scripts[index].id,.confirm=true };
+    _ = response(.@"lua.scripts.remove",query) orelse return false;
+    std.mem.copyForwards(sdk.Script,scripts[index..count-1],scripts[index+1..count]);
+    count -= 1;
+    selected = null;
+    moon_manager_status("脚本已移除。刷新原网页可恢复站点内容。");
+    return true;
+}
+
+export fn moon_manager_error() void {
+    const index = selected orelse return;
+    const value = response(.@"lua.scripts.lastError",sdk.ScriptId{ .id=scripts[index].id }) orelse return;
+    const message = sdk.string(value) orelse {
+        moon_manager_status("当前没有记录到运行错误。");
+        return;
+    };
+    moon_manager_status((client.allocator.dupeSentinel(u8,message,0) catch return).ptr);
+}
+
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     client = .{ .allocator=arena.allocator() };
     const init = try client.initialize();
+    client.request_budget = init.requestLimit;
     const command = try client.receive();
     const id = sdk.string(command.get("id")) orelse return error.InvalidCommand;
     if (!std.mem.eql(u8,sdk.string(command.get("method")) orelse "", "commands.run")) return error.InvalidCommand;

@@ -116,7 +116,7 @@
     {
       "id": "moon.lua-manager",
       "name": "Lua 脚本管理器",
-      "description": "导入用户脚本，查看并编辑源码，在匹配网页中应用修改。",
+      "description": "导入、启停和移除 Lua 脚本，查看运行错误并热重载修改后的源码。",
       "permission": "管理 Lua 用户脚本",
       "url": "https://docs.browser.moonl.cloud/lua-userscripts.html"
     },

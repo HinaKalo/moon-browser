@@ -729,6 +729,8 @@ def run_win32(exe, base, root):
     user.FindWindowExW.restype = wt.HWND
     user.SendMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
     user.SendMessageW.restype = ctypes.c_ssize_t
+    user.SendMessageTimeoutW.argtypes = [*user.SendMessageW.argtypes,wt.UINT,wt.UINT,ctypes.POINTER(ctypes.c_size_t)]
+    user.SendMessageTimeoutW.restype = ctypes.c_ssize_t
     user.PostMessageW.argtypes = user.SendMessageW.argtypes
     user.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
     user.GetDpiForWindow.argtypes = [wt.HWND]
@@ -757,6 +759,7 @@ def run_win32(exe, base, root):
     user.GetDlgItem.argtypes = [wt.HWND, ctypes.c_int]
     user.GetDlgItem.restype = wt.HWND
     user.IsWindowVisible.argtypes = [wt.HWND]
+    user.IsWindowEnabled.argtypes = [wt.HWND]
     user.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
     user.SetThreadDpiAwarenessContext.argtypes = [wt.HANDLE]
     user.SetThreadDpiAwarenessContext(wt.HANDLE(-4))
@@ -770,6 +773,8 @@ def run_win32(exe, base, root):
     example_manifest = exe.parent / "plugins" / "example" / "plugin.json"
     modern_example = json.loads(example_manifest.read_text(encoding="utf-8")).get("apiVersion") == 2
     manager = exe.parent / "plugins" / "lua-manager" / "MoonLuaManager.exe"
+    unified_manager = manager.is_file() and tuple(map(int,json.loads(
+        manager.with_name("plugin.json").read_text(encoding="utf-8"))["version"].split(".",2)[:2])) >= (1,1)
     devtools = exe.parent / "plugins" / "devtools" / "MoonDevTools.exe"
     devtools_commands = {command["id"]: command for command in
         json.loads(devtools.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"]} if devtools.exists() else {}
@@ -828,7 +833,7 @@ def run_win32(exe, base, root):
                 {"plugin": "moon.bookmarks", "command": "open", "shortcut": "Ctrl+Shift+L"},
             ]), encoding="utf-8")
         (profile / "plugin-state.json").write_text(json.dumps([
-            {"id": "moon.lua-manager", "enabled": True, "tabs_read": False, "lua_scripts_manage": True},
+            *([] if unified_manager else [{"id": "moon.lua-manager", "enabled": True, "tabs_read": False, "lua_scripts_manage": True}]),
             {"id": "moon.reading", "enabled": True, "tabs_read": False, "page_reading": True},
             {"id": "moon.reader-fixture", "enabled": True, "tabs_read": False, "page_reader": True},
             {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
@@ -1756,10 +1761,10 @@ def run_win32(exe, base, root):
         wait_for(lambda: sidebar_visible(True),"The native sidebar did not reappear")
         print("native_home=ok command_palette=ok sidebar_focus_mode=ok")
 
-        def owned_window(class_name, title=None):
+        def owned_window(class_name, title=None, owner=None):
             candidate = None
             while candidate := user.FindWindowExW(None, candidate, class_name, title):
-                if user.GetWindow(candidate, 4) == frame and user.IsWindowVisible(candidate):  # GW_OWNER
+                if user.GetWindow(candidate, 4) == (owner or frame) and user.IsWindowVisible(candidate):  # GW_OWNER
                     return candidate
             return None
 
@@ -1848,8 +1853,8 @@ def run_win32(exe, base, root):
             user.PostMessageW(view,0x0201,1,coords)
             user.PostMessageW(view,0x0202,0,coords)
 
-        def pick_html_file(title, selected):
-            dialog = wait_for(lambda: owned_window("#32770",title),f"The {title} dialog did not open")
+        def pick_file(title, selected, owner=None):
+            dialog = wait_for(lambda: owned_window("#32770",title,owner),f"The {title} dialog did not open")
             if selected is None:
                 user.PostMessageW(dialog,0x0111,2,0)  # IDCANCEL
             else:
@@ -1923,6 +1928,77 @@ def run_win32(exe, base, root):
             user.PostMessageW(tool, 0x0111, 105, 0)  # SAVE_SCRIPT
             if not Fixture.seen_editor_reload.wait(15):
                 raise RuntimeError("Saving through the system plugin did not reload the matching page")
+            if unified_manager:
+                source_file = root/"运行错误演示.lua"
+                error_text = "Lua editor runtime check"
+                imported = lua_source.replace("Editor fixture","运行错误演示").replace(
+                    'moon.dom.setText("#editor-proof", "Old Lua source")',f'error("{error_text}")')
+                source_file.write_text(imported,encoding="utf-8")
+                scripts_file = profile/"lua-userscripts.json"
+                combo = user.GetDlgItem(tool,101)
+                status = user.GetDlgItem(tool,109)
+                user.PostMessageW(tool,0x0111,103,0)  # IMPORT_SCRIPT
+                pick_file("导入 Lua 用户脚本",source_file,tool)
+                wait_for(lambda: error_text in read_control(source),"Imported Lua source did not open in the editor")
+                records = read_settings(scripts_file)
+                if len(records)!=2 or records[1]["enabled"]:
+                    raise RuntimeError("Import ran the script before the user granted its site scope")
+
+                user.PostMessageW(tool,0x0111,106,0)  # SWITCH_SCRIPT
+                permit = wait_for(lambda: owned_window("#32770","启用 Lua 用户脚本"),
+                                  "Enabling the imported script did not prompt for site access")
+                reply = ctypes.c_size_t()
+                if not user.SendMessageTimeoutW(tool,0,0,0,3,800,ctypes.byref(reply)):
+                    raise RuntimeError("The Lua editor did not keep pumping messages while waiting for site consent")
+                user.PostMessageW(permit,0x0111,6,0)
+                wait_for(lambda: len(records:=read_settings(scripts_file))==2 and records[1]["enabled"],
+                         "The imported script did not retain its approved site scope")
+                wait_for(lambda: user.IsWindowEnabled(user.GetDlgItem(tool,106)),"The editor did not resume after approval")
+                Fixture.seen_editor_reload.clear()
+                user.PostMessageW(edit,0x0100,0x74,1)  # F5
+                wait_for(Fixture.seen_editor_reload.is_set,"The original test page did not reload")
+                user.PostMessageW(tool,0x0111,108,0)  # SCRIPT_ERROR
+                wait_for(lambda: error_text in read_control(status),"The editor did not show the latest Lua runtime error")
+                for _ in range(18):
+                    set_control(status,"")
+                    user.PostMessageW(tool,0x0111,108,0)
+                    wait_for(lambda: error_text in read_control(status),"The interactive editor exhausted its request budget")
+
+                def select_script(index):
+                    user.SendMessageW(combo,0x014E,index,0)  # CB_SETCURSEL
+                    user.PostMessageW(tool,0x0111,101|(9<<16),combo)  # CBN_SELENDOK
+
+                tail = ctypes.create_unicode_buffer("\r\n-- Unsaved draft")
+                draft = read_control(source)+tail.value
+                end = user.SendMessageW(source,0x000E,0,0)
+                user.SendMessageW(source,0x00B1,end,end)  # EM_SETSEL
+                user.SendMessageW(source,0x00C2,1,ctypes.addressof(tail))  # EM_REPLACESEL
+                select_script(0)
+                discard = wait_for(lambda: owned_window("#32770","Lua 脚本编辑器",tool),
+                                   "Switching scripts did not protect unsaved edits")
+                user.PostMessageW(discard,0x0111,7,0)
+                wait_for(lambda: user.SendMessageW(combo,0x0147,0,0)==1,"Cancelling the switch did not restore the selected script")
+                if read_control(source)!=draft:
+                    raise RuntimeError("Cancelling the switch lost the Lua draft")
+                select_script(0)
+                discard = wait_for(lambda: owned_window("#32770","Lua 脚本编辑器",tool),"The follow-up switch did not prompt")
+                user.PostMessageW(discard,0x0111,6,0)
+                wait_for(lambda: "Lua editor reloaded" in read_control(source),"The editor did not switch to the saved source")
+                select_script(1)
+                wait_for(lambda: error_text in read_control(source),"Could not select the script to remove")
+                for button in (7,6):
+                    user.PostMessageW(tool,0x0111,107,0)  # REMOVE_SCRIPT
+                    remove = wait_for(lambda: owned_window("#32770","移除 Lua 用户脚本？"),"The editor did not ask before deleting a script")
+                    user.PostMessageW(remove,0x0111,button,0)
+                    wait_for(lambda: not user.IsWindow(remove),"The deletion confirmation did not close")
+                    if button==7:
+                        wait_for(lambda: "已取消" in read_control(status),"The cancelled deletion did not return to the editor")
+                        wait_for(lambda: user.IsWindowEnabled(user.GetDlgItem(tool,107)),"The editor did not resume after cancelling removal")
+                        if len(read_settings(scripts_file))!=2:
+                            raise RuntimeError("Cancelling the deletion removed a Lua script")
+                wait_for(lambda: len(read_settings(scripts_file))==1 and user.SendMessageW(combo,0x0146,0,0)==1,
+                         "Confirmed deletion did not update both the stored scripts and the editor")
+                print("lua_manager_unified=ok default_enabled=ok file_import=ok site_consent=ok runtime_error=ok interactive_budget=ok unsaved_draft=ok confirmed_delete=ok",flush=True)
             user.PostMessageW(tool, 0x0010, 0, 0)
             wait_for(lambda: not user.IsWindow(tool), "Lua editor did not close after save")
             print("lua_editor_live_reload=ok", flush=True)
@@ -2051,6 +2127,11 @@ def run_win32(exe, base, root):
             finally:
                 user.PostMessageW(owner_window or frame,0x001F,0,0)  # WM_CANCELMODE
                 wait_for(lambda: not open_menu(),"Main menu did not dismiss")
+
+        if unified_manager:
+            entries = native_entries()
+            if "Lua 用户脚本" in entries or "打开 Lua 脚本编辑器" not in entries.get("扩展工具",{}):
+                raise RuntimeError("Lua scripts still have a shell menu or lost their plugin menu entry")
 
         if devtools.exists():
             sleep(0.3)
@@ -2363,7 +2444,7 @@ def run_win32(exe, base, root):
 
             if bookmark_transfer:
                 page_export = profile / "书签页导出.html"
-                pick_html_file("导出 HTML 书签",page_export)
+                pick_file("导出 HTML 书签",page_export)
             library_result("moon.bookmark-fixture")
             with closing(sqlite3.connect(profile / "bookmarks.sqlite3")) as db:
                 row = db.execute("SELECT title,url,folder FROM bookmarks").fetchall()
@@ -2400,7 +2481,7 @@ def run_win32(exe, base, root):
 
                 def import_bookmarks(path, *, feedback=True):
                     invoke("导入 HTML 书签")
-                    pick_html_file("导入 HTML 书签",path)
+                    pick_file("导入 HTML 书签",path)
                     if feedback:
                         result = wait_for(lambda: owned_window("#32770","书签"),"The bookmark import did not report a result")
                         wait_for(lambda: not user.IsWindow(result),"The bookmark transfer feedback did not close")
@@ -2417,7 +2498,7 @@ def run_win32(exe, base, root):
                 if read_bookmarks()!=expected_rows:
                     raise RuntimeError("Importing invalid HTML changed the bookmark database")
                 invoke("导出 HTML 书签")
-                pick_html_file("导出 HTML 书签",exported)
+                pick_file("导出 HTML 书签",exported)
                 wait_for(exported.is_file,"The exported HTML was not saved")
                 result = wait_for(lambda: owned_window("#32770","书签"),"Bookmark export did not report completion")
                 wait_for(lambda: not user.IsWindow(result),"The bookmark export feedback did not close")
@@ -2574,7 +2655,7 @@ def run_win32(exe, base, root):
             if has_page_save:
                 saved = root / "网页 雪月.html"
                 invoke("网页另存为 HTML")
-                pick_html_file("网页另存为 HTML",saved)
+                pick_file("网页另存为 HTML",saved)
                 wait_for(saved.is_file,"The webpage HTML file did not save")
                 content_bytes = saved.read_bytes()
                 if (not content_bytes.startswith(b"\xef\xbb\xbf") or len(content_bytes)<=512*1024
@@ -2630,7 +2711,7 @@ def run_win32(exe, base, root):
                 wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
                          "The stale save fixture did not finish loading")
                 invoke("网页另存为 HTML")
-                pick_html_file("网页另存为 HTML",None)
+                pick_file("网页另存为 HTML",None)
                 sleep(0.2)
                 if set(root.glob("*.html"))!={saved}:
                     raise RuntimeError("Cancelling the save dialog created an unexpected file")
@@ -2642,7 +2723,7 @@ def run_win32(exe, base, root):
                 wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(after,)),
                          "The webpage failed to navigate while the save dialog was open")
                 stale = root / "不应保存的网页.html"
-                pick_html_file("网页另存为 HTML",stale)
+                pick_file("网页另存为 HTML",stale)
                 sleep(0.35)
                 if stale.exists() or list(root.glob(".moon-save-*.tmp")):
                     raise RuntimeError("Stale confirmation left a file or staging data")
@@ -2653,7 +2734,7 @@ def run_win32(exe, base, root):
                          "The oversized save fixture did not finish loading",20)
                 invoke("网页另存为 HTML")
                 rejected = root / "超出限制.html"
-                pick_html_file("网页另存为 HTML",rejected)
+                pick_file("网页另存为 HTML",rejected)
                 completion = wait_for(lambda: owned_window("#32770","网页另存为"),
                                       "The oversized export did not report a result")
                 wait_for(lambda: not user.IsWindow(completion),"The page save notification did not close")

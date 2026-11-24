@@ -143,6 +143,12 @@ pub fn getSource(id: []const u8) ServiceError![]const u8 {
     return scripts[find(id) orelse return error.NotFound].source;
 }
 
+pub fn runtimeError(id: []const u8) ServiceError!?[]const u8 {
+    const message = text(&scripts[find(id) orelse return error.NotFound].last_error);
+    if (message.len == 0) return null;
+    return if (std.unicode.utf8ValidateSlice(message)) message else "Lua reported an error with invalid UTF-8.";
+}
+
 fn sameRules(old: []const Rule, replacement: []const Rule) bool {
     if (old.len != replacement.len) return false;
     for (old,replacement) |a,b| {
@@ -193,9 +199,9 @@ fn confirmScope(entry: *const Script) bool {
     return native.moon_shell_confirm("启用 Lua 用户脚本", &message);
 }
 
-pub fn register(source: []const u8, enable_now: bool) ServiceError!sdk.Script {
+pub fn register(source: []const u8) ServiceError!sdk.Script {
     if (count == scripts.len) return error.LimitExceeded;
-    var entry = parse(source, enable_now) catch |err| switch (err) {
+    const entry = parse(source, false) catch |err| switch (err) {
         error.OutOfMemory => return error.InternalError,
         else => return error.InvalidScript,
     };
@@ -203,10 +209,6 @@ pub fn register(source: []const u8, enable_now: bool) ServiceError!sdk.Script {
     if (find(&entry.id) != null) return error.AlreadyExists;
     var message: [160]u8 = undefined;
     if (!native.moon_lua_check(entry.source.ptr, &message, message.len)) return error.InvalidScript;
-    if (enable_now and !confirmScope(&entry)) return error.Cancelled;
-    if (count == scripts.len) return error.LimitExceeded;
-    if (find(&entry.id) != null) return error.AlreadyExists;
-    entry.approved = enable_now;
     scripts[count] = entry;
     count += 1;
     if (!save(null)) {
@@ -238,48 +240,20 @@ pub fn setEnabled(id: []const u8, enabled: bool, consent: ?Consent) ServiceError
     return error.InternalError;
 }
 
-pub fn unregister(id: []const u8) ServiceError!void {
+pub fn unregister(id: []const u8, consent: ?Consent) ServiceError!void {
+    if (consent) |check| {
+        const script = &scripts[find(id) orelse return error.NotFound];
+        var message: [384:0]u8 = undefined;
+        _ = std.fmt.bufPrintSentinel(&message,"移除“{s}”？这会删除源码和站点授权，并丢弃未保存的改动。",.{text(&script.name)},0) catch
+            return error.InternalError;
+        if (!native.moon_shell_confirm("移除 Lua 用户脚本？",&message) or !check.valid(check.context))
+            return error.Cancelled;
+    }
     const index = find(id) orelse return error.NotFound;
     if (!save(index)) return error.InternalError;
     allocator.free(scripts[index].source);
     for (index..count - 1) |i| scripts[i] = scripts[i + 1];
     count -= 1;
-}
-
-fn showError(err: ServiceError) void {
-    if (err == error.Cancelled) return;
-    native.moon_shell_info("Lua 用户脚本", switch (err) {
-        error.InvalidScript => "脚本格式或语法无效。请检查 @name、@api 1 和 @match。",
-        error.AlreadyExists => "此脚本已安装。",
-        error.LimitExceeded => "已达到 16 个脚本上限。",
-        error.NotFound => "找不到此脚本。",
-        error.InternalError => "无法保存到浏览器配置。",
-        error.Cancelled => unreachable,
-    });
-}
-
-pub fn install(path: []const u8) void {
-    const file = allocator.dupeSentinel(u8, path, 0) catch return;
-    defer allocator.free(file);
-    var buffer: [max_source + 4]u8 = undefined;
-    if (!native.moon_read_text(file.ptr, &buffer, buffer.len)) {
-        native.moon_shell_info("Lua 用户脚本", "无法读取脚本。请选择不超过 16 KiB 的 UTF-8 Lua 文件。");
-        return;
-    }
-    _ = register(text(&buffer), true) catch |err| return showError(err);
-}
-
-pub fn toggle(index: usize) void {
-    if (index >= count) return;
-    const id = scripts[index].id;
-    setEnabled(&id, !scripts[index].enabled, null) catch |err| showError(err);
-}
-
-pub fn remove(index: usize) void {
-    if (index >= count) return;
-    const id = scripts[index].id;
-    if (!native.moon_shell_confirm("移除 Lua 用户脚本？", &scripts[index].name)) return;
-    unregister(&id) catch |err| showError(err);
 }
 
 fn matches(script: *const Script, origin: []const u8, path: []const u8) bool {
@@ -357,17 +331,4 @@ fn execute(script: *Script, view: *native.MoonView, href: [*:0]const u8) void {
         .{ url_json, ops_json, apply_operations }, 0) catch return;
     defer allocator.free(javascript);
     native.moon_engine_apply_dom(view, javascript.ptr);
-}
-
-export fn moon_userscript_count() usize {
-    return count;
-}
-export fn moon_userscript_label(index: usize) [*:0]const u8 {
-    return if (index < count) &scripts[index].name else "";
-}
-export fn moon_userscript_error(index: usize) [*:0]const u8 {
-    return if (index < count) &scripts[index].last_error else "";
-}
-export fn moon_userscript_enabled(index: usize) bool {
-    return index < count and scripts[index].enabled;
 }
