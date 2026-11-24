@@ -7,7 +7,7 @@
   "entry": "MoonPageSource.exe",
   "settingsPage": "source.html",
   "contributes": {
-    "commands": [{ "id": "open", "label": "查看网页源代码", "menu": "developer", "shortcut": "Ctrl+U" }]
+    "commands": [{ "id": "open", "label": "查看网页源代码", "menu": "developer", "siteMenu": true, "shortcut": "Ctrl+U" }]
   },
   "permissions": ["page.source"]
 }

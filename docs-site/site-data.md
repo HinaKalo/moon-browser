@@ -1,6 +1,6 @@
 # 站点数据
 
-在已加载的网页上，从 Ctrl+K 命令面板选择「查看当前站点数据」。面板绑定触发命令的网页，显示它的来源，可按名称筛选网页可读的 Cookie、Local Storage 和 Session Storage。值默认折叠，点击「显示值」可以检查单条内容。
+在已加载的网页上，点击地址栏左侧的调节图标，或从 Ctrl+K 命令面板选择「查看当前站点数据」。面板绑定触发命令的网页，显示它的来源，可按名称筛选网页可读的 Cookie、Local Storage 和 Session Storage。值默认折叠，点击「显示值」可以检查单条内容。
 
 当前面板每类最多预览 32 条。长条目会标记截断。要查看 HttpOnly Cookie、Cookie 属性或完整值，可用面板中的「打开开发者工具」回到原网页的 WebKit Inspector，再选择 Storage。
 

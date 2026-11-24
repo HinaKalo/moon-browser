@@ -7,7 +7,7 @@
   "entry": "MoonPopups.exe",
   "settingsPage": "popups.html",
   "contributes": {
-    "commands": [{ "id": "open", "label": "管理网站弹窗", "menu": "privacy" }]
+    "commands": [{ "id": "open", "label": "管理网站弹窗", "menu": "privacy", "siteMenu": true }]
   },
   "permissions": ["popups.manage"]
 }

@@ -76,6 +76,7 @@ const Command = struct {
     id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false,
     shortcut: ?sdk.Shortcut = null,
     menu_group: ?sdk.MenuGroup = null,
+    site_menu: bool = false,
     menu_override: MenuOverride = .default,
     user_shortcut: ?Hotkey = null,
 };
@@ -166,6 +167,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         plugin.actions[index].interactive = item.interactive;
         plugin.actions[index].shortcut = item.shortcut;
         plugin.actions[index].menu_group = item.menu;
+        plugin.actions[index].site_menu = item.siteMenu;
         if (!copy(&plugin.actions[index].id, item.id) or !copy(&plugin.actions[index].label, item.label)) return;
     }
     if (bundled) {
@@ -584,6 +586,13 @@ pub fn menuLocation(index: usize, command_index: usize) c_uint {
             .extensions => native.MOON_MENU_EXTENSIONS,
         },
     };
+}
+
+pub fn siteMenuVisible(index: usize, command_index: usize) bool {
+    if (index >= len) return false;
+    const plugin = &all[index];
+    if (!plugin.enabled or command_index >= plugin.action_count) return false;
+    return plugin.actions[command_index].site_menu and (plugin.bundled or canContribute(plugin));
 }
 
 pub fn setMenu(owner: []const u8, id: []const u8, add: bool) sdk.UiRegistration {

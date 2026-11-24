@@ -48,6 +48,7 @@ pub const Command = struct {
     interactive: bool = false,
     shortcut: ?Shortcut = null,
     menu: ?MenuGroup = null,
+    siteMenu: bool = false,
 };
 pub const ShortcutScope = enum { browser, global };
 pub const RegisteredShortcut = struct { id: []const u8, shortcut: []const u8, scope: ShortcutScope = .browser };

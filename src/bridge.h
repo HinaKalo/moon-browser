@@ -155,7 +155,7 @@ uint64_t moon_tab_id(size_t index);
 enum {
     MOON_TAB_DORMANT = 1, MOON_TAB_FAILED = 2, MOON_TAB_LOADING = 4, MOON_TAB_PINNED = 8,
     MOON_TAB_MUTED = 16, MOON_TAB_CAN_PIN = 32, MOON_TAB_CAN_MUTE = 64,
-    MOON_TAB_CAN_DUPLICATE = 128, MOON_TAB_CAN_COPY_ADDRESS = 256
+    MOON_TAB_CAN_DUPLICATE = 128, MOON_TAB_CAN_COPY_ADDRESS = 256, MOON_TAB_HAS_SITE = 512
 };
 enum { MOON_TAB_ORGANIZE = 1, MOON_TAB_MANAGE = 2 };
 unsigned moon_tab_tools_permissions(void);
@@ -193,6 +193,10 @@ enum MoonPluginMenu {
     MOON_MENU_PRIVACY, MOON_MENU_DEVELOPER, MOON_MENU_EXTENSIONS, MOON_MENU_COUNT
 };
 unsigned moon_plugin_action_menu(size_t index, size_t command);
+bool moon_plugin_action_site_menu(size_t index, size_t command);
+typedef struct { uint64_t tab_id, navigation; char origin[320]; } MoonSiteContext;
+bool moon_site_context(MoonSiteContext *site);
+void moon_site_menu_run(const MoonSiteContext *site, size_t index, size_t command);
 bool moon_plugin_key(unsigned modifiers, unsigned key, bool repeated);
 bool moon_plugin_global_key(unsigned id, unsigned modifiers, unsigned key);
 bool moon_shell_register_hotkey(unsigned id, unsigned modifiers, unsigned key);

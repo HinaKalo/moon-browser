@@ -8,7 +8,7 @@
   "contributes": {
     "commands": [
       {"id": "inspector", "label": "打开网页开发者工具", "menu": "developer", "shortcut": "F12"},
-      {"id": "console", "label": "打开网页控制台", "menu": "developer", "shortcut": "Ctrl+Shift+J"},
+      {"id": "console", "label": "打开网页控制台", "menu": "developer", "siteMenu": true, "shortcut": "Ctrl+Shift+J"},
       {"id": "resources", "label": "查看网页资源和站点数据", "menu": "developer"}
     ]
   },

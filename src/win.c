@@ -510,7 +510,14 @@ static void paint_chrome(Canvas c,int width,int height) {
     int address_x=address_left(), address_w=address_right(width)-address_x;
     fill(c,address_x,ADDRESS_TOP,address_w,ADDRESS_HEIGHT,GetFocus()==address?theme->accent:theme->line,8);
     fill(c,address_x+1,ADDRESS_TOP+1,address_w-2,ADDRESS_HEIGHT-2,theme->field,7);
-    text_at(c,L"\x2315",address_x+3,ADDRESS_TOP,24,ADDRESS_HEIGHT,theme->muted,true);
+    if (moon_tab_flags(moon_active_index()) & MOON_TAB_HAS_SITE) {
+        if (pointed(address_x+3,ADDRESS_TOP+4,24,24))
+            fill(c,address_x+3,ADDRESS_TOP+4,24,24,theme->soft,5);
+        fill(c,address_x+8,ADDRESS_TOP+12,14,1,theme->text,0);
+        fill(c,address_x+8,ADDRESS_TOP+19,14,1,theme->text,0);
+        ellipse(c,address_x+11,ADDRESS_TOP+10,5,5,theme->text);
+        ellipse(c,address_x+16,ADDRESS_TOP+17,5,5,theme->text);
+    } else text_at(c,L"\x2315",address_x+3,ADDRESS_TOP,24,ADDRESS_HEIGHT,theme->muted,true);
     if (private_window) {
         const int badge=address_right(width)-67;
         fill(c,badge,ADDRESS_TOP+4,62,ADDRESS_HEIGHT-8,theme->soft,6);
@@ -740,6 +747,36 @@ static void plugin_menu_item(HMENU menu, size_t plugin, size_t entry, bool enabl
     const unsigned id=MENU_PLUGIN_BASE+(unsigned)plugin*MENU_PLUGIN_STRIDE+MENU_PLUGIN_ACTIONS+(unsigned)entry;
     AppendMenuW(menu,MF_STRING|(enabled?0:MF_GRAYED),id,action);
 }
+
+static bool site_menu(HWND hwnd) {
+    MoonSiteContext site;
+    if (!moon_site_context(&site)) return false;
+    wchar_t origin[320];
+    if (!moon_utf16(site.origin,origin,ARRAYSIZE(origin))) return false;
+    HMENU popup=CreatePopupMenu();
+    if (!popup) return false;
+    AppendMenuW(popup,MF_STRING|MF_GRAYED,0,origin);
+    if (!strncmp(site.origin,"http://",7)) AppendMenuW(popup,MF_STRING|MF_GRAYED,0,L"HTTP · 未加密");
+
+    const int header=GetMenuItemCount(popup);
+    for (size_t i=0;i<moon_plugin_count();++i)
+        for (size_t j=0;j<moon_plugin_action_count(i);++j)
+            if (moon_plugin_action_site_menu(i,j)) plugin_menu_item(popup,i,j,true);
+    if (GetMenuItemCount(popup)>header) InsertMenuW(popup,header,MF_BYPOSITION|MF_SEPARATOR,0,NULL);
+
+    RECT button=rectangle(address_left()+3,ADDRESS_TOP,24,ADDRESS_HEIGHT);
+    MapWindowPoints(hwnd,NULL,(POINT *)&button,2);
+    TPMPARAMS placement={.cbSize=sizeof(placement),.rcExclude=button};
+    const UINT command=TrackPopupMenuEx(popup,TPM_RETURNCMD|TPM_NONOTIFY|TPM_TOPALIGN|TPM_LEFTALIGN,
+        button.left,button.bottom,hwnd,&placement);
+    DestroyMenu(popup);
+    if (command>=MENU_PLUGIN_BASE) {
+        const UINT value=command-MENU_PLUGIN_BASE, offset=value%MENU_PLUGIN_STRIDE;
+        if (offset>=MENU_PLUGIN_ACTIONS) moon_site_menu_run(&site,value/MENU_PLUGIN_STRIDE,offset-MENU_PLUGIN_ACTIONS);
+    }
+    return true;
+}
+
 static void plugin_command_groups(HMENU popup, size_t count) {
     static const wchar_t *labels[MOON_MENU_COUNT]={
         [MOON_MENU_PAGE]=L"标签与页面",
@@ -986,6 +1023,7 @@ static void click(HWND hwnd,int psx,int psy) {
         if (x>=left && x<left+31) moon_command(MOON_BACK,0,NULL);
         else if (x>=left+34 && x<left+65) moon_command(MOON_FORWARD,0,NULL);
         else if (x>=left+68 && x<left+99) moon_command(MOON_RELOAD,0,NULL);
+        else if (within(x,y,address_left()+3,ADDRESS_TOP,24,ADDRESS_HEIGHT) && site_menu(hwnd)) return;
         else if (x>=address_left() && x<address_right(width)) moon_shell_focus_address();
         return;
     }
@@ -1222,6 +1260,8 @@ static bool keyboard(MSG *msg) {
     if (msg->wParam == VK_F5 || (ctrl && msg->wParam == 'R')) { moon_command(MOON_RELOAD,0,NULL); return true; }
     if (alt && msg->wParam == VK_LEFT) { moon_command(MOON_BACK,0,NULL); return true; }
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
+    if (modifiers==MOD_ALT && msg->wParam=='I' && !moon_ime_composing(msg->hwnd))
+        return repeated || site_menu(frame);
     if ((ctrl || alt || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
         moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
     return false;

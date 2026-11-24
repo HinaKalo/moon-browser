@@ -42,7 +42,8 @@ const Tab = struct {
     has_document: bool = false,
     extension: bool = false,
     restoring_history: bool = false,
-    popup_origin_ready: bool = false,
+    document_committed: bool = false,
+    navigation: u64 = 0,
     history_visit: ?u32 = null,
     download_count: usize = 0,
     activity: bool = false,
@@ -259,7 +260,8 @@ fn detach(tab: *Tab) void {
     site_data.invalidate(tab.id);
     page_source.invalidate(tab.id);
     popups.clear(tab.id);
-    tab.popup_origin_ready = false;
+    tab.document_committed = false;
+    tab.navigation +%= 1;
     if (find_tab == tab.id) moon_find_dismiss(false);
     const view = tab.view orelse return;
     tab.view = null;
@@ -1195,7 +1197,8 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             site_data.invalidate(id);
             page_source.invalidate(id);
             popups.invalidate(id);
-            tab.popup_origin_ready = false;
+            tab.document_committed = false;
+            tab.navigation +%= 1;
             if (find_tab == id) moon_find_dismiss(true);
             tab.loading = true;
             tab.loaded = false;
@@ -1203,7 +1206,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         },
         native.MOON_COMMITTED => {
             page_source.invalidate(id);
-            tab.popup_origin_ready = true;
+            tab.document_committed = true;
             tab.dirty = false;
             tab.has_document = true;
             tab.deadline = 0;
@@ -1247,6 +1250,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         native.MOON_SAME_DOCUMENT => {
             site_data.invalidate(id);
             page_source.invalidate(id);
+            tab.navigation +%= 1;
             sync(tab);
             if (!tab.extension and !tab.restoring_history and plugins.systemEnabled(.@"history.manage")) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
         },
@@ -1254,7 +1258,8 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             site_data.closed(id);
             page_source.closed(id);
             popups.clear(id);
-            tab.popup_origin_ready = false;
+            tab.document_committed = false;
+            tab.navigation +%= 1;
             if (find_tab == id) {
                 find_tab = 0;
                 find_owner[0] = 0;
@@ -1355,7 +1360,30 @@ export fn moon_tab_flags(index: usize) c_uint {
             @as(c_uint,native.MOON_TAB_CAN_PIN) else 0) |
         (if (tab.muted or (!tab.extension and safeURL(slice(&tab.url)))) @as(c_uint,native.MOON_TAB_CAN_MUTE) else 0) |
         (if (canDuplicate(tab) and safeURL(slice(&tab.url))) @as(c_uint,native.MOON_TAB_CAN_DUPLICATE) else 0) |
-        (if (tab.has_document and !tab.extension and safeURL(slice(&tab.url))) @as(c_uint,native.MOON_TAB_CAN_COPY_ADDRESS) else 0);
+        (if (tab.has_document and !tab.extension and safeURL(slice(&tab.url))) @as(c_uint,native.MOON_TAB_CAN_COPY_ADDRESS) else 0) |
+        (if (hasSite(tab)) @as(c_uint,native.MOON_TAB_HAS_SITE) else 0);
+}
+
+fn hasSite(tab: *const Tab) bool {
+    return tab.document_committed and tab.phase == .live and !tab.extension and tab.view != null and safeURL(slice(&tab.url));
+}
+
+export fn moon_site_context(site: *native.MoonSiteContext) bool {
+    if (stopped or count == 0) return false;
+    const tab = &tabs[active];
+    if (!hasSite(tab)) return false;
+    var url: [4096:0]u8 = @splat(0);
+    native.moon_engine_committed_url(tab.view.?,&url,url.len);
+    const origin = popups.origin(slice(&url)) orelse return false;
+    site.* = .{ .tab_id=tab.id, .navigation=tab.navigation, .origin=origin[0..site.origin.len].* };
+    return true;
+}
+
+export fn moon_site_menu_run(site: *const native.MoonSiteContext, index: usize, command: usize) void {
+    if (stopped or count == 0 or !plugins.siteMenuVisible(index,command)) return;
+    const tab = &tabs[active];
+    if (!hasSite(tab) or tab.id != site.tab_id or tab.navigation != site.navigation) return;
+    plugins.command(index,command,tabSnapshot());
 }
 export fn moon_tab_id(index: usize) u64 {
     return if (index<count) tabs[index].id else 0;
@@ -1599,9 +1627,9 @@ export fn moon_web_popup(source: u64, opener: [*c]const u8, destination: [*c]con
     const committed = popups.origin(slice(opener)) orelse return;
     const enabled = !native.moon_shell_private() and plugins.systemEnabled(.@"popups.manage");
     const rule = if (enabled) popups.mode(slice(&committed)) else .automatic;
-    if (rule != .block and (gesture or (rule == .allow and tabs[active].popup_origin_ready))) {
+    if (rule != .block and (gesture or (rule == .allow and tabs[active].document_committed))) {
         if (popup[0] == 0 and count < tabs.len) _ = copy(&popup,target);
-    } else if (enabled and tabs[active].popup_origin_ready and popups.blocked(source,target)) {
+    } else if (enabled and tabs[active].document_committed and popups.blocked(source,target)) {
         native.moon_shell_toast("已拦截弹窗","可在「… → 隐私与安全 → 管理网站弹窗」查看并打开一次。");
     }
 }
@@ -1610,7 +1638,7 @@ export fn moon_popups_open(owner: [*c]const u8, source: u64) bool {
     if (stopped or count == 0 or tabs[active].id != source or native.moon_shell_private()) return false;
     const tab = &tabs[active];
     var origin: popups.Origin = @splat(0);
-    if (!tab.extension and tab.popup_origin_ready) {
+    if (!tab.extension and tab.document_committed) {
         if (tab.view) |view| {
             var url: [4096:0]u8 = @splat(0);
             native.moon_engine_committed_url(view,&url,url.len);
@@ -1780,6 +1808,10 @@ export fn moon_reading_zoom(id: u64, action: c_int) c_uint {
 
 export fn moon_plugin_action_menu(index: usize, command: usize) c_uint {
     return plugins.menuLocation(index,command);
+}
+
+export fn moon_plugin_action_site_menu(index: usize, command: usize) bool {
+    return plugins.siteMenuVisible(index,command);
 }
 export fn moon_plugin_key(modifiers: c_uint, key: c_uint, repeated: bool) bool {
     return !stopped and count!=0 and plugins.browserShortcut(modifiers,key,repeated,tabSnapshot());

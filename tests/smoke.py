@@ -55,6 +55,7 @@ class Fixture(BaseHTTPRequestHandler):
     change_site_data_entry = Event()
     site_data_entry_changed = Event()
     change_page_source = Event()
+    navigate_from_site_menu = Event()
     page_source_requests = 0
     popup_attempts = set()
     popup_destinations = set()
@@ -142,6 +143,8 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"ok", "text/plain"
         elif path == "/page-source-navigation":
             data, content_type = (b"change" if self.change_page_source.is_set() else b"wait"), "text/plain"
+        elif path == "/site-menu-navigation":
+            data, content_type = (b"change" if self.navigate_from_site_menu.is_set() else b"wait"), "text/plain"
         elif path.startswith("/popup-attempt/"):
             self.popup_attempts.add(path.removeprefix("/popup-attempt/"))
             data, content_type = b"ok", "text/plain"
@@ -178,6 +181,11 @@ class Fixture(BaseHTTPRequestHandler):
             if name == "中文":
                 self.seen_unicode.set()
             demo = ""
+            if name == "site-menu-contract":
+                demo = ('<script>const poll=setInterval(async()=>{'
+                        'const response=await fetch("/site-menu-navigation",{cache:"no-store"});'
+                        'if(await response.text()==="change"){clearInterval(poll);location.replace("/page/site-menu-after");}'
+                        '},120);</script>')
             if name == "initial":
                 example = Path(__file__).resolve().parent.parent / "docs-site" / "public" / "lua-demo.html"
                 markup = example.read_text(encoding="utf-8").split("<main>", 1)[1].split("</main>", 1)[0]
@@ -554,6 +562,8 @@ def run_win32(exe, base, root):
     user.RegisterHotKey.argtypes = [wt.HWND,ctypes.c_int,wt.UINT,wt.UINT]
     user.UnregisterHotKey.argtypes = [wt.HWND,ctypes.c_int]
     user.GetMenuItemCount.argtypes = [wt.HMENU]
+    user.GetMenuState.argtypes = [wt.HMENU,wt.UINT,wt.UINT]
+    user.GetMenuState.restype = wt.UINT
     user.GetMenuStringW.argtypes = [wt.HMENU,wt.UINT,wt.LPWSTR,ctypes.c_int,wt.UINT]
     user.GetSubMenu.argtypes = [wt.HMENU,ctypes.c_int]
     user.GetSubMenu.restype = wt.HMENU
@@ -576,6 +586,7 @@ def run_win32(exe, base, root):
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     has_bulk_clear = downloads.exists() and "clear-completed" in (downloads.parent / "downloads.html").read_text(encoding="utf-8")
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
+    has_site_menu = site_data.exists() and json.loads(site_data.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"][0].get("siteMenu")
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
     popups = exe.parent / "plugins" / "popups" / "MoonPopups.exe"
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
@@ -1028,6 +1039,8 @@ def run_win32(exe, base, root):
         fixture.mkdir(parents=True)
         manifest = json.loads(commands.with_name("plugin.json").read_text(encoding="utf-8"))
         manifest.update(id="moon.command-fixture",name="命令唤醒验收")
+        if has_site_menu:
+            next(command for command in manifest["contributes"]["commands"] if command["id"] == "hello")["siteMenu"] = True
         (fixture / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
         shutil.copyfile(commands,fixture / commands.name)
         page = commands.with_name("commands.html").read_text(encoding="utf-8")
@@ -2033,7 +2046,7 @@ def run_win32(exe, base, root):
                 if result.get("error"):
                     raise RuntimeError(result["error"])
 
-            def native_entries(trigger=None, choose=None):
+            def native_entries(trigger=None, choose=None, before_choose=None, popup_at=None):
                 dimensions = wt.RECT()
                 user.GetClientRect(frame,ctypes.byref(dimensions))
                 if trigger:
@@ -2050,6 +2063,11 @@ def run_win32(exe, base, root):
                     return None
                 popup = wait_for(open_menu,"The native main menu did not open")
                 try:
+                    if popup_at:
+                        bounds = wt.RECT()
+                        user.GetWindowRect(popup,ctypes.byref(bounds))
+                        if abs(bounds.left-popup_at.x)>px(16) or abs(bounds.top-popup_at.y)>px(16):
+                            raise RuntimeError(f"Site menu is not anchored to the address button: {bounds.left}, {bounds.top}")
                     handle = user.SendMessageW(popup,0x01E1,0,0)  # MN_GETHMENU
                     if user.GetMenuItemCount(handle)<1:
                         raise RuntimeError("Could not read the native main menu entries")
@@ -2065,15 +2083,67 @@ def run_win32(exe, base, root):
 
                     result = entries(handle)
                     if choose:
-                        labels = [label for label in result if label]
-                        for _ in range(labels.index(choose)+1):
-                            user.PostMessageW(popup,0x0100,0x28,1)  # WM_KEYDOWN / VK_DOWN
+                        menu_count = user.GetMenuItemCount(handle)
+                        for position in range(menu_count):
+                            label = ctypes.create_unicode_buffer(300)
+                            user.GetMenuStringW(handle,position,label,len(label),0x400)
+                            if label.value == choose:
+                                break
+                        else:
+                            raise RuntimeError(f"Native menu entry {choose!r} was missing: {result}")
+                        if before_choose:
+                            before_choose()
+                        for _ in range(menu_count):
+                            user.SendMessageW(popup,0x0100,0x28,1)  # WM_KEYDOWN / VK_DOWN
+                            if user.GetMenuState(handle,position,0x400)&0x80:  # MF_HILITE
+                                break
+                        else:
+                            raise RuntimeError(f"Native menu entry {choose!r} could not be selected")
                         user.PostMessageW(popup,0x0100,0x0D,1)
                         wait_for(lambda: not open_menu(),"Selecting the native menu item did not dismiss the menu")
                     return result
                 finally:
                     user.PostMessageW(frame,0x001F,0,0)  # WM_CANCELMODE
                     wait_for(lambda: not open_menu(),"Main menu did not dismiss")
+
+            if has_site_menu:
+                target = base + "/page/site-menu-contract"
+                moved = base + "/page/site-menu-after"
+                set_control(edit,target)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),"Site command fixture did not load")
+                edit_bounds = wt.RECT()
+                user.GetWindowRect(edit,ctypes.byref(edit_bounds))
+                icon = wt.POINT(edit_bounds.left-px(16),edit_bounds.top+px(10))
+                anchor = wt.POINT(edit_bounds.left-px(26),edit_bounds.bottom+px(3))
+                user.ScreenToClient.argtypes = [wt.HWND,ctypes.POINTER(wt.POINT)]
+                user.ScreenToClient(frame,ctypes.byref(icon))
+
+                def click_site_menu():
+                    click(icon.x,icon.y)
+
+                # Text in the address control may have been edited without navigating.
+                set_control(edit,"https://uncommitted.invalid/")
+                site_entries = native_entries(trigger=click_site_menu,popup_at=anchor)
+                expected_site = {base,"HTTP · 未加密","管理网站弹窗","查看当前站点数据","查看网页源代码\tCtrl+Shift+7",
+                                 "打开网页控制台\tCtrl+Shift+J","显示 Moon 命令提示"}
+                if not expected_site.issubset(site_entries) or "运行站点数据验收" in site_entries:
+                    raise RuntimeError(f"Unexpected entries in the site menu: {site_entries}")
+
+                def navigate_while_open():
+                    Fixture.navigate_from_site_menu.set()
+                    wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(moved,)),"The site did not navigate while its menu was open")
+
+                native_entries(trigger=click_site_menu,choose="查看当前站点数据",before_choose=navigate_while_open)
+                sleep(0.45)
+                if read_address() == "extension://moon.site-data/site-data.html":
+                    raise RuntimeError("A stale site menu command used the newly navigated page")
+                native_entries(trigger=lambda: user.PostMessageW(edit,0x0104,ord('I'),0x20000001),choose="查看当前站点数据")
+                try:
+                    wait_for(lambda: read_address()=="extension://moon.site-data/site-data.html","The site menu did not execute the real site data plugin")
+                except RuntimeError as error:
+                    raise RuntimeError(f"{error}: {read_address()!r}") from error
+                print("site_menu=ok address_anchor=ok committed_origin=ok contribution_grant=ok stale_navigation=ok keyboard=ok",flush=True)
 
             groups = native_entries()
             if "管理插件" not in groups:

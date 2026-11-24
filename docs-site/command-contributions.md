@@ -12,6 +12,12 @@
 
 随包插件启用后显示声明的分组入口。外部插件需由用户授权 `ui.commands` 才能显示分组入口。可声明的 `shortcut` 列在 [插件清单 Schema](https://github.com/HinaKalo/moon-browser/blob/main/sdk/plugin.schema.json) 中。
 
+## 站点菜单
+
+从 0.1.0-preview.32 起，打开 HTTP 或 HTTPS 网页后，可点击地址栏左侧的调节图标，或按 `Alt+I` 打开站点菜单。菜单会显示网页实际加载的来源，并提供站点数据、网站弹窗、网页源码和控制台等相关命令。
+
+在命令清单添加 `"siteMenu": true`，可同时把命令放到站点菜单。普通插件需获得 `ui.commands` 授权。点击时仍调用 `commands.run`，标题和 URL 沿用 `tabs.read` 的授权。切换网页或关闭标签后，先前打开的菜单无法再执行命令。`ui.menu.add` 和 `ui.menu.remove` 仍管理「…」主菜单。
+
 ## 用户配置快捷键
 
 从 0.1.0-preview.29 起，在「… → 管理插件」选择已启用的插件，在「命令与快捷键」中录制组合键并保存。支持 `Ctrl+Shift` 或 `Alt+Shift` 加字母或数字。每条命令可以独立设置，浏览器保留组合与已经分配的组合会提示冲突。恢复原快捷键会回到插件原有的设置。

@@ -39,6 +39,7 @@
               "label": { "type": "string", "minLength": 1, "maxLength": 255 },
               "interactive": { "type": "boolean" },
               "menu": { "enum": ["page", "library", "privacy", "developer", "extensions"] },
+              "siteMenu": { "type": "boolean", "default": false },
               "shortcut": { "enum": ["Ctrl+H", "F12", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+Shift+T", "Ctrl+Shift+Delete", "Ctrl+Shift+M", "Ctrl+Shift+N", "Ctrl+U"] }
             }
           }
