@@ -808,6 +808,7 @@ fn sync(tab: *Tab) void {
 }
 fn tabProtection(tab: *const Tab) ?sdk.TaskProtection {
     if (count != 0 and site_data.protected(tab.id,tabs[active].id)) return .siteInspection;
+    if (tab.view) |view| if (native.moon_engine_inspecting(view)) return .developerTools;
     if (tab.download_count != 0) return .download;
     if (tab.activity) return .media;
     if (tab.unsafe_history) return .nonGet;
@@ -830,11 +831,11 @@ export fn moon_userscript_reload_active(id: [*c]const u8) c_int {
     native.moon_engine_reload(view);
     return native.MOON_RELOAD_OK;
 }
-export fn moon_devtools_open(panel: c_int, tab_id: u64) bool {
+export fn moon_devtools_open(panel: c_int, independent: bool, tab_id: u64) bool {
     if (stopped or count == 0 or tabs[active].id != tab_id) return false;
     const tab = &tabs[active];
     if (tab.extension or !tab.has_document or !safeURL(slice(&tab.url))) return false;
-    return if (tab.view) |view| native.moon_engine_inspect(view,panel) else false;
+    return if (tab.view) |view| native.moon_engine_inspect(view,panel,independent) else false;
 }
 fn sampleMemory() u64 {
     process_count = native.moon_memory_samples(&process_samples[0],process_samples.len);
@@ -900,6 +901,7 @@ fn maintenance() void {
     if (pins_save_at) |save_at| {
         if (now>=save_at and !savePinnedTabs()) pins_save_at = now+5000;
     }
+    native.moon_engine_update_inspectors();
     downloads.flush();
     site_data.tick(now);
     page_source.tick(now);
@@ -1716,7 +1718,7 @@ export fn moon_site_data_action(panel: u64, id: [*c]const u8, inspector: bool) b
     if (!inspector) return site_data.request(view);
     if (!plugins.systemEnabled(.@"page.inspect")) return false;
     chooseTab(index,true);
-    return native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.resources));
+    return native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.resources),false);
 }
 
 export fn moon_site_data_update(panel: u64, id: [*c]const u8, session: bool, entry: u32, generation: u64,

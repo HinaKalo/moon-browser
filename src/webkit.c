@@ -73,6 +73,7 @@ extern void WKHTTPCookieStoreDeleteAllCookies(WKHTTPCookieStoreRef, void *, void
     X(WKScriptMessageGetFrameInfo) X(WKCompletionListenerComplete) \
     X(WKPreferencesSetDeveloperExtrasEnabled) \
     X(WKPageGetInspector) X(WKInspectorShow) X(WKInspectorShowConsole) X(WKInspectorShowResources) \
+    X(WKInspectorIsVisible) X(WKInspectorIsAttached) X(WKInspectorAttach) X(WKInspectorDetach) X(WKInspectorClose) \
     X(WKPageGetMainFrame) X(WKPageGetSourceForFrame) X(WKStringGetUTF8CStringNonStrict) \
     X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
     X(WKPageSetPageFindClient) X(WKPageFindString) X(WKPageHideFindUI) \
@@ -102,11 +103,17 @@ static int test_download_result;
 static bool filter_bundle_available;
 static WKStringRef current_request_policy;
 
+typedef enum { INSPECTOR_KEEP, INSPECTOR_DOCK, INSPECTOR_WINDOW } InspectorPlacement;
+
 struct MoonView {
     WKViewRef view;
     WKPageRef page;
     WKPreferencesRef view_preferences;
-    HWND hwnd;
+    HWND surface, hwnd;
+    WKInspectorRef inspector;
+    InspectorPlacement inspector_placement;
+    uint64_t inspector_deadline;
+    bool docked;
     uint64_t token;
     uintptr_t extension_serial;
     WKUserContentControllerRef extension_controller;
@@ -588,10 +595,13 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
     // WebKit forwards scripted requests to our native policy, which decides whether to open a tab.
     wk.WKPreferencesSetJavaScriptCanOpenWindowsAutomatically(view->view_preferences,address==NULL);
     wk.WKPageConfigurationSetPreferences(config,view->view_preferences);
-    RECT bounds;
+    RECT bounds={0};
     HWND parent = moon_shell_content();
     GetClientRect(parent,&bounds);
-    view->view = wk.WKViewCreate(bounds,config,parent);
+    view->surface = CreateWindowExW(0,L"Static",NULL,WS_CHILD|WS_CLIPCHILDREN|WS_CLIPSIBLINGS,
+        0,0,bounds.right,bounds.bottom,parent,NULL,GetModuleHandleW(NULL),NULL);
+    if (!view->surface) goto fail;
+    view->view = wk.WKViewCreate(bounds,config,view->surface);
     if (!view->view) goto fail;
     view->page = wk.WKViewGetPage(view->view);
     view->hwnd = wk.WKViewGetWindow(view->view);
@@ -622,11 +632,12 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
     }
     wk.WKPageSetPageUIClient(view->page,&ui.base);
     wk.WKPageListenForLayoutMilestones(view->page,kWKDidFirstVisuallyNonEmptyLayout);
-    ShowWindow(view->hwnd,SW_HIDE);
+    ShowWindow(view->hwnd,SW_SHOWNA);
     return view;
 fail:
     release(config);
     release(view->view);
+    if (view->surface) DestroyWindow(view->surface);
     release(view->extension_controller);
     release(view->view_preferences);
     free(view->extension_address);
@@ -677,15 +688,16 @@ void moon_engine_close(MoonView *view) {
     wk.WKPageSetPageUIClient(view->page,NULL);
     wk.WKPageSetPageFindClient(view->page,NULL);
     if (!view->extension_address && filter_bundle_available) wk.WKPageSetPageInjectedBundleClient(view->page,NULL);
+    if (view->inspector) wk.WKInspectorClose(view->inspector);
     wk.WKPageClose(view->page);
-    if (IsWindow(view->hwnd)) DestroyWindow(view->hwnd);
+    DestroyWindow(view->surface);
     release(view->view);
     release(view->view_preferences);
     free(view->extension_address);
     free(view);
 }
 void moon_engine_show(MoonView *view, bool visible) {
-    ShowWindow(view->hwnd,visible ? SW_SHOWNA : SW_HIDE);
+    ShowWindow(view->surface,visible ? SW_SHOWNA : SW_HIDE);
     wk.WKViewSetIsInWindow(view->view,visible);
     if (visible && GetForegroundWindow() == moon_shell_window()) SetFocus(view->hwnd);
 }
@@ -717,17 +729,95 @@ unsigned moon_engine_zoom(MoonView *view) {
     const double factor = wk.WKPageGetPageZoomFactor(view->page);
     return factor >= 0.1 && factor <= 10.0 ? (unsigned)(factor * 100.0 + 0.5) : 100;
 }
-bool moon_engine_inspect(MoonView *view, int panel) {
-    if (view->extension_address) return false;
+static bool can_dock(MoonView *view) {
+    RECT area;
+    if (!GetClientRect(view->surface,&area)) return false;
+    const UINT dpi=GetDpiForWindow(view->surface);
+    return area.right>=MulDiv(500,dpi,96) && area.bottom>=MulDiv(334,dpi,96);
+}
+
+static void resize_view(MoonView *view, bool dpi_changed) {
+    RECT area;
+    if (!GetClientRect(view->surface,&area)) return;
+    if (view->docked && !can_dock(view)) {
+        wk.WKInspectorDetach(view->inspector);
+        view->docked=wk.WKInspectorIsAttached(view->inspector);
+    }
+    // WebKit reserves space for its attached sibling on WM_WINDOWPOSCHANGING.
+    MoveWindow(view->hwnd,0,0,area.right,area.bottom,TRUE);
+    if (dpi_changed) {
+        for (HWND child=GetWindow(view->surface,GW_CHILD); child; child=GetWindow(child,GW_HWNDNEXT)) {
+            RECT size;
+            if (GetClientRect(child,&size)) SendMessageW(child,WM_SIZE,SIZE_RESTORED,MAKELPARAM(size.right,size.bottom));
+        }
+    }
+}
+
+void moon_engine_resize_views(bool dpi_changed) {
+    RECT area;
+    if (!GetClientRect(moon_shell_content(),&area)) return;
+    for (MoonView *view=views; view; view=view->next) {
+        MoveWindow(view->surface,0,0,area.right,area.bottom,TRUE);
+        resize_view(view,dpi_changed);
+    }
+}
+
+bool moon_engine_page_window(void *window) {
+    for (MoonView *view=views; view; view=view->next)
+        if (window==view->hwnd || IsChild(view->hwnd,window)) return true;
+    return false;
+}
+
+static void update_inspector(MoonView *view, uint64_t now) {
+    if (!view->inspector) return;
+    const bool visible=wk.WKInspectorIsVisible(view->inspector);
+    const bool opening=visible && view->inspector_placement!=INSPECTOR_KEEP;
+    if (view->inspector_placement!=INSPECTOR_KEEP) {
+        if (visible) {
+            const bool attached=wk.WKInspectorIsAttached(view->inspector);
+            if (view->inspector_placement==INSPECTOR_DOCK && !attached && can_dock(view)) wk.WKInspectorAttach(view->inspector);
+            if (view->inspector_placement==INSPECTOR_WINDOW && attached) wk.WKInspectorDetach(view->inspector);
+        }
+        if (visible || now>=view->inspector_deadline) view->inspector_placement=INSPECTOR_KEEP;
+    }
+    const bool docked=visible && wk.WKInspectorIsAttached(view->inspector);
+    if (docked!=view->docked) {
+        view->docked=docked;
+        resize_view(view,false);
+    }
+    if (opening && view->docked && GetForegroundWindow()==moon_shell_window()) {
+        for (HWND child=GetWindow(view->surface,GW_CHILD); child; child=GetWindow(child,GW_HWNDNEXT)) {
+            if (child==view->hwnd || !IsWindowVisible(child)) continue;
+            SetFocus(child);
+            break;
+        }
+    }
+}
+
+void moon_engine_update_inspectors(void) {
+    const uint64_t now=moon_clock();
+    for (MoonView *view=views; view; view=view->next) update_inspector(view,now);
+}
+
+bool moon_engine_inspecting(MoonView *view) {
+    return view->inspector && (view->inspector_placement!=INSPECTOR_KEEP || wk.WKInspectorIsVisible(view->inspector));
+}
+
+bool moon_engine_inspect(MoonView *view, int panel, bool independent) {
+    if (view->extension_address || panel<0 || panel>2) return false;
     wk.WKPreferencesSetDeveloperExtrasEnabled(view->view_preferences,true);
     WKInspectorRef inspector = wk.WKPageGetInspector(view->page);
     if (!inspector) return false;
+    const uint64_t now=moon_clock();
+    view->inspector=inspector;
+    view->inspector_placement=independent ? INSPECTOR_WINDOW : INSPECTOR_DOCK;
+    view->inspector_deadline=now+5000;
     switch (panel) {
         case 0: wk.WKInspectorShow(inspector); break;
         case 1: wk.WKInspectorShowConsole(inspector); break;
         case 2: wk.WKInspectorShowResources(inspector); break;
-        default: return false;
     }
+    update_inspector(view,now);
     return true;
 }
 

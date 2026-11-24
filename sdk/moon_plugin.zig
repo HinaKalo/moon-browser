@@ -111,7 +111,7 @@ pub const PrivacyStart = enum { started, cancelled, busy, unavailable };
 pub const PrivacyState = enum { idle, running, waitingForEngine, complete, incomplete };
 pub const PrivacyStatus = struct { state: PrivacyState, failed: PrivacySelection = .{} };
 pub const TaskTabPhase = enum(u32) { blank, live, dormant, crashed, restoring, failed };
-pub const TaskProtection = enum(u32) { current, loading, input, nonGet, download, media, siteInspection, internal };
+pub const TaskProtection = enum(u32) { current, loading, input, nonGet, download, media, siteInspection, internal, developerTools };
 pub const TaskTab = struct { id: []const u8, title: []const u8, phase: TaskTabPhase, pid: ?u32, protection: ?TaskProtection };
 pub const TaskProcess = struct { pid: u32, privateBytes: u64, tabs: u32, browser: bool };
 pub const TaskOverview = struct {
@@ -134,6 +134,7 @@ pub const ScriptSource = struct { sourceBase64: []const u8 };
 pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
 pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
 pub const InspectorPanel = enum { inspector, console, resources };
+pub const InspectorPlacement = enum { docked, window };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
 pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
 pub const HistoryPage = struct { visits: []const HistoryVisit, next: ?u32 };

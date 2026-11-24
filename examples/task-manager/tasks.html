@@ -90,7 +90,7 @@
   const find = id => document.getElementById(id);
   const phases = { blank: '新标签页', live: '运行中', dormant: '已卸载', crashed: '已崩溃', restoring: '正在恢复', failed: '加载失败' };
   const protections = { current: '当前标签', loading: '加载中', input: '有页面输入', nonGet: '有非 GET 导航',
-    download: '正在下载', media: '媒体播放或采集', siteInspection: '正在检查站点数据', internal: '内部页面' };
+    download: '正在下载', media: '媒体播放或采集', siteInspection: '正在检查站点数据', developerTools:'开发者工具已打开', internal: '内部页面' };
   const headers = { tabs: ['网页', '状态', 'PID', '操作'], processes: ['进程', 'PID', '关联标签', '私有提交内存'] };
   let view = 'tabs', offset = 0, generation = 0, callId = 0, nextOffset = null, busy = false, signature = '';
 

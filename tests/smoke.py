@@ -579,6 +579,8 @@ def run_win32(exe, base, root):
     profile = Path(preview_env(root)["MOON_BROWSER_PROFILE_DIR"])
     manager = exe.parent / "plugins" / "lua-manager" / "MoonLuaManager.exe"
     devtools = exe.parent / "plugins" / "devtools" / "MoonDevTools.exe"
+    docked_devtools = devtools.exists() and any(command["id"] == "window" for command in
+        json.loads(devtools.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"])
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
@@ -1273,6 +1275,16 @@ def run_win32(exe, base, root):
         def read_address():
             return read_control(edit)
 
+        def visible_children(parent):
+            child = None
+            while child := user.FindWindowExW(parent,child,None,None):
+                if user.IsWindowVisible(child):
+                    yield child
+
+        def visible_page_view():
+            surface = next(visible_children(content),None)
+            return next(visible_children(surface),None) if docked_devtools and surface else surface
+
         invoke("版本与更新")
         popup = wait_for(lambda: owned_window("#32770", "版本与更新"), "Compact update dialog did not open")
         popup_rect = wt.RECT()
@@ -1374,7 +1386,6 @@ def run_win32(exe, base, root):
         print(f"win32_unicode_address=ok resized_dpi={dpi} chrome_px={expected_chrome} fallback=GDI+")
         if devtools.exists():
             sleep(0.3)
-            invoke("打开网页控制台")
             def inspector_window():
                 candidate = None
                 while candidate := user.FindWindowExW(None, candidate, "WebInspectorUIProxyClass", None):
@@ -1383,14 +1394,56 @@ def run_win32(exe, base, root):
                     if owner.value == proc.pid and user.IsWindowVisible(candidate):
                         return candidate
                 return None
-            inspector = wait_for(inspector_window,"The system plugin did not open the WebKit inspector",20)
-            user.PostMessageW(inspector,0x0010,0,0)
-            wait_for(lambda: not inspector_window(),"Web Inspector did not close")
-            if history.exists():
-                user.PostMessageW(edit,0x0100,0x7B,1)  # F12 through the installed system plugin
-                inspector = wait_for(inspector_window,"F12 did not open the system inspector",20)
+            def close_independent_inspector():
+                inspector = wait_for(inspector_window,"The independent WebKit inspector did not open",20)
                 user.PostMessageW(inspector,0x0010,0,0)
-                wait_for(lambda: not inspector_window(),"Web Inspector opened via F12 did not close")
+                wait_for(lambda: not inspector_window(),"Web Inspector did not close")
+
+            if docked_devtools:
+                large = (px(1080),px(690))
+                user.SetWindowPos(frame,None,window_rect.left,window_rect.top,*large,0x0014)
+                surface = next(visible_children(content))
+                page = next(visible_children(surface))
+
+                def attached_inspector():
+                    return next((child for child in visible_children(surface) if child != page),None)
+
+                def covers_surface(panel):
+                    a,b,host = wt.RECT(),wt.RECT(),wt.RECT()
+                    user.GetWindowRect(page,ctypes.byref(a))
+                    user.GetWindowRect(panel,ctypes.byref(b))
+                    user.GetWindowRect(surface,ctypes.byref(host))
+                    return ((a.left,a.top,b.right,b.bottom)==(host.left,host.top,host.right,host.bottom)
+                            and ((a.bottom==b.top and a.right==b.right) or (a.right==b.left and a.bottom==b.bottom)))
+
+                invoke("打开网页控制台")
+                panel = wait_for(attached_inspector,"The console did not dock in the source tab",20)
+                wait_for(lambda: covers_surface(panel),"The dock and page overlap or leave a gap")
+                if inspector_window():
+                    raise RuntimeError("A separate inspector is still visible while the console is docked")
+                user.SetWindowPos(frame,None,window_rect.left+20,window_rect.top+10,px(970),px(610),0x0014)
+                wait_for(lambda: covers_surface(panel),"The dock lost its bounds on resize")
+                invoke("新建标签页")
+                wait_for(lambda: user.IsWindowVisible(home) and not user.IsWindowVisible(panel),"The dock leaked into another tab")
+                invoke("Moon fixture chrome-window")
+                wait_for(lambda: user.IsWindowVisible(panel) and covers_surface(panel),"The dock did not return to its own tab")
+                click(px(250),px(222))
+                invoke("在独立窗口打开开发者工具")
+                close_independent_inspector()
+                wait_for(lambda: not attached_inspector(),"The detached inspector remained in the tab")
+                user.PostMessageW(edit,0x0100,0x7B,1)  # F12 through the installed system plugin
+                wait_for(attached_inspector,"F12 did not dock the inspector",20)
+                user.SetWindowPos(frame,None,window_rect.left,window_rect.top,px(700),px(375),0x0014)
+                close_independent_inspector()
+                user.SetWindowPos(frame,None,window_rect.left,window_rect.top,
+                    window_rect.right-window_rect.left,window_rect.bottom-window_rect.top,0x0014)
+                print("inspector_docking=ok layout_reflow=ok tab_isolation=ok detach=ok narrow_fallback=ok",flush=True)
+            else:
+                invoke("打开网页控制台")
+                close_independent_inspector()
+                if history.exists():
+                    user.PostMessageW(edit,0x0100,0x7B,1)
+                    close_independent_inspector()
             print("devtools_system_plugin=ok", flush=True)
             invoke("插件市场")
             wait_for(lambda: read_address() == "moon://market/", "Browser did not open the built-in plugin market")
@@ -1899,7 +1952,7 @@ def run_win32(exe, base, root):
             closed_page("closed-item")
             close_first()
             closed_page("closed-protected")
-            web_view = user.FindWindowExW(content,None,None,None)
+            web_view = visible_page_view()
             if not web_view:
                 raise RuntimeError("Missing WebKit view for protected input exercise")
             user.PostMessageW(web_view,0x0102,ord('x'),1)  # WM_CHAR delivered to the protected page
@@ -1999,9 +2052,7 @@ def run_win32(exe, base, root):
             invoke("新建标签页")
             wait_for(lambda: user.IsWindowVisible(home),"Could not create the protected task tab")
             closed_page("task-protected")
-            protected_view = user.FindWindowExW(content,None,None,None)
-            while protected_view and not user.IsWindowVisible(protected_view):
-                protected_view = user.FindWindowExW(content,protected_view,None,None)
+            protected_view = visible_page_view()
             if not protected_view:
                 raise RuntimeError("The protected task's WebKit window was unavailable")
             user.PostMessageW(protected_view,0x0102,ord('x'),1)
@@ -2329,9 +2380,7 @@ def run_win32(exe, base, root):
                      "Closing the tabs below did not keep their source tab active")
 
             content = user.FindWindowExW(frame,None,"MoonContent",None)
-            view = user.FindWindowExW(content,None,None,None)
-            while view and not user.IsWindowVisible(view):
-                view = user.FindWindowExW(content,view,None,None)
+            view = visible_page_view()
             if not view:
                 raise RuntimeError("The duplicate's WebKit view was not visible")
             user.PostMessageW(view,0x0102,ord('x'),1)  # WM_CHAR makes the live tab protected

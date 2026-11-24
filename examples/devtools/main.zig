@@ -12,8 +12,10 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params != .object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
-    const panel = std.meta.stringToEnum(sdk.InspectorPanel,action) orelse return error.InvalidCommand;
-    const reply = try client.call(.@"devtools.open",.{ .panel=panel });
+    const independent = std.mem.eql(u8,action,"window");
+    const panel = if (independent) .inspector else std.meta.stringToEnum(sdk.InspectorPanel,action) orelse return error.InvalidCommand;
+    const placement: sdk.InspectorPlacement = if (independent) .window else .docked;
+    const reply = try client.call(.@"devtools.open",.{ .panel=panel, .placement=placement });
     const value = reply.get("result");
     try client.reply(id,sdk.CommandResult{ .message = if (value) |opened|
         if (opened == .bool and opened.bool) null else "请选择一个已加载的网页标签。"

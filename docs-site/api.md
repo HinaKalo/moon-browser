@@ -44,7 +44,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `lua.scripts.reloadActive` | `lua.scripts.manage` | 传入 `{ id }`。结果为 `reloaded`、`noMatchingPage` 或 `protectedPage`。含未提交输入、非 GET 历史、下载或媒体活动的标签受到保护。 |
 | `settings.read` | 本插件 | 返回本插件的设置对象。 |
 | `settings.write` | 本插件 | 传入 `{ value }` 写入最多 4 KiB 的 JSON 对象。 |
-| `devtools.open` | `page.inspect` | 传入 `{ panel }`。可选 `inspector`、`console`、`resources`。返回是否已为触发命令的当前网页发起打开工具的请求。 |
+| `devtools.open` | `page.inspect` | 传入 `{ panel, placement? }`。`panel` 可选 `inspector`、`console`、`resources`。`placement` 可选 `docked`（默认）或 `window`，空间不足时使用独立窗口。返回是否已发起打开请求。 |
 | `pageSource.open` | `page.source` | 从用户命令传入 `{}`，将插件专属页面与当前已加载的 HTTP(S) 主文档绑定并请求源码。返回是否接受请求。 |
 | `pageSource.status` | `page.source` | 由绑定的插件页面传入 `{}`。返回 `{ state, generation, url, bytes, truncated }`。未绑定时返回 `idle`，已绑定的状态包括 `pending`、`ready`、`stale` 和 `unavailable`。 |
 | `pageSource.read` | `page.source` | 由绑定的插件页面传入 `{ generation, offset }`。返回 `{ sourceBase64, next }`，每块最多 12 KiB UTF-8，首次从字节偏移 0 开始，`next` 为 `null` 时结束。请流式解码 UTF-8，字符可能跨块。 |

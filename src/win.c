@@ -1057,21 +1057,9 @@ static void click(HWND hwnd,int psx,int psy) {
     }
 }
 
-static void size_content_views(HWND parent, bool dpi_changed) {
-    RECT bounds;
-    GetClientRect(parent,&bounds);
-    for (HWND view=GetWindow(parent,GW_CHILD); view; view=GetWindow(view,GW_HWNDNEXT)) {
-        if (dpi_changed) {
-            // WebKit on Windows updates the viewport scale in WM_SIZE.
-            SendMessageW(view,WM_SIZE,SIZE_RESTORED,MAKELPARAM(bounds.right,bounds.bottom));
-        } else {
-            MoveWindow(view,0,0,bounds.right,bounds.bottom,TRUE);
-        }
-    }
-}
 static LRESULT CALLBACK content_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     if (msg == WM_SIZE) {
-        size_content_views(hwnd,false);
+        moon_engine_resize_views(false);
         return 0;
     }
     if (msg == WM_PAINT) {
@@ -1159,7 +1147,7 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             if (address && content) {
                 set_font();
                 layout();
-                size_content_views(content,true);
+                moon_engine_resize_views(true);
             }
             queue_presentation(hwnd);
             return 0;
@@ -1235,7 +1223,9 @@ static bool keyboard(MSG *msg) {
     const unsigned modifiers=(ctrl?MOD_CONTROL:0)|(alt?MOD_ALT:0)|(shift?MOD_SHIFT:0);
     static WPARAM captured_key;
     const bool repeated=(msg->lParam&(1L<<30))!=0;
-    if (IsChild(content,msg->hwnd)) {
+    const bool in_content=IsChild(content,msg->hwnd);
+    const bool in_page=in_content && moon_engine_page_window(msg->hwnd);
+    if (in_page) {
         if (repeated && captured_key==msg->wParam) return true;
         captured_key=0;
         if (moon_plugin_capture_key(modifiers,(unsigned)msg->wParam)) {
@@ -1262,6 +1252,7 @@ static bool keyboard(MSG *msg) {
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
     if (modifiers==MOD_ALT && msg->wParam=='I' && !moon_ime_composing(msg->hwnd))
         return repeated || site_menu(frame);
+    if (in_content && !in_page && msg->wParam!=VK_F12) return false;
     if ((ctrl || alt || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
         moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
     return false;
@@ -1375,7 +1366,7 @@ static int run_shell(int argc, wchar_t **argv) {
             !moon_ime_composing(msg.hwnd) && palette_key(&msg)) continue;
         if ((msg.hwnd==frame || IsChild(frame,msg.hwnd)) &&
             (msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) && (moon_find_key(&msg) || keyboard(&msg))) continue;
-        if (IsChild(content,msg.hwnd) && page_input(msg.message,msg.wParam))
+        if (page_input(msg.message,msg.wParam) && IsChild(content,msg.hwnd) && moon_engine_page_window(msg.hwnd))
             moon_command(MOON_INPUT,0,NULL);
         TranslateMessage(&msg);
         DispatchMessageW(&msg);

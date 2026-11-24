@@ -268,8 +268,9 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             break :write sdk.result(output,id,null);
         },
         .@"devtools.open" => inspect: {
-            const value = decode(struct { panel: sdk.InspectorPanel },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
-            break :inspect sdk.result(output,id,native.moon_devtools_open(@intCast(@intFromEnum(value.panel)),context.target_tab_id));
+            const value = decode(struct { panel: sdk.InspectorPanel, placement: sdk.InspectorPlacement = .docked },allocator,params) catch
+                return sdk.failure(output,id,.InvalidParams);
+            break :inspect sdk.result(output,id,native.moon_devtools_open(@intCast(@intFromEnum(value.panel)),value.placement==.window,context.target_tab_id));
         },
         .@"pageSource.open" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
