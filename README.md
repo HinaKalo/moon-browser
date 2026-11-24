@@ -5,7 +5,7 @@ Windows x64 原生浏览器开发预览。外壳和标签调度使用 Zig 0.17.1
 ## 从 GitHub 安装
 
 - **Portable ZIP**。完整解压到可写入的目录，运行 Start-MoonBrowser.cmd。首次启动从微软下载并校验 WebKit。浏览数据保存在同目录的 profile 文件夹中。
-- **Installer EXE**。运行安装程序，安装期间会下载并校验 WebKit。默认安装到当前用户的 Programs 目录，创建开始菜单快捷方式与卸载项。用户资料保存在 %LOCALAPPDATA%\MoonBrowser\profile。
+- **Installer EXE**。运行安装程序。相同版本的完整 WebKit 会从原安装目录复用。首次安装、引擎版本变化或文件缺失时会下载并校验 WebKit。默认安装到当前用户的 Programs 目录，创建开始菜单快捷方式与卸载项。用户资料保存在 %LOCALAPPDATA%\MoonBrowser\profile。
 
 两种发布包都需要在安装 WebKit 时联网。此版本为开发预览，WebKit 子进程以当前用户权限运行，请用于熟悉或受控的网站。
 
@@ -19,7 +19,7 @@ Windows x64 原生浏览器开发预览。外壳和标签调度使用 Zig 0.17.1
     .\build.ps1 verify
     .\build.ps1 release
 
-build 生成本地开发目录，package 打包本地开发用的自包含 ZIP。release 生成 GitHub 的两种发行包，安装时由用户直接从上游取得 WebKit。打开输出目录下的 MoonBrowser.exe。engine 目录需与 EXE 一起保留。
+build 生成本地开发目录，package 打包本地开发用的自包含 ZIP。release 生成 GitHub 的两种发行包，需要引擎时直接从上游取得 WebKit。打开输出目录下的 MoonBrowser.exe。engine 目录需与 EXE 一起保留。
 
 原生外壳默认使用亮色主题。侧栏标签可滚动，Ctrl+K 在命令面板中搜索标签和可用命令，Ctrl+B 收起或恢复侧栏，Ctrl+Shift+L 切换配色。Ctrl+L 聚焦地址栏。支持 Ctrl+T、Ctrl+W、Ctrl+Tab、Ctrl+Shift+Tab、Alt+← / → 和 F5。Ctrl+Shift+M 打开内存诊断。命令行可传入启动地址，也可用 --gdi 检查外壳回退。
 

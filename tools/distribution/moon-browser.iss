@@ -22,7 +22,7 @@ VersionInfoVersion={#WindowsVersion}
 WizardStyle=modern
 
 [Files]
-Source: "{#EngineUrl}"; DestName: "webkit.zip"; DestDir: "{app}\engine"; Hash: "{#EngineHash}"; ExternalSize: {#EngineBytes}; Flags: download extractarchive external ignoreversion recursesubdirs createallsubdirs
+Source: "{#EngineUrl}"; DestName: "webkit.zip"; DestDir: "{app}\engine"; Hash: "{#EngineHash}"; ExternalSize: {#EngineBytes}; Flags: download extractarchive external ignoreversion recursesubdirs createallsubdirs; Check: EngineDownloadRequired
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
@@ -30,3 +30,80 @@ Name: "{group}\Moon Browser"; Filename: "{app}\MoonBrowser.exe"; WorkingDir: "{a
 
 [Run]
 Filename: "{app}\MoonBrowser.exe"; Description: "Launch Moon Browser"; Flags: postinstall nowait skipifsilent
+
+[Code]
+const
+  EngineDirectory = $10;
+  EngineReparsePoint = $400;
+  InvalidFileAttributes = $FFFFFFFF;
+
+function EnginePathAttributes(const Path: String): LongWord;
+  external 'GetFileAttributesW@kernel32.dll stdcall';
+
+function SafeEngineTree(const Root: String; Depth: Integer): Boolean;
+var
+  Attr: LongWord;
+  Entry: TFindRec;
+begin
+  Attr := EnginePathAttributes(Root);
+  if Attr = InvalidFileAttributes then
+  begin
+    Result := True;
+    Exit;
+  end;
+  Result := False;
+  if (Depth > 32) or ((Attr and (EngineDirectory or EngineReparsePoint)) <> EngineDirectory) then Exit;
+  if FindFirst(AddBackslash(Root) + '*', Entry) then
+  begin
+    try
+      repeat
+        if (Entry.Name <> '.') and (Entry.Name <> '..') then
+        begin
+          if (Entry.Attributes and EngineReparsePoint) <> 0 then Exit;
+          if (Entry.Attributes and EngineDirectory) <> 0 then
+            if not SafeEngineTree(AddBackslash(Root) + Entry.Name, Depth + 1) then Exit;
+        end;
+      until not FindNext(Entry);
+    finally
+      FindClose(Entry);
+    end;
+  end;
+  Result := True;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if not SafeEngineTree(ExpandConstant('{app}\engine'), 0) then
+    Result := 'The WebKit directory contains an unsupported link or is not a regular directory.';
+end;
+
+function EngineFileMatches(const Root, RelativePath, ExpectedHash: String): Boolean;
+var
+  FileName: String;
+begin
+  FileName := AddBackslash(Root) + RelativePath;
+  Result := False;
+  if not FileExists(FileName) then Exit;
+  try
+    Result := CompareText(GetSHA256OfFile(FileName), ExpectedHash) = 0;
+  except
+    Log('Moon WebKit: could not read ' + RelativePath);
+  end;
+end;
+
+#include EngineIntegrityInclude
+
+function EngineDownloadRequired(): Boolean;
+var
+  Root: String;
+begin
+  Root := ExpandConstant('{app}\engine');
+  Result := True;
+  if DirExists(Root) and SafeEngineTree(Root, 0) then
+    Result := not EngineMatches(Root);
+  if Result then
+    Log('Moon WebKit: pinned engine missing or changed; download required.')
+  else
+    Log('Moon WebKit: reusing the installed pinned engine; no download.');
+end;

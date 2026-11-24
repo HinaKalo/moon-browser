@@ -2,21 +2,35 @@
 <html lang="zh-CN">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Moon Browser · Lua 用户脚本演示</title>
+<title>工单聚焦视图 · Moon Browser Lua 演示</title>
 <style>
   body { margin: 0; color: #19213c; background: #f4f6fb; font: 16px/1.6 system-ui, sans-serif; }
   main { max-width: 40rem; margin: clamp(2rem, 10vw, 6rem) auto; padding: 0 1.5rem; }
   h1 { line-height: 1.2; font-size: clamp(2rem, 6vw, 3rem); }
   #lua-status { border-left: .3rem solid #626c87; padding: .8rem 1rem; background: white; font-weight: 650; }
   #lua-status.success { border-color: #178157; color: #11623f; }
-  #demo-banner { margin: 1.5rem 0; padding: 1rem; border: 1px solid #e2c782; background: #fff5d9; }
+  #demo-banner { margin: 1.2rem 0; padding: .8rem 1rem; border: 1px solid #e2c782; background: #fff5d9; }
+  #ticket-list { list-style: none; padding: 0; }
+  #ticket-list li { border: 1px solid #d9deea; padding: .8rem 1rem; margin: .55rem 0; background: white; border-radius: .5rem; }
+  #ticket-list li.important { border-color: #a22a44; border-left-width: .3rem; color: #831f38; background: #fff4f5; font-weight: 650; }
+  #ticket-list small { display: block; opacity: .8; }
   a { color: #344db3; }
+  footer { margin-top: 1.5rem; }
 </style>
 <main>
-  <h1>Lua 用户脚本演示</h1>
+  <h1>工单聚焦视图</h1>
+  <p>这是一组示例工单。Lua 脚本会记住你的筛选偏好，并在每次打开这页时自动应用。</p>
   <p id="lua-status" role="status">Lua 脚本尚未运行</p>
-  <aside id="demo-banner">示例横幅。脚本运行后，这一栏会隐藏。</aside>
-  <p><a href="/welcome.user.lua" download>下载演示脚本</a>，从 Moon Browser 的「… → Lua 用户脚本」安装并授权，然后刷新本页。</p>
-  <p><a href="/lua-userscripts.html">查看脚本接口与匹配规则</a></p>
+  <aside id="demo-banner">系统公告：本月例行维护安排已更新。</aside>
+  <ul id="ticket-list">
+    <li data-state="open" data-priority="normal">补录冬季库存盘点<small>待处理 · 普通</small></li>
+    <li data-state="done" data-priority="normal">更新值班联系方式<small>已完成 · 普通</small></li>
+    <li data-state="open" data-priority="urgent">恢复失败的生产备份<small>待处理 · 紧急</small></li>
+    <li data-state="done" data-priority="normal">补发日报统计<small>已完成 · 普通</small></li>
+  </ul>
+  <footer>
+    <p><a href="/welcome.user.lua" download>下载工单聚焦脚本</a>，从 Moon Browser 的「… → Lua 用户脚本」安装并授权，然后刷新本页。</p>
+    <p><a href="/lua-userscripts.html">查看源码和网址匹配规则</a></p>
+  </footer>
 </main>
 </html>

@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory)] [string]$Artifact,
     [Parameter(Mandatory)] [string]$Work,
-    [Parameter(Mandatory)] [string]$EngineLock
+    [Parameter(Mandatory)] [string]$EngineLock,
+    [Parameter(Mandatory)] [string]$EngineManifest
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -27,6 +28,20 @@ foreach ($name in 'MoonBrowser.exe','README.md','THIRD-PARTY.md','engine.json','
 }
 [IO.File]::WriteAllText((Join-Path $payload 'release-mode'),'installer')
 
+# Identify older, unmarked installations by the verified engine files.
+$files = @(Get-Content -LiteralPath $EngineManifest -Raw | ConvertFrom-Json | Sort-Object path)
+if (!$files.Count) { throw 'The engine file manifest is empty.' }
+$checks = foreach ($file in $files) {
+    if ($file.path -notmatch '^[A-Za-z0-9_@. \\-]+$' -or [IO.Path]::IsPathRooted($file.path) -or
+        ($file.path -split '\\' | Where-Object { $_ -in '', '.', '..' }) -or $file.sha256 -notmatch '^[0-9a-f]{64}$') {
+        throw "Invalid engine file manifest entry: $($file.path)."
+    }
+    "  if not EngineFileMatches(Root, '$($file.path)', '$($file.sha256.ToLowerInvariant())') then Exit;"
+}
+$engineCheck = Join-Path $Work 'engine-check.iss'
+(@('function EngineMatches(const Root: String): Boolean;', 'begin', '  Result := False;') +
+    $checks + @('  Result := True;', 'end;')) | Set-Content -LiteralPath $engineCheck -Encoding ascii
+
 # Fetch the vendor's portable compiler into the managed build scratch directory.
 $compilerSetup = Join-Path $Work 'innosetup-6.7.4.exe'
 $compilerRoot = Join-Path $Work 'inno'
@@ -41,7 +56,8 @@ $compilerInstall = Start-Process -FilePath $compilerSetup -ArgumentList @('/PORT
 if ($compilerInstall.ExitCode) { throw "Portable compiler setup failed (exit $($compilerInstall.ExitCode))." }
 $iscc = Join-Path $compilerRoot 'ISCC.exe'
 & $iscc ('/DReleaseVersion=' + $version.name) ('/DWindowsVersion=' + $version.windows_version) ('/DPayloadDir=' + $payload) ('/DEngineUrl=' + $url.AbsoluteUri) `
-    ('/DEngineHash=' + $engine.sha256) ('/DEngineBytes=' + $engine.archive_bytes) "/O$Work" (Join-Path $PSScriptRoot 'moon-browser.iss')
+    ('/DEngineHash=' + $engine.sha256) ('/DEngineBytes=' + $engine.archive_bytes) "/DEngineIntegrityInclude=$engineCheck" `
+    "/O$Work" (Join-Path $PSScriptRoot 'moon-browser.iss')
 
 foreach ($name in 'Start-MoonBrowser.cmd','Install-Engine.ps1') {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $payload

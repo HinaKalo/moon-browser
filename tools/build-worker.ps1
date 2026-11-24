@@ -136,7 +136,7 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     [IO.Directory]::Move($stage, $artifact)
 }
 if ($Action -eq 'release') {
-    & (Join-Path $PSScriptRoot 'distribution\build-release.ps1') -Artifact $artifact -Work $work -EngineLock $EngineLock
+    & (Join-Path $PSScriptRoot 'distribution\build-release.ps1') -Artifact $artifact -Work $work -EngineLock $EngineLock -EngineManifest $contentManifest
 } elseif ($Action -in 'package','verify') {
     $package = Join-Path $Root "artifacts\$key\MoonBrowser-win-x64-preview.zip"
     if (![IO.File]::Exists($package)) {

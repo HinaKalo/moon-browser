@@ -53,11 +53,17 @@ class Fixture(BaseHTTPRequestHandler):
                 self.seen_unicode.set()
             demo = ""
             if name == "initial":
+                example = Path(__file__).resolve().parent.parent / "docs-site" / "public" / "lua-demo.html"
+                markup = example.read_text(encoding="utf-8").split("<main>", 1)[1].split("</main>", 1)[0]
                 demo = (
-                    '<p id="lua-status">Lua 脚本尚未运行</p><aside id="demo-banner">示例横幅</aside>'
+                    markup +
                     '<script>new MutationObserver((_, observer) => {'
                     'const status = document.getElementById("lua-status");'
-                    'if (status.textContent === "Lua 脚本已运行" && status.classList.contains("success")'
+                    'const completed = document.querySelectorAll(\'#ticket-list [data-state="done"][hidden]\');'
+                    'const urgent = document.querySelector(\'#ticket-list [data-priority="urgent"]\');'
+                    'if (status.textContent === "已隐藏完成工单，紧急工单已突出显示"'
+                    ' && status.classList.contains("success") && completed.length === 2'
+                    ' && urgent.classList.contains("important") && !urgent.hidden'
                     ' && document.getElementById("demo-banner").hidden) {'
                     'observer.disconnect(); fetch("/lua-demo-verified"); }'
                     '}).observe(document.body, {childList:true,subtree:true,attributes:true});</script>'
@@ -201,7 +207,7 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
             print("Plugin contract client:", contract_error.read_text(encoding="utf-8"))
         raise RuntimeError(f"Browser exit {status}; missing checks: {missing}")
     if not Fixture.seen_lua_demo.is_set():
-        raise RuntimeError("The downloadable Lua demo did not visibly change its three targets")
+        raise RuntimeError("The downloadable Lua demo did not filter and highlight the expected items")
     print("lua_public_demo=ok", flush=True)
     if force_pressure and "pressure=1" not in log:
         raise RuntimeError("Configured pressure path did not run")

@@ -6,17 +6,25 @@ Moon Browser 0.1.0-preview.4 内置 Lua 5.4.9。用户脚本扩展可以按网�
 
 1. 打开工具栏「… → Lua 用户脚本 → 安装 Lua 脚本」。
 2. [下载演示脚本](https://docs.browser.moonl.cloud/welcome.user.lua)并选择这个文件。安装过旧版演示时，可在菜单里移除旧条目。
-3. 核对网址范围并确认安装，访问或刷新[演示页](https://docs.browser.moonl.cloud/lua-demo.html)。状态应变成「Lua 脚本已运行」，示例横幅应消失。
+3. 核对网址范围并确认安装，访问或刷新[工单演示](https://docs.browser.moonl.cloud/lua-demo.html)。已完成工单和公告会隐藏，紧急工单会突出显示，顶部状态会变绿。停用脚本并刷新可以看原始工单列表。
 4. 从同一菜单启用、停用或移除脚本。状态和已授权的脚本副本保存在当前浏览器配置中。
 
 ~~~lua
 -- ==MoonUserScript==
--- @name Moon Lua 演示
+-- @name 工单聚焦视图
 -- @api 1
 -- @match https://docs.browser.moonl.cloud/lua-demo.html
 -- ==/MoonUserScript==
 
-moon.dom.setText("#lua-status", "Lua 脚本已运行")
+local hidden_states = {"done"}
+local priority = "urgent"
+
+for _, state in ipairs(hidden_states) do
+    moon.dom.hide('#ticket-list [data-state="' .. state .. '"]')
+end
+
+moon.dom.addClass('#ticket-list [data-priority="' .. priority .. '"]', "important")
+moon.dom.setText("#lua-status", "已隐藏完成工单，紧急工单已突出显示")
 moon.dom.hide("#demo-banner")
 moon.dom.addClass("#lua-status", "success")
 ~~~
