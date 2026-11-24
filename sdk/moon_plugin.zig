@@ -28,6 +28,7 @@ pub const Permission = enum {
     @"siteData.write",
     @"tabs.session.manage",
     @"bookmarks.transfer",
+    @"page.source",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -37,6 +38,7 @@ pub const Shortcut = enum {
     @"Ctrl+Shift+Delete",
     @"Ctrl+Shift+M",
     @"Ctrl+Shift+N",
+    @"Ctrl+U",
 };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
 pub const Command = struct {
@@ -71,6 +73,16 @@ pub const Initialization = struct {
     darkMode: bool = false,
 };
 pub const HostInfo = struct { apiVersion: u32, browserVersion: []const u8, luaVersion: []const u8 };
+pub const PageSourceState = enum { idle, pending, ready, stale, unavailable };
+pub const PageSourceStatus = struct {
+    state: PageSourceState = .idle,
+    generation: u64 = 0,
+    url: []const u8 = "",
+    bytes: usize = 0,
+    truncated: bool = false,
+};
+pub const PageSourceQuery = struct { generation: u64, offset: usize };
+pub const PageSourceChunk = struct { sourceBase64: []const u8, next: ?usize };
 pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
 pub const TabChange = struct { tabId: ?[]const u8 };
 pub const ClosedTab = struct { id: u32, title: []const u8, origin: []const u8 };
@@ -183,6 +195,9 @@ pub const Method = enum {
     @"settings.read",
     @"settings.write",
     @"devtools.open",
+    @"pageSource.open",
+    @"pageSource.status",
+    @"pageSource.read",
     @"ui.openPage",
     @"history.list",
     @"history.remove",

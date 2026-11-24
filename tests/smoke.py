@@ -54,6 +54,8 @@ class Fixture(BaseHTTPRequestHandler):
     change_site_data_source = Event()
     change_site_data_entry = Event()
     site_data_entry_changed = Event()
+    change_page_source = Event()
+    page_source_requests = 0
     reading_layout = {}
     closed_loaded = {}
     privacy_reports = {}
@@ -136,6 +138,8 @@ class Fixture(BaseHTTPRequestHandler):
         elif path == "/site-data-entry-changed":
             self.site_data_entry_changed.set()
             data, content_type = b"ok", "text/plain"
+        elif path == "/page-source-navigation":
+            data, content_type = (b"change" if self.change_page_source.is_set() else b"wait"), "text/plain"
         elif path.startswith("/reading-layout/"):
             _, _, page, width, scroll = path.split("/")
             self.reading_layout[page] = (int(width), int(scroll))
@@ -216,6 +220,15 @@ class Fixture(BaseHTTPRequestHandler):
                     'const action=await r.text();if(action==="change")location.replace("/page/site-data-changed");'
                     'if(action==="overwrite"&&!changed){changed=true;localStorage.setItem("moon-local","page-change");'
                     'fetch("/site-data-entry-changed",{cache:"no-store"});}},400);</script>'
+                )
+            if name == "source-contract":
+                Fixture.page_source_requests += 1
+                demo = (
+                    '<!-- 源码雪月🌙 -->\n<p id="wire">before mutation</p>'
+                    '<script>document.querySelector("#wire").textContent="after"+" mutation";'
+                    'setInterval(async()=>{const reply=await fetch("/page-source-navigation");'
+                    'if(await reply.text()==="change")location.replace("/page/source-changed");},300);</script>\n'
+                    '<!--' + '月🌙' * 77_000 + 'END-OF-WIRE-->'
                 )
             if name in ("reading-contract", "reading-other-origin", "reading-restart"):
                 demo = (
@@ -541,6 +554,7 @@ def run_win32(exe, base, root):
     bookmark_transfer = bookmarks.exists() and '"bookmarks.transfer"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
+    page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     recent = exe.parent / "plugins" / "recent-tabs" / "MoonRecentTabs.exe"
     privacy = exe.parent / "plugins" / "privacy" / "MoonPrivacy.exe"
@@ -566,6 +580,7 @@ def run_win32(exe, base, root):
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
             {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True, "site_data_write": True},
+            {"id": "moon.source-fixture", "enabled": True, "tabs_read": False, "page_source": True},
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.privacy-data-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
@@ -606,6 +621,9 @@ def run_win32(exe, base, root):
             ('const menuDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"7",method:"ui.menu.add",params:{id:"open"}}));'
              'if(JSON.parse(menuDenied).error?.code!==-32001)return;' if commands.exists() else '') +
+            ('const sourceDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"8",method:"pageSource.status",params:{}}));'
+             'if(JSON.parse(sourceDenied).error?.code!==-32001)return;' if page_source.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -724,6 +742,49 @@ def run_win32(exe, base, root):
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "downloads.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
+    if page_source.exists():
+        fixture = profile / "plugins" / "page-source-contract"
+        fixture.mkdir(parents=True)
+        shutil.copy2(page_source,fixture / page_source.name)
+        manifest = json.loads((page_source.parent / "plugin.json").read_text(encoding="utf-8"))
+        manifest["id"] = "moon.source-fixture"
+        action = manifest["contributes"]["commands"][0]
+        action["label"] = "运行网页源代码验收"
+        del action["shortcut"]
+        (fixture / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+        page = (page_source.parent / "source.html").read_text(encoding="utf-8")
+        contract = """
+<script>(async()=>{
+    const api=window.webkit.messageHandlers.moonSettings;
+    const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));
+    const wait=async(fn,label)=>{for(let n=0;n<240;n++){const result=await fn();if(result)return result;
+        await new Promise(resolve=>setTimeout(resolve,50));}throw Error(label);};
+    try {
+        const initial=await host("pageSource.status");
+        if(initial.state==="idle"){
+            const isolated=await host("pageSource.read",{generation:1,offset:0}).then(()=>false,()=>true);
+            await emit({isolated});
+        }
+        const result=await wait(async()=>{const current=await host("pageSource.status");
+            return current.state==="ready"&&current;},"no source snapshot");
+        await wait(()=>!viewer.hidden&&source.textContent,"source was not rendered");
+        const value=source.textContent;
+        if(!result.truncated||result.bytes>512*1024||result.bytes<512*1024-3||
+            !value.includes("<!-- 源码雪月🌙 -->")||!value.includes('<p id="wire">before mutation</p>')||
+            value.includes("END-OF-WIRE")||value.includes("�")||source.childElementCount)
+            throw Error("unexpected source contents");
+        wrap.click();
+        if(wrap.getAttribute("aria-pressed")!=="true"||!viewer.classList.contains("wrap"))
+            throw Error("line wrap not applied");
+        await emit({ready:true});
+        await wait(async()=>(await host("pageSource.status")).state==="stale","source was not invalidated");
+        try {await host("pageSource.read",{generation:result.generation,offset:0});}
+        catch {await wait(()=>viewer.hidden&&!source.textContent,"stale source remained visible");
+            await emit({passed:true});return;}
+        throw Error("stale source could be read");
+    } catch(error){await emit({error:String(error)});}
+})();</script>"""
+        (fixture / "source.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
     if site_data.exists():
         fixture = profile / "plugins" / "site-data-contract"
         fixture.mkdir(parents=True)
@@ -1131,6 +1192,13 @@ def run_win32(exe, base, root):
             if not result.get("passed"):
                 raise RuntimeError(f"{plugin}: {result.get('error')}")
 
+        def read_settings(path):
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, PermissionError):
+                # The browser replaces settings atomically and Windows can lock the path briefly.
+                return {}
+
         def read_control(control):
             text = ctypes.create_unicode_buffer(4096)
             user.SendMessageW(control, 0x000D, len(text), ctypes.addressof(text))
@@ -1469,7 +1537,7 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address() == "extension://moon.site-data-fixture/site-data.html",
                      "The site data contract did not bind its page")
             config = profile / f'extension-{sha256(b"moon.site-data-fixture").hexdigest()}.json'
-            phase = wait_for(lambda: config.exists() and json.loads(config.read_text(encoding="utf-8")),
+            phase = wait_for(lambda: read_settings(config),
                              "The site data contract did not start the conflict test",15)
             if not phase.get("waitingForConflict"):
                 raise RuntimeError(f"Site data edits: {phase}")
@@ -1479,17 +1547,59 @@ def run_win32(exe, base, root):
             signal = config.with_suffix(".signal")
             signal.write_text('{"conflictReady":true}',encoding="utf-8")
             signal.replace(config)
-            phase = wait_for(lambda: (current := json.loads(config.read_text(encoding="utf-8"))) and
+            phase = wait_for(lambda: (current := read_settings(config)) and
                              (current.get("ready") or current.get("error")) and current,
                              "The site data contract reported no initial result",15)
             if not phase.get("ready"):
                 raise RuntimeError(f"Site data fixture: {phase}")
             Fixture.change_site_data_source.set()
-            result = wait_for(lambda: config.exists() and not (current := json.loads(config.read_text(encoding="utf-8"))).get("ready") and current,
+            result = wait_for(lambda: (current := read_settings(config)) and not current.get("ready") and current,
                               "The site data contract reported no navigation result",15)
             if not result.get("passed"):
                 raise RuntimeError(f"Site data invalidation: {result}")
             print("site_data_system_plugin=ok isolated_storage=ok storage_edit=ok storage_remove=ok stale_write_rejected=ok conflict_preserved=ok site_data_navigation_cleanup=ok",flush=True)
+        if page_source.exists():
+            target = base + "/page/source-contract"
+            set_control(edit,target)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: ("Moon fixture source-contract",) in history_rows("SELECT title FROM visits WHERE url=?",(target,)),
+                     "Page source fixture did not finish loading")
+            invoke("查看网页源代码")
+            wait_for(lambda: read_address() == "extension://moon.source/source.html",
+                     "The bundled page source plugin did not open its page")
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Could not open the isolated source panel in a new tab")
+            set_control(edit,"extension://moon.source-fixture/source.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            config = profile / f'extension-{sha256(b"moon.source-fixture").hexdigest()}.json'
+            isolated = wait_for(lambda: read_settings(config),
+                                "Source owner check did not report")
+            if not isolated.get("isolated"):
+                raise RuntimeError(f"Source owner check: {isolated}")
+            invoke("Moon fixture source-contract")
+            wait_for(lambda: read_address() == target,"Could not select the page source fixture")
+            invoke("运行网页源代码验收")
+            ready = wait_for(lambda: (current := read_settings(config)) and
+                             (current.get("ready") or current.get("error")) and current,
+                             "The source viewer did not display the snapshot",15)
+            if not ready.get("ready") or Fixture.page_source_requests != 1:
+                raise RuntimeError(f"Page source fixture: {ready}, network requests: {Fixture.page_source_requests}")
+            invoke("页内查找")
+            find = wait_for(lambda: user.FindWindowExW(frame,None,"MoonFind",None),
+                            "The source panel did not open the native find bar")
+            search = user.GetDlgItem(find,1201)
+            set_control(search,"源码雪月")
+            wait_for(lambda: read_control(user.GetDlgItem(find,1202)) == "1 项匹配",
+                     "The native find bar could not find the original source comment")
+            user.PostMessageW(search,0x0100,0x1B,1)
+            wait_for(lambda: not user.IsWindowVisible(find),"The source find bar did not close")
+            Fixture.change_page_source.set()
+            result = wait_for(lambda: (current := read_settings(config)) and
+                              (current.get("passed") or current.get("error")) and current,
+                              "The source viewer did not clear stale contents",15)
+            if not result.get("passed"):
+                raise RuntimeError(f"Page source invalidation: {result}")
+            print("page_source_plugin=ok page_source_original=ok utf8_truncation=ok owner_isolation=ok no_refetch=ok source_find=ok stale_source=ok",flush=True)
         if reading.exists():
             def navigate_reading(url):
                 set_control(edit,url)
@@ -1807,6 +1917,8 @@ def run_win32(exe, base, root):
                 expected["浏览资料"].update({"导入 HTML 书签","导出 HTML 书签"})
             if private_window.exists():
                 expected["隐私与安全"].add("新建隐私窗口\tCtrl+Shift+N")
+            if page_source.exists():
+                expected["开发与诊断"].add("查看网页源代码\tCtrl+U")
             for group, labels in expected.items():
                 if missing := labels - groups.get(group,{}).keys():
                     raise RuntimeError(f"Native menu group {group} is missing {missing}")

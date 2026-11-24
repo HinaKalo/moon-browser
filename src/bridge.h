@@ -96,6 +96,8 @@ MoonView *moon_engine_open_extension(uint64_t token, const char *plugin_id, cons
 bool moon_engine_load_extension(MoonView *view, const char *html);
 void moon_engine_refresh_extension_theme(void);
 bool moon_engine_inspect(MoonView *view, int panel);
+enum { MOON_SOURCE_LIMIT = 512 * 1024 };
+bool moon_engine_page_source(MoonView *view, uint64_t generation);
 bool moon_engine_inspect_site(MoonView *view, uint64_t request);
 bool moon_engine_update_site(MoonView *view, uint64_t request, const char *update);
 void moon_engine_find(MoonView *view, const char *query, bool backwards);
@@ -173,6 +175,8 @@ bool moon_devtools_open(int panel, uint64_t tab_id);
 bool moon_extension_settings(const char *id, const char *request, char *result, size_t cap);
 bool moon_extension_request(uint64_t page, const char *id, const char *request, char *result, size_t cap);
 bool moon_site_data_open(const char *id, uint64_t source, const char *expected);
+bool moon_page_source_open(const char *id, uint64_t source, const char *expected);
+void moon_page_source_result(uint64_t generation, const char *html, size_t bytes);
 bool moon_site_data_action(uint64_t panel, const char *id, bool inspector);
 bool moon_site_data_update(uint64_t panel, const char *id, bool session, uint32_t entry, uint64_t generation,
     const char *value, size_t length);

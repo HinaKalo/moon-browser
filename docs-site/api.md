@@ -25,7 +25,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 
 将 `plugin.json` 和同目录 EXE 放进浏览器程序或配置目录下的 `plugins/<目录>`，重启后从工具栏菜单启用。命令在插件菜单与命令面板中使用同一 ID。每个插件可声明一到八条命令，ID 在插件内唯一。
 
-命令可选填 `shortcut`。当前支持 `Ctrl+H`、`Ctrl+D`、`Ctrl+Shift+O`、`Ctrl+J`、`F12`、`Ctrl+Shift+J`、`Ctrl+F`、`Ctrl++`、`Ctrl+-`、`Ctrl+0`、`Ctrl+Shift+T`、`Ctrl+Shift+Delete` 和 `Ctrl+Shift+M`。同一组合键由第一个已启用且声明该组合键的插件处理，随浏览器分发的插件优先。
+命令可选填 `shortcut`。当前支持 `Ctrl+H`、`Ctrl+D`、`Ctrl+Shift+O`、`Ctrl+J`、`F12`、`Ctrl+Shift+J`、`Ctrl+U`、`Ctrl+F`、`Ctrl++`、`Ctrl+-`、`Ctrl+0`、`Ctrl+Shift+T`、`Ctrl+Shift+Delete`、`Ctrl+Shift+M` 和 `Ctrl+Shift+N`。同一组合键由第一个已启用且声明该组合键的插件处理，随浏览器分发的插件优先。
 
 插件启用与权限授权分别由用户确认。`tabs.read` 允许访问触发时的活动标签，`lua.scripts.manage` 允许管理已安装用户脚本。撤销权限后，后续调用失效。EXE 自身按当前 Windows 用户权限运行。
 
@@ -45,6 +45,9 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `settings.read` | 本插件 | 返回本插件的设置对象。 |
 | `settings.write` | 本插件 | 传入 `{ value }` 写入最多 4 KiB 的 JSON 对象。 |
 | `devtools.open` | `page.inspect` | 传入 `{ panel }`。可选 `inspector`、`console`、`resources`。返回是否已为触发命令的当前网页发起打开工具的请求。 |
+| `pageSource.open` | `page.source` | 从用户命令传入 `{}`，将插件专属页面与当前已加载的 HTTP(S) 主文档绑定并请求源码。返回是否接受请求。 |
+| `pageSource.status` | `page.source` | 由绑定的插件页面传入 `{}`。返回 `{ state, generation, url, bytes, truncated }`。未绑定时返回 `idle`，已绑定的状态包括 `pending`、`ready`、`stale` 和 `unavailable`。 |
+| `pageSource.read` | `page.source` | 由绑定的插件页面传入 `{ generation, offset }`。返回 `{ sourceBase64, next }`，每块最多 12 KiB UTF-8，首次从字节偏移 0 开始，`next` 为 `null` 时结束。请流式解码 UTF-8，字符可能跨块。 |
 | `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
 | `history.list` | `history.manage` | 传入 `{ query?, before? }`。返回 `{ visits, next }`，每条访问记录为 `{ id, title, url, visitedAt }`。时间为 Unix 毫秒。使用 `next` 作为下一页的 `before`。 |
 | `history.remove` | `history.manage` | 传入 `{ id }` 移除单条记录，成功返回 `null`。 |
@@ -82,6 +85,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `privacy.openPrivateWindow` | `privacy.privateWindow` | 从用户命令传入 `{}`，打开独立隐私窗口，返回启动是否成功。参见[隐私浏览](./private-window)。 |
 
 脚本 ID 是 64 位小写十六进制字符组成的不透明标识。同一份源码重复导入返回 `ALREADY_EXISTS`。脚本内容或匹配范围改动后要重新导入，首次启用重新确认。管理接口负责导入和状态，网页导航触发运行，宿主 Lua VM 执行代码。
+
+从 0.1.0-preview.27 起，浏览器暂存一份最多 512 KiB 的主文档源码。源网页导航、关闭或卸载后，旧快照立即不可读。插件撤权、面板关闭或新的源码请求也会释放旧快照。[网页开发者工具](./devtools)
 
 ## 消息与生命周期
 

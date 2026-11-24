@@ -11,6 +11,7 @@ const network = @import("network_policy.zig");
 const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
+const page_source = @import("page_source.zig");
 const reading = @import("reading.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const market = @import("market.zig");
@@ -248,6 +249,7 @@ fn storeSession(tab: *Tab) void {
 }
 fn detach(tab: *Tab) void {
     site_data.invalidate(tab.id);
+    page_source.invalidate(tab.id);
     if (find_tab == tab.id) moon_find_dismiss(false);
     const view = tab.view orelse return;
     tab.view = null;
@@ -299,7 +301,10 @@ fn show(tab: *Tab) void {
 }
 
 fn loadInternal(tab: *Tab, address: [4096:0]u8, id: ?[:0]const u8, html: [*:0]const u8) void {
-    if (tab.extension and !equals(slice(&tab.url),slice(&address))) site_data.closed(tab.id);
+    if (tab.extension and !equals(slice(&tab.url),slice(&address))) {
+        site_data.closed(tab.id);
+        page_source.closed(tab.id);
+    }
     detach(tab);
     forgetSession(tab);
     tab.extension = true;
@@ -355,6 +360,7 @@ fn navigate(tab: *Tab, url: []const u8) void {
     }
     if (tab.extension) {
         site_data.closed(tab.id);
+        page_source.closed(tab.id);
         detach(tab);
         tab.extension = false;
         tab.unsafe_history = false;
@@ -664,6 +670,7 @@ fn addTab(url: ?[]const u8, notify: bool) void {
 fn closeTab(index: usize) void {
     if (index >= count) return;
     site_data.closed(tabs[index].id);
+    page_source.closed(tabs[index].id);
     const was_active = index == active;
     const was_pinned = tabs[index].pinned;
     rememberClosedTab(&tabs[index]);
@@ -878,6 +885,7 @@ fn maintenance() void {
     }
     downloads.flush();
     site_data.tick(now);
+    page_source.tick(now);
     if (market.changed()) {
         const allocator = std.heap.page_allocator;
         if (market.document(allocator)) |html| {
@@ -1071,6 +1079,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         reading.close();
         recent_tabs.clear();
         site_data.reset();
+        page_source.reset();
         for (tabs[0..count]) |*tab| {
             detach(tab);
             forgetSession(tab);
@@ -1136,6 +1145,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             plugins.enable(index);
             network.select(plugins.networkSource());
             checkSiteDataGrant();
+            checkPageSourceGrant();
             checkFindGrant();
             checkClosedTabGrant();
             checkTabToolsGrant();
@@ -1146,6 +1156,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             plugins.toggleGrant(index >> 32,permission);
             if (permission == .@"network.filter") network.select(plugins.networkSource());
             if (permission == .@"siteData.read") checkSiteDataGrant();
+            if (permission == .@"page.source") checkPageSourceGrant();
             if (permission == .@"page.reading") checkFindGrant();
             if (permission == .@"tabs.closed.manage") checkClosedTabGrant();
             if (permission == .@"tabs.organize") checkTabToolsGrant();
@@ -1174,12 +1185,14 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
     switch (kind) {
         native.MOON_STARTED => {
             site_data.invalidate(id);
+            page_source.invalidate(id);
             if (find_tab == id) moon_find_dismiss(true);
             tab.loading = true;
             tab.loaded = false;
             tab.history_visit = null;
         },
         native.MOON_COMMITTED => {
+            page_source.invalidate(id);
             tab.dirty = false;
             tab.has_document = true;
             tab.deadline = 0;
@@ -1222,11 +1235,13 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         native.MOON_CHANGED => sync(tab),
         native.MOON_SAME_DOCUMENT => {
             site_data.invalidate(id);
+            page_source.invalidate(id);
             sync(tab);
             if (!tab.extension and !tab.restoring_history and plugins.systemEnabled(.@"history.manage")) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
         },
         native.MOON_TERMINATED => {
             site_data.closed(id);
+            page_source.closed(id);
             if (find_tab == id) {
                 find_tab = 0;
                 find_owner[0] = 0;
@@ -1373,6 +1388,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"downloads.manage" => "允许管理下载",
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
+        .@"page.source" => "允许查看当前网页源代码",
         .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
@@ -1436,6 +1452,32 @@ export fn moon_plugin_open_page(id: [*c]const u8) bool {
     if (count == tabs.len) return false;
     addTab(address,true);
     return true;
+}
+
+fn checkPageSourceGrant() void {
+    const owner = page_source.ownerId() orelse return;
+    if (!plugins.hasGrant(owner,.@"page.source")) page_source.reset();
+}
+
+export fn moon_page_source_open(id: [*c]const u8, source: u64, expected: [*c]const u8) bool {
+    if (stopped or count == 0 or tabs[active].id != source) return false;
+    const tab = &tabs[active];
+    if (tab.extension or tab.loading or !tab.loaded) return false;
+    const view = tab.view orelse return false;
+    var committed: [4096:0]u8 = @splat(0);
+    native.moon_engine_committed_url(view,&committed,committed.len);
+    const url = slice(&committed);
+    if (!equals(url,slice(expected)) or !history.validURL(url)) return false;
+    if (!moon_plugin_open_page(id)) return false;
+    if (!tabs[active].extension or tabs[active].id == source) return false;
+    const current = &tabs[tabIndex(source) orelse return false];
+    if (current.view != view or current.loading or !current.loaded) return false;
+    page_source.begin(slice(id),source,tabs[active].id,url,view);
+    return true;
+}
+
+export fn moon_page_source_result(generation: u64, html: [*c]const u8, bytes: usize) void {
+    if (!stopped) page_source.complete(generation,if (html!=null) html[0..bytes] else null);
 }
 
 fn checkSiteDataGrant() void {

@@ -9,6 +9,7 @@ const network = @import("network_policy.zig");
 const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
+const page_source = @import("page_source.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const privacy = @import("privacy.zig");
 const search = @import("search.zig");
@@ -33,6 +34,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"lua.scripts.list", .@"lua.scripts.install", .@"lua.scripts.setEnabled", .@"lua.scripts.remove" => .@"lua.scripts.manage",
         .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive" => .@"lua.scripts.manage",
         .@"devtools.open" => .@"page.inspect",
+        .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.update", .@"bookmarks.remove" => .@"bookmarks.manage",
@@ -160,6 +162,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
+        .@"pageSource.status", .@"pageSource.read" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         .@"privacy.clear", .@"privacy.status" => {},
         .@"search.getConfig", .@"search.setConfig" => {},
@@ -176,7 +179,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     switch (method) {
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
-        .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find",
+        .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find", .@"pageSource.open", .@"pageSource.status",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig",
         .@"tabs.session.status", .@"tabs.session.restore", .@"tabs.session.forget" => {
@@ -263,6 +266,25 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"devtools.open" => inspect: {
             const value = decode(struct { panel: sdk.InspectorPanel },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             break :inspect sdk.result(output,id,native.moon_devtools_open(@intCast(@intFromEnum(value.panel)),context.target_tab_id));
+        },
+        .@"pageSource.open" => open: {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const tab = context.tab orelse break :open sdk.result(output,id,false);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            break :open sdk.result(output,id,native.moon_page_source_open(owner.ptr,tab.id,&tab.url));
+        },
+        .@"pageSource.status" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            return sdk.result(output,id,page_source.status(context.target_tab_id,context.plugin_id));
+        },
+        .@"pageSource.read" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const query = decode(sdk.PageSourceQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const chunk = page_source.read(context.target_tab_id,context.plugin_id,query) orelse
+                return sdk.failure(output,id,.NotFound);
+            const encoder = std.base64.standard.Encoder;
+            const buffer = try allocator.alloc(u8,encoder.calcSize(chunk.bytes.len));
+            return sdk.result(output,id,sdk.PageSourceChunk{ .sourceBase64=encoder.encode(buffer,chunk.bytes), .next=chunk.next });
         },
         .@"ui.openPage" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

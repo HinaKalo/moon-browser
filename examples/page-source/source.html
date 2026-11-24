@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>网页源代码</title>
+<style>
+  :root { color-scheme:light; font:14px/1.55 "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif; --page:#f6f7fa; --surface:#fff; --text:#171b26; --muted:#535e74; --line:#dbe0ed; --accent:#4158bf; --soft:#edf0fc; background:var(--page); color:var(--text); }
+  :root[data-moon-theme=dark] { color-scheme:dark; --page:#171a22; --surface:#222635; --text:#edf0f7; --muted:#b6c0d5; --line:#3a435b; --accent:#acbbff; --soft:#303852; }
+  * { box-sizing:border-box; }
+  body { margin:0; }
+  main { height:100dvh; display:flex; flex-direction:column; padding:24px clamp(16px,3vw,36px); }
+  header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px 20px; }
+  h1 { margin:0; font-size:24px; }
+  #url { margin:4px 0 0; overflow-wrap:anywhere; color:var(--muted); }
+  #status { margin:12px 0; color:var(--muted); }
+  button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:6px 10px; cursor:pointer; }
+  button:hover,button[aria-pressed=true] { background:var(--soft); }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  #viewer { min-height:0; flex:1; overflow:auto; display:flex; background:var(--surface); border:1px solid var(--line); border-radius:10px; }
+  [hidden] { display:none !important; }
+  pre { font:13px/1.6 Consolas,"Microsoft YaHei UI",monospace; margin:0; padding:12px 14px; tab-size:4; }
+  #gutter { user-select:none; color:var(--muted); text-align:right; border-right:1px solid var(--line); background:var(--page); position:sticky; left:0; flex:none; height:max-content; }
+  #source { flex:1; }
+  #viewer.wrap #source { white-space:pre-wrap; min-width:0; overflow-wrap:anywhere; }
+  #viewer.wrap #gutter { display:none; }
+</style>
+<main>
+  <header><h1>网页源代码</h1><button id="wrap" aria-pressed="false" hidden>自动换行</button></header>
+  <p id="url" hidden></p>
+  <p id="status" role="status">正在连接浏览器…</p>
+  <div id="viewer" role="region" aria-label="源代码" tabindex="0" hidden>
+    <pre id="gutter" aria-hidden="true"></pre><pre id="source"></pre>
+  </div>
+</main>
+<script>
+  const get = id => document.getElementById(id);
+  const status = get('status'), url = get('url'), viewer = get('viewer'), source = get('source'), gutter = get('gutter'), wrap = get('wrap');
+  const descriptions = {
+    idle:'在已加载的网页上按 Ctrl+U 打开源代码。',
+    pending:'正在读取网页源代码…',
+    stale:'原网页已关闭、导航或卸载。返回网页后可重新查看。',
+    unavailable:'当前网页没有可显示的源代码。'
+  };
+  let request = 0, rendered = '';
+  wrap.onclick = () => wrap.setAttribute('aria-pressed', String(viewer.classList.toggle('wrap')));
+  async function host(method, params = {}) {
+    const id = 'source:' + ++request;
+    const response = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0', id, method, params})));
+    if (response.id !== id || response.error) throw Error('PAGE_SOURCE_UNAVAILABLE');
+    return response.result;
+  }
+  function clear() {
+    source.textContent = gutter.textContent = '';
+    viewer.hidden = wrap.hidden = true;
+    viewer.scrollTo(0, 0);
+  }
+  async function update() {
+    let delay = 800;
+    try {
+      const result = await host('pageSource.status');
+      const key = result.state + ':' + result.generation;
+      if (rendered === key) return;
+      clear();
+      url.textContent = result.url;
+      url.hidden = !result.url;
+      status.textContent = descriptions[result.state] || descriptions.pending;
+      if (result.state === 'ready') {
+        const decoder = new TextDecoder();
+        const parts = [];
+        let offset = 0;
+        while (offset !== null) {
+          const chunk = await host('pageSource.read', {generation:result.generation, offset});
+          const bytes = Uint8Array.from(atob(chunk.sourceBase64), char => char.charCodeAt(0));
+          parts.push(decoder.decode(bytes, {stream:chunk.next !== null}));
+          offset = chunk.next;
+        }
+        const value = parts.join('');
+        const lines = value.split('\n').length;
+        gutter.hidden = lines > 25_000;
+        if (!gutter.hidden) gutter.textContent = Array.from({length:lines}, (_, index) => index + 1).join('\n');
+        source.textContent = value;
+        viewer.hidden = wrap.hidden = false;
+        status.textContent = lines.toLocaleString() + ' 行' + (result.truncated ? ' · 已显示前 512 KiB' : '');
+      }
+      rendered = key;
+      if (result.state === 'pending') delay = 125;
+    } catch {
+      clear();
+      url.textContent = '';
+      url.hidden = true;
+      status.textContent = '网页源代码暂不可用。请检查插件是否已启用并授权。';
+      rendered = '';
+    } finally {
+      setTimeout(update, delay);
+    }
+  }
+  update();
+</script>
+</html>

@@ -52,6 +52,12 @@ pub fn build(b: *std.Build) void {
     });
     devtools.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(devtools);
+    const page_source = b.addExecutable(.{
+        .name = "MoonPageSource",
+        .root_module = b.createModule(.{ .root_source_file=b.path("examples/page-source/main.zig"), .target=target, .optimize=optimize, .link_libc=true }),
+    });
+    page_source.root_module.addImport("moon_plugin",plugin_sdk);
+    b.installArtifact(page_source);
     for ([_][]const u8{ "MoonHistory", "MoonBlocker", "MoonDownloads", "MoonPrivacy", "MoonTaskManager", "MoonSearch" }) |name| {
         const opener = b.addExecutable(.{
             .name = name,

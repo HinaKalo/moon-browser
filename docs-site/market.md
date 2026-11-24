@@ -4,4 +4,16 @@
 
 页面布局由浏览器提供，目录来自 Moon 上的固定 HTTPS 源。当前目录收录随安装包提供的系统插件。在工具栏「… → 插件」中选择插件即可启用或授权。
 
+## 日常使用入口
+
+已启用的插件命令可从 Ctrl+K 搜索。工具栏「…」按使用场景集中展示常用命令，快捷键也显示在对应命令旁。
+
+| 菜单 | 系统插件 |
+| --- | --- |
+| 标签与页面 | [页内查找与缩放](./reading)、[最近关闭的标签](./recent-tabs)、[启动与会话](./session)、[标签管理](./tab-tools)、[搜索引擎](./search) |
+| 浏览资料 | [历史记录](./history)、[书签和下载](./library) |
+| 隐私与安全 | [隐私浏览](./private-window)、[清除浏览数据](./privacy)、[站点数据](./site-data)、[严格去广告](./blocker) |
+| 开发与诊断 | [控制台和网页源代码](./devtools)、[浏览器任务管理器](./task-manager) |
+| 扩展工具 | [Lua 脚本编辑器](./lua-userscripts)、[菜单与快捷键示例](./command-contributions) |
+
 [Moon 插件目录](https://docs.browser.moonl.cloud/plugin-market/catalog.json) · [插件开发体系](./plugin-system)

@@ -125,6 +125,8 @@ $docs = @(
     (Join-Path $repo 'examples\lua-manager\plugin.json')
     (Join-Path $repo 'examples\lua-manager\settings.html')
     (Join-Path $repo 'examples\devtools\plugin.json')
+    (Join-Path $repo 'examples\page-source\plugin.json')
+    (Join-Path $repo 'examples\page-source\source.html')
     (Join-Path $repo 'examples\history\plugin.json')
     (Join-Path $repo 'examples\history\history.html')
     (Join-Path $repo 'examples\blocker\plugin.json')
@@ -157,7 +159,8 @@ if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $session + $tabTools + $privateWindow + $search + $privacy + $taskManager + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$pageSource = Join-Path $prefix 'bin\MoonPageSource.exe'
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $pageSource + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $session + $tabTools + $privateWindow + $search + $privacy + $taskManager + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -183,6 +186,8 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $inspector = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\devtools')).FullName
     Copy-Item -LiteralPath $devTools -Destination $inspector
     Copy-Item -LiteralPath (Join-Path $repo 'examples\devtools\plugin.json') -Destination $inspector
+    $sourcePackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\page-source')).FullName
+    Copy-Item -LiteralPath $pageSource,(Join-Path $repo 'examples\page-source\plugin.json'),(Join-Path $repo 'examples\page-source\source.html') -Destination $sourcePackage
     $historyPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\history')).FullName
     Copy-Item -LiteralPath $history -Destination $historyPackage
     Copy-Item -LiteralPath (Join-Path $repo 'examples\history\plugin.json'),(Join-Path $repo 'examples\history\history.html') -Destination $historyPackage

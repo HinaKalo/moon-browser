@@ -1,0 +1,13 @@
+{
+  "id": "moon.source",
+  "name": "网页源代码",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonPageSource.exe",
+  "settingsPage": "source.html",
+  "contributes": {
+    "commands": [{ "id": "open", "label": "查看网页源代码", "menu": "developer", "shortcut": "Ctrl+U" }]
+  },
+  "permissions": ["page.source"]
+}

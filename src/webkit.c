@@ -73,6 +73,7 @@ extern void WKHTTPCookieStoreDeleteAllCookies(WKHTTPCookieStoreRef, void *, void
     X(WKScriptMessageGetFrameInfo) X(WKCompletionListenerComplete) \
     X(WKPreferencesSetDeveloperExtrasEnabled) \
     X(WKPageGetInspector) X(WKInspectorShow) X(WKInspectorShowConsole) X(WKInspectorShowResources) \
+    X(WKPageGetMainFrame) X(WKPageGetSourceForFrame) X(WKStringGetUTF8CStringNonStrict) \
     X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
     X(WKPageSetPageFindClient) X(WKPageFindString) X(WKPageHideFindUI) \
     X(WKPageGetPageZoomFactor) X(WKPageSetPageZoomFactor) \
@@ -700,6 +701,25 @@ bool moon_engine_inspect(MoonView *view, int panel) {
     }
     return true;
 }
+
+static void page_source_received(WKStringRef source, WKErrorRef error, void *context) {
+    const uint64_t generation = (uintptr_t)context;
+    // Allow enough extra bytes to detect truncation at any UTF-8 character boundary.
+    const size_t cap = MOON_SOURCE_LIMIT + 5;
+    char *buffer = source && !error ? malloc(cap) : NULL;
+    size_t size = buffer ? wk.WKStringGetUTF8CStringNonStrict(source, buffer, cap) : 0;
+    moon_page_source_result(generation, size > 1 ? buffer : NULL, size > 1 ? size - 1 : 0);
+    free(buffer);
+}
+
+bool moon_engine_page_source(MoonView *view, uint64_t generation) {
+    if (view->extension_address) return false;
+    WKFrameRef frame = wk.WKPageGetMainFrame(view->page);
+    if (!frame) return false;
+    wk.WKPageGetSourceForFrame(view->page, frame, (void *)(uintptr_t)generation, page_source_received);
+    return true;
+}
+
 void moon_engine_committed_url(MoonView *view, char *url, size_t cap) {
     if (!cap) return;
     url[0] = 0;
