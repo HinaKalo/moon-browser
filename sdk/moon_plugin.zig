@@ -17,11 +17,13 @@ pub const Permission = enum {
     @"downloads.manage",
     @"siteData.read",
     @"page.reading",
+    @"tabs.closed.manage",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
     @"Ctrl+H", F12, @"Ctrl+Shift+J", @"Ctrl+D", @"Ctrl+Shift+O", @"Ctrl+J",
     @"Ctrl+F", @"Ctrl++", @"Ctrl+-", @"Ctrl+0",
+    @"Ctrl+Shift+T",
 };
 pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false, shortcut: ?Shortcut = null };
 pub const Manifest = struct {
@@ -48,6 +50,8 @@ pub const Initialization = struct {
 pub const HostInfo = struct { apiVersion: u32, browserVersion: []const u8, luaVersion: []const u8 };
 pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
 pub const TabChange = struct { tabId: ?[]const u8 };
+pub const ClosedTab = struct { id: u32, title: []const u8, origin: []const u8 };
+pub const ReopenClosedTab = enum(c_int) { reopened, notFound, tabLimit, unavailable };
 pub const Script = struct { id: []const u8, name: []const u8, enabled: bool };
 pub const ScriptId = struct { id: []const u8 };
 pub const ScriptSwitch = struct { id: []const u8, enabled: bool };
@@ -136,6 +140,9 @@ pub const Method = enum {
     @"siteData.openInspector",
     @"reading.find",
     @"reading.zoom",
+    @"tabs.closed.list",
+    @"tabs.closed.reopen",
+    @"tabs.closed.clear",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

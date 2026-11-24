@@ -108,6 +108,7 @@ $bookmarks = Join-Path $prefix 'bin\MoonBookmarks.exe'
 $downloads = Join-Path $prefix 'bin\MoonDownloads.exe'
 $siteData = Join-Path $prefix 'bin\MoonSiteData.exe'
 $reading = Join-Path $prefix 'bin\MoonReading.exe'
+$recentTabs = Join-Path $prefix 'bin\MoonRecentTabs.exe'
 $docs = @(
     $EngineLock
     (Join-Path $repo 'README.md')
@@ -129,13 +130,15 @@ $docs = @(
     (Join-Path $repo 'examples\site-data\plugin.json')
     (Join-Path $repo 'examples\site-data\site-data.html')
     (Join-Path $repo 'examples\reading\plugin.json')
+    (Join-Path $repo 'examples\recent-tabs\plugin.json')
+    (Join-Path $repo 'examples\recent-tabs\recent.html')
     (Join-Path $repo 'assets\app-icon.ico')
 )
 if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -175,6 +178,8 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     Copy-Item -LiteralPath $siteData,(Join-Path $repo 'examples\site-data\plugin.json'),(Join-Path $repo 'examples\site-data\site-data.html') -Destination $siteDataPackage
     $readingPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\reading')).FullName
     Copy-Item -LiteralPath $reading,(Join-Path $repo 'examples\reading\plugin.json') -Destination $readingPackage
+    $recentPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\recent-tabs')).FullName
+    Copy-Item -LiteralPath $recentTabs,(Join-Path $repo 'examples\recent-tabs\plugin.json'),(Join-Path $repo 'examples\recent-tabs\recent.html') -Destination $recentPackage
     $fixtures = [IO.Directory]::CreateDirectory((Join-Path $stage 'tests')).FullName
     Copy-Item -LiteralPath $contractClient -Destination $fixtures
     $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $artifact))

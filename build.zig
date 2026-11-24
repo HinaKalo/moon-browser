@@ -78,6 +78,12 @@ pub fn build(b: *std.Build) void {
     });
     reading.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(reading);
+    const recent_tabs = b.addExecutable(.{
+        .name = "MoonRecentTabs",
+        .root_module = b.createModule(.{ .root_source_file=b.path("examples/recent-tabs/main.zig"),.target=target,.optimize=optimize,.link_libc=true }),
+    });
+    recent_tabs.root_module.addImport("moon_plugin",plugin_sdk);
+    b.installArtifact(recent_tabs);
     const fixture = b.addExecutable(.{
         .name = "MoonPluginContractClient",
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/plugin_contract_client.zig"), .target = target, .optimize = optimize, .link_libc = true }),

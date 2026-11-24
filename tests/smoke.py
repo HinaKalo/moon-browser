@@ -53,6 +53,7 @@ class Fixture(BaseHTTPRequestHandler):
     slow_download_release = Event()
     change_site_data_source = Event()
     reading_layout = {}
+    closed_loaded = {}
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -96,6 +97,10 @@ class Fixture(BaseHTTPRequestHandler):
         elif path.startswith("/reading-layout/"):
             _, _, page, width, scroll = path.split("/")
             self.reading_layout[page] = (int(width), int(scroll))
+            data, content_type = b"ok", "text/plain"
+        elif path.startswith("/closed-ready/"):
+            page = path.removeprefix("/closed-ready/")
+            self.closed_loaded[page] = self.closed_loaded.get(page, 0) + 1
             data, content_type = b"ok", "text/plain"
         elif path.startswith("/page/"):
             name = path.removeprefix("/page/")
@@ -161,6 +166,11 @@ class Fixture(BaseHTTPRequestHandler):
                     '};addEventListener("scroll",report);addEventListener("resize",report);'
                     'addEventListener("load",report);</script>'
                 )
+            if name in ("closed-first", "closed-second", "closed-item", "closed-protected"):
+                demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
+            if name == "closed-post":
+                demo = ('<form action="/closed-submit" method="post"><input name="fixture" value="test"></form>'
+                        '<script>document.forms[0].submit();</script>')
             data = (
                 "<!doctype html><meta charset=utf-8>"
                 f"<title>Moon fixture {name}</title>"
@@ -187,6 +197,18 @@ class Fixture(BaseHTTPRequestHandler):
 
     def log_message(self, *_):
         pass
+
+    def do_POST(self):
+        if self.path != "/closed-submit":
+            self.send_error(404)
+            return
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        data = b"<!doctype html><title>Posted fixture</title><p>Submitted</p>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
 
 def preview_env(root):
@@ -383,6 +405,7 @@ def run_win32(exe, base, root):
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
+    recent = exe.parent / "plugins" / "recent-tabs" / "MoonRecentTabs.exe"
     if manager.exists():
         fixture = profile / "plugins" / "settings"
         fixture.mkdir(parents=True)
@@ -395,6 +418,7 @@ def run_win32(exe, base, root):
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
             {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True},
+            {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
@@ -416,6 +440,9 @@ def run_win32(exe, base, root):
             ('const readingDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"3",method:"reading.find",params:{}}));'
              'if(JSON.parse(readingDenied).error?.code!==-32601)return;' if reading.exists() else '') +
+            ('const closedDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"4",method:"tabs.closed.list",params:{}}));'
+             'if(JSON.parse(closedDenied).error?.code!==-32001)return;' if recent.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -567,6 +594,38 @@ def run_win32(exe, base, root):
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "site-data.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
+    if recent.exists():
+        fixture = profile / "plugins" / "recent-contract"
+        fixture.mkdir(parents=True)
+        (fixture / "plugin.json").write_text(json.dumps({
+            "id": "moon.closed-fixture", "name": "Closed tabs contract", "version": "1.0.0",
+            "apiVersion": 2, "runtime": "native", "entry": "Unused.exe", "settingsPage": "recent.html",
+            "permissions": ["tabs.closed.manage"], "contributes": {"commands": [{"id": "open", "label": "Fixture"}]},
+        }), encoding="utf-8")
+        page = recent.with_name("recent.html").read_text(encoding="utf-8")
+        contract = (
+            '<script>(async()=>{'
+            'const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:"write",value}));'
+            'const wait=async(fn,label)=>{for(let i=0;i<200;i++){if(await fn())return;'
+            'await new Promise(r=>setTimeout(r,50));}throw Error(label);};'
+            'try{await wait(()=>clear.disabled===false,"loading");'
+            'const entries=await host("tabs.closed.list");'
+            'if(entries.map(v=>v.title).join(",")!=="Moon fixture closed-item,Moon fixture closed-second")'
+            'throw Error("closed order or unsafe entry: "+JSON.stringify(entries));'
+            f'if(entries.some(entry=>entry.origin!=="{base}"))throw Error("entry origin");'
+            'if(list.children.length!==2)throw Error("rendered rows");'
+            'clear.click();if(!confirm.open)throw Error("clear confirmation");'
+            'confirm.querySelector(\'[value="cancel"]\').click();'
+            'await wait(()=>!confirm.open,"cancel confirmation");'
+            'if((await host("tabs.closed.list")).length!==2)throw Error("cancel changed list");'
+            'list.children[1].querySelector("button").click();'
+            'await wait(()=>list.children.length===1,"targeted reopen");'
+            'if(!(await host("tabs.closed.list"))[0].title.endsWith("closed-item"))throw Error("wrong entry restored");'
+            'clear.click();confirm.querySelector("#confirm-clear").click();'
+            'await wait(()=>list.children.length===0&&status.textContent.includes("没有可恢复"),"confirmed clear");'
+            'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
+        )
+        (fixture / "recent.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
     def browser_frame(process):
         deadline = monotonic() + 20
         while monotonic() < deadline:
@@ -976,6 +1035,8 @@ def run_win32(exe, base, root):
             proc = subprocess.Popen([str(exe),"--gdi",persisted],env=preview_env(root))
             frame = browser_frame(proc)
             edit = user.GetDlgItem(frame,1001)
+            home = user.GetDlgItem(frame,1002)
+            content = user.FindWindowExW(frame,None,"MoonContent",None)
             user.SetWindowPos(frame,None,0,0,840,590,0x0016)
             wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(persisted,)),
                      "The reading preference restart fixture did not finish loading",15)
@@ -988,6 +1049,63 @@ def run_win32(exe, base, root):
                 if db.execute("SELECT origin FROM zoom").fetchall():
                     raise RuntimeError("Reset left a stored non-default zoom preference")
             print("reading_plugin=ok native_unicode_find=ok find_tab_scope=ok site_zoom_restart=ok",flush=True)
+        if recent.exists():
+            def closed_page(name):
+                address = base + "/page/" + name
+                previous = Fixture.closed_loaded.get(name,0)
+                set_control(edit,address)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: Fixture.closed_loaded.get(name,0)>previous,f"{name} did not finish loading",15)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(address,)),
+                         f"{name} did not commit")
+                return address
+
+            def close_first():
+                click(px(251),px(150))
+                wait_for(lambda: user.IsWindowVisible(home),"Closing the only tab did not return to home")
+
+            before = closed_page("closed-first")
+            after = closed_page("closed-second")
+            close_first()
+            previous = Fixture.closed_loaded.get("closed-second",0)
+            invoke("恢复上一个关闭的标签")
+            wait_for(lambda: Fixture.closed_loaded.get("closed-second",0)>previous,
+                     "The restore command did not load the latest closed tab",15)
+            back_count = Fixture.closed_loaded.get("closed-first",0)
+            click(px(285),px(24))
+            wait_for(lambda: read_address()==before and Fixture.closed_loaded.get("closed-first",0)>back_count,
+                     "Restored tab lost its Back entry")
+            click(px(319),px(24))
+            wait_for(lambda: read_address()==after and Fixture.closed_loaded.get("closed-second",0)>previous+1,
+                     "Restored tab lost its Forward entry")
+            wait_for(lambda: len(history_rows("SELECT id FROM visits WHERE url=?",(after,)))>=2,
+                     "The restored forward page did not finish")
+            close_first()
+            closed_page("closed-item")
+            close_first()
+            closed_page("closed-protected")
+            web_view = user.FindWindowExW(content,None,None,None)
+            if not web_view:
+                raise RuntimeError("Missing WebKit view for protected input exercise")
+            user.PostMessageW(web_view,0x0102,ord('x'),1)  # WM_CHAR delivered to the protected page
+            close_first()
+
+            set_control(edit,base + "/page/closed-post")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(base + "/closed-submit",)),
+                     "The non-GET fixture did not finish")
+            close_first()
+
+            invoke("最近关闭的标签")
+            wait_for(lambda: read_address()=="extension://moon.recent-tabs/recent.html",
+                     "The bundled recent tabs plugin did not open its page")
+            restore_count = Fixture.closed_loaded.get("closed-second",0)
+            set_control(edit,"extension://moon.closed-fixture/recent.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            library_result("moon.closed-fixture")
+            wait_for(lambda: read_address()==after and Fixture.closed_loaded.get("closed-second",0)>restore_count,
+                     "Restoring a selected entry did not reopen the actual webpage")
+            print("recent_tabs_plugin=ok back_forward=ok protected_input=ok non_get=ok targeted_reopen=ok clear_confirmation=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

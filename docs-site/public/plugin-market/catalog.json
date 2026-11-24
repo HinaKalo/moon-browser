@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.recent-tabs",
+      "name": "最近关闭的标签",
+      "description": "恢复本次会话中关闭的网页，支持 Ctrl+Shift+T 和逐项恢复。",
+      "permission": "管理最近关闭的标签",
+      "url": "https://docs.browser.moonl.cloud/recent-tabs.html"
+    },
+    {
       "id": "moon.reading",
       "name": "查找与缩放",
       "description": "在当前页查找文字，按站点记住页面缩放比例。",

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>最近关闭的标签</title>
+<style>
+  :root {
+    color-scheme: light;
+    font: 14px/1.5 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    --page: #f6f7fa; --panel: #fff; --text: #141820; --quiet: #545d70;
+    --rule: #dce0eb; --hover: #eef1f8; --accent: #4158bf; --danger: #a52937;
+    background: var(--page);
+    color: var(--text);
+  }
+  :root[data-moon-theme="dark"] {
+    color-scheme: dark;
+    --page: #171a22; --panel: #202430; --text: #edf0f7; --quiet: #b8c0d2;
+    --rule: #3a4359; --hover: #292f41; --accent: #a6b5ff; --danger: #ffadb6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { width: min(100%, 840px); margin: auto; padding: 43px clamp(20px, 5vw, 48px) 54px; }
+  header { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+  h1 { font-size: 29px; letter-spacing: -.02em; margin: 0 0 7px; }
+  p { margin: 0; color: var(--quiet); }
+  kbd { font: inherit; border: 1px solid var(--rule); background: var(--panel); border-radius: 4px; padding: 1px 5px; white-space: nowrap; }
+  button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--rule); border-radius: 8px; padding: 8px 13px; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: default; }
+  button:hover:not(:disabled) { background: var(--hover); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #status { margin-top: 24px; }
+  #status:empty, ol:empty { display: none; }
+  ol { margin: 23px 0 0; padding: 0; list-style: none; background: var(--panel); border: 1px solid var(--rule); border-radius: 11px; }
+  li + li { border-top: 1px solid var(--rule); }
+  .restore { display: flex; text-align: left; align-items: center; width: 100%; justify-content: space-between; min-height: 61px; gap: 14px; border: 0; border-radius: 9px; padding: 9px 14px; }
+  .details { min-width: 0; }
+  strong, small { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  small { color: var(--quiet); font-size: 12px; margin-top: 2px; }
+  .action { flex: none; color: var(--accent); }
+  dialog { width: min(405px, 90vw); background: var(--panel); color: var(--text); border: 1px solid var(--rule); border-radius: 12px; padding: 22px; }
+  dialog::backdrop { background: #141a326e; }
+  dialog h2 { margin: 0 0 8px; font-size: 18px; }
+  .actions { display: flex; justify-content: end; gap: 9px; margin-top: 18px; }
+  #confirm-clear { color: var(--danger); }
+</style>
+<main>
+  <header>
+    <div>
+      <h1>最近关闭的标签</h1>
+      <p>恢复本次会话中关闭的网页。<kbd>Ctrl+Shift+T</kbd> 恢复最近一项。</p>
+    </div>
+    <button id="clear" type="button" disabled>清空列表</button>
+  </header>
+  <p id="status" role="status">正在读取最近关闭的标签…</p>
+  <ol id="entries" aria-label="最近关闭的标签"></ol>
+  <dialog id="confirm" aria-labelledby="confirmation">
+    <form method="dialog">
+      <h2 id="confirmation">清空最近关闭的标签？</h2>
+      <p>清空后，当前列表中的标签无法从这里恢复。</p>
+      <div class="actions">
+        <button value="cancel" autofocus>取消</button>
+        <button value="clear" id="confirm-clear">清空列表</button>
+      </div>
+    </form>
+  </dialog>
+</main>
+<script>
+  const list = document.querySelector('#entries');
+  const status = document.querySelector('#status');
+  const clear = document.querySelector('#clear');
+  const confirm = document.querySelector('#confirm');
+  let request = 0;
+  let generation = 0;
+  let working = false;
+
+  async function host(method, params = {}) {
+    const reply = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(
+      JSON.stringify({ jsonrpc: '2.0', id: String(++request), method, params })
+    ));
+    if (reply.error) throw new Error(reply.error.message);
+    return reply.result;
+  }
+
+  function row(entry) {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    const details = document.createElement('span');
+    const title = document.createElement('strong');
+    const origin = document.createElement('small');
+    const action = document.createElement('span');
+    button.type = 'button';
+    button.className = 'restore';
+    details.className = 'details';
+    title.textContent = entry.title || entry.origin || '网页';
+    origin.textContent = entry.origin;
+    action.className = 'action';
+    action.textContent = '恢复';
+    details.append(title, origin);
+    button.append(details, action);
+    button.addEventListener('click', () => reopen(entry.id));
+    item.append(button);
+    return item;
+  }
+
+  async function load() {
+    const current = ++generation;
+    try {
+      const entries = await host('tabs.closed.list');
+      if (current !== generation) return;
+      list.replaceChildren(...entries.map(row));
+      clear.disabled = !entries.length;
+      status.textContent = entries.length ? '' : '目前没有可恢复的标签。';
+    } catch {
+      if (current !== generation) return;
+      list.replaceChildren();
+      clear.disabled = true;
+      status.textContent = '无法读取列表，请检查插件是否已启用并授权。';
+    }
+  }
+
+  async function reopen(id) {
+    if (working) return;
+    working = true;
+    try {
+      const outcome = await host('tabs.closed.reopen', { id });
+      if (outcome === 'reopened' || outcome === 'notFound') await load();
+      if (outcome === 'tabLimit') status.textContent = '标签页已满，关闭一页后可尝试恢复。';
+      if (outcome === 'unavailable') status.textContent = '现在无法恢复此标签。';
+    } catch {
+      status.textContent = '无法恢复此标签，请检查插件权限。';
+    } finally {
+      working = false;
+    }
+  }
+
+  clear.addEventListener('click', () => {
+    confirm.returnValue = 'cancel';
+    confirm.showModal();
+  });
+  confirm.addEventListener('close', async () => {
+    if (confirm.returnValue !== 'clear' || working) return;
+    working = true;
+    try {
+      await host('tabs.closed.clear');
+      await load();
+    } catch {
+      status.textContent = '无法清空列表，请检查插件权限。';
+    } finally {
+      working = false;
+    }
+  });
+  addEventListener('focus', () => { if (!working) load(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !working) load(); });
+  load();
+</script>
+</html>

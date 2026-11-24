@@ -50,7 +50,7 @@ static const Theme *theme = &light;
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
 enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET,
        MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 16, MENU_PLUGIN_STRIDE = 24,
-       MENU_SCRIPTS_PICK = 600, MENU_SCRIPTS_BASE = 610 };
+       MENU_SCRIPTS_PICK = 2000, MENU_SCRIPTS_BASE = 2010 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        PALETTE_TAB_OFFSET = 1000 };
 
@@ -1054,7 +1054,8 @@ static bool keyboard(MSG *msg) {
     if (ctrl && !shift && !alt && msg->wParam == 'D' && moon_plugin_shortcut("Ctrl+D")) return true;
     if (ctrl && shift && !alt && msg->wParam == 'O' && moon_plugin_shortcut("Ctrl+Shift+O")) return true;
     if (ctrl && msg->wParam == 'B') { moon_shell_toggle_sidebar(); return true; }
-    if (ctrl && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
+    if (ctrl && shift && !alt && msg->wParam == 'T' && moon_plugin_shortcut("Ctrl+Shift+T")) return true;
+    if (ctrl && !shift && !alt && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
     if (ctrl && msg->wParam == 'W') { moon_command(MOON_CLOSE,moon_active_index(),NULL); return true; }
     if (ctrl && msg->wParam == VK_TAB) { moon_command(shift ? MOON_KEY_PREV : MOON_KEY_NEXT,0,NULL); return true; }
     if (ctrl && shift && msg->wParam == 'M') { moon_command(MOON_DIAGNOSTICS,0,NULL); return true; }

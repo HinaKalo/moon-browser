@@ -22,6 +22,7 @@ export default defineConfig({
         { text: '网页开发者工具', link: '/devtools' },
         { text: '站点数据', link: '/site-data' },
         { text: '查找与缩放', link: '/reading' },
+        { text: '最近关闭的标签', link: '/recent-tabs' },
         { text: '浏览历史', link: '/history' },
         { text: '严格去广告', link: '/blocker' },
         { text: '书签与下载', link: '/library' }

@@ -9,6 +9,7 @@ const network = @import("network_policy.zig");
 const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
+const recent_tabs = @import("recent_tabs.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
 pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false };
@@ -36,6 +37,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
+        .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
     };
 }
 
@@ -100,6 +102,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector" => {},
+        .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
     };
     if (!context.consent.valid(context.consent.context)) return sdk.failure(output, id, .Cancelled);
@@ -110,7 +113,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     switch (method) {
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
-        .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find" => {
+        .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find",
+        .@"tabs.closed.list", .@"tabs.closed.clear" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -318,6 +322,21 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const percent = native.moon_reading_zoom(context.target_tab_id,@intFromEnum(value.action));
             const result: ?c_uint = if (percent == 0) null else percent;
             return sdk.result(output,id,result);
+        },
+        .@"tabs.closed.list" => {
+            var items: [recent_tabs.limit]sdk.ClosedTab = undefined;
+            return sdk.result(output,id,recent_tabs.list(&items));
+        },
+        .@"tabs.closed.reopen" => {
+            if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(struct { id: ?u32 = null },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const reopened = native.moon_recent_reopen(context.target_tab_id,options.id!=null,options.id orelse 0);
+            return sdk.result(output,id,@as(sdk.ReopenClosedTab,@enumFromInt(reopened)));
+        },
+        .@"tabs.closed.clear" => {
+            if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            recent_tabs.clear();
+            return sdk.result(output,id,null);
         },
     };
 }

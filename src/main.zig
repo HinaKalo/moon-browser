@@ -12,6 +12,7 @@ const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
 const reading = @import("reading.zig");
+const recent_tabs = @import("recent_tabs.zig");
 const market = @import("market.zig");
 const updater = @import("updater.zig");
 
@@ -450,6 +451,7 @@ fn closeTab(index: usize) void {
     if (index >= count) return;
     site_data.closed(tabs[index].id);
     const was_active = index == active;
+    rememberClosedTab(&tabs[index]);
     detach(&tabs[index]);
     forgetSession(&tabs[index]);
     count -= 1;
@@ -468,6 +470,54 @@ fn closeTab(index: usize) void {
     }
     updateChrome(was_active);
 }
+
+fn rememberClosedTab(tab: *Tab) void {
+    if (!plugins.systemEnabled(.@"tabs.closed.manage") or tab.extension or !tab.has_document or
+        tab.dirty or tab.unsafe_history or tab.loading or tab.opening != .none or tab.download_count != 0 or
+        !history.validURL(slice(&tab.url))) return;
+    switch (tab.phase) {
+        .live => {
+            const view = tab.view orelse return;
+            if (!tab.loaded or native.moon_engine_media(view)) return;
+            forgetSession(tab);
+            storeSession(tab);
+        },
+        .dormant => {},
+        else => return,
+    }
+    recent_tabs.record(.{ .title=tab.title,.url=tab.url,.state=tab.session });
+    tab.session = null;
+}
+
+export fn moon_recent_reopen(source: u64, specific: bool, entry_id: u32) c_int {
+    if (stopped or count == 0 or tabs[active].id != source or !network.mayNavigate())
+        return @intFromEnum(sdk.ReopenClosedTab.unavailable);
+    const current = &tabs[active];
+    const reuse = current.phase == .blank and current.opening == .none and current.view == null;
+    if (!reuse and count == tabs.len) return @intFromEnum(sdk.ReopenClosedTab.tabLimit);
+    const entry = recent_tabs.take(if (specific) entry_id else null) orelse return @intFromEnum(sdk.ReopenClosedTab.notFound);
+    const index = if (reuse) active else count;
+    tabs[index] = .{
+        .id=next_id,.phase=.dormant,.url=entry.url,.title=entry.title,.session=entry.state,
+        .last_used=native.moon_clock(),
+    };
+    next_id += 1;
+    if (reuse) {
+        updateChrome(true);
+        restore(&tabs[index]);
+        updateChrome(false);
+        plugins.changed(tabSnapshot());
+    } else {
+        count += 1;
+        chooseTab(index,true);
+    }
+    return @intFromEnum(sdk.ReopenClosedTab.reopened);
+}
+
+fn checkClosedTabGrant() void {
+    if (!plugins.systemEnabled(.@"tabs.closed.manage")) recent_tabs.clear();
+}
+
 fn sync(tab: *Tab) void {
     const view = tab.view orelse return;
     var url: [4096:0]u8 = @splat(0);
@@ -706,6 +756,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         bookmarks.close();
         downloads.close();
         reading.close();
+        recent_tabs.clear();
         site_data.reset();
         for (tabs[0..count]) |*tab| {
             detach(tab);
@@ -753,6 +804,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             network.select(plugins.networkSource());
             checkSiteDataGrant();
             checkFindGrant();
+            checkClosedTabGrant();
         },
         native.MOON_PLUGIN_GRANT => {
             const permission = std.enums.fromInt(sdk.Permission,index & 0xffffffff) orelse return;
@@ -760,6 +812,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             if (permission == .@"network.filter") network.select(plugins.networkSource());
             if (permission == .@"siteData.read") checkSiteDataGrant();
             if (permission == .@"page.reading") checkFindGrant();
+            if (permission == .@"tabs.closed.manage") checkClosedTabGrant();
         },
         native.MOON_PLUGIN_SETTINGS => {
             var address: [256]u8 = undefined;
@@ -961,6 +1014,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"downloads.manage" => "允许管理下载",
         .@"siteData.read" => "允许查看站点数据",
         .@"page.reading" => "允许打开页内查找和调整缩放",
+        .@"tabs.closed.manage" => "允许管理最近关闭的标签",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {

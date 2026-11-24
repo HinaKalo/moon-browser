@@ -145,6 +145,7 @@ bool moon_plugin_open_page(const char *id);
 bool moon_plugin_shortcut(const char *shortcut);
 bool moon_reading_find(uint64_t tab, const char *owner);
 unsigned moon_reading_zoom(uint64_t tab, int action);
+int moon_recent_reopen(uint64_t tab, bool specific, uint32_t entry);
 bool moon_shell_find_show(void);
 bool moon_shell_find_hide(void);
 void moon_shell_find_result(const char *query, unsigned matches);

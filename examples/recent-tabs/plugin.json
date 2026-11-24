@@ -1,0 +1,16 @@
+{
+  "id": "moon.recent-tabs",
+  "name": "最近关闭的标签",
+  "version": "0.1.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonRecentTabs.exe",
+  "settingsPage": "recent.html",
+  "contributes": {
+    "commands": [
+      { "id": "open", "label": "最近关闭的标签" },
+      { "id": "reopen", "label": "恢复上一个关闭的标签", "shortcut": "Ctrl+Shift+T" }
+    ]
+  },
+  "permissions": ["tabs.closed.manage"]
+}
