@@ -73,7 +73,10 @@ if ($LASTEXITCODE -ne 0) {
         '--prerelease','--target',$head,'--title',('Moon Browser ' + $version.name),'--notes-file',$notes)
 } else {
     $found = $lookup | ConvertFrom-Json
-    if ($found.targetCommitish -ne $head) { throw 'The release already exists for a different commit.' }
+    if ($found.targetCommitish -ne $head) {
+        if (!$found.isDraft) { throw 'The public release already exists for a different commit.' }
+        Native 'gh' @('release','edit',$tag,'--repo',$repo,'--target',$head)
+    }
     if ($found.isDraft) {
         foreach ($item in $assets) {
             if (!($found.assets | Where-Object name -EQ $item.name)) {
@@ -99,7 +102,7 @@ if ($pending.Count) {
         Native 'scp' @('-q','-o','BatchMode=yes',$notes,"moon:$stage/notes.md")
         foreach ($item in $pending) {
             Native 'scp' @('-q','-o','BatchMode=yes',$item.path,"moon:$stage/$($item.name)")
-            Moon "relhub publish -app moon-browser -platform $($item.platform) -channel preview -no-channel -code $($version.code) -version $($version.name) -file $stage/$($item.name) -name $($item.name) -notes-file $stage/notes.md"
+            Moon "relhub publish -app moon-browser -platform $($item.platform) -no-channel -code $($version.code) -version $($version.name) -file $stage/$($item.name) -name $($item.name) -notes-file $stage/notes.md"
             Check-Download $item.url $item.sha
         }
     } finally {
