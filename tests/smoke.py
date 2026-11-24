@@ -296,7 +296,7 @@ class Fixture(BaseHTTPRequestHandler):
                 )
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
                         "pinned-first", "pinned-second", "session-first", "session-second", "session-pinned", "session-private",
-                        "session-external", "order-last"):
+                        "session-external", "order-last", "order-edge"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "chrome-window":
                 demo = (
@@ -2654,15 +2654,18 @@ def run_win32(exe, base, root):
             edit = user.GetDlgItem(frame,1001)
             home = user.GetDlgItem(frame,1002)
             wait_for(lambda: user.IsWindowVisible(home),"Restarted shell did not show its new-tab page")
+            visits = Fixture.closed_loaded.get("closed-item",0)
             click(px(110),px(148))
-            wait_for(lambda: read_address()==keep,"Restart did not restore the new order of fixed tabs")
+            wait_for(lambda: read_address()==keep and Fixture.closed_loaded.get("closed-item",0)>visits,
+                     "Restart did not load the first pinned tab in the new order")
+            dpi = user.GetDpiForWindow(frame)
             bounds = wt.RECT()
             user.GetClientRect(frame,ctypes.byref(bounds))
             capacity = (round(bounds.bottom*96/dpi)-134-48-6)//37
             for _ in range(capacity+4):
                 click(px(253),px(105))
             wait_for(lambda: user.IsWindowVisible(home),"Could not open enough tabs to scroll the sidebar")
-            closed_page("order-last")
+            edge = closed_page("order-edge")
             user.PostMessageW(frame,0x0201,1,sidebar_point(148+37*(capacity-1)))
             user.PostMessageW(frame,0x0200,1,sidebar_point(138))
             sleep(1.45)
@@ -2672,7 +2675,7 @@ def run_win32(exe, base, root):
             click(px(110),px(148))
             wait_for(lambda: read_address()==keep,"Dragging near the top edge did not scroll to the pinned rows")
             click(px(110),px(148+37*2))
-            wait_for(lambda: read_address()==last,"Dropping after auto-scroll did not use the visible target")
+            wait_for(lambda: read_address()==edge,"Dropping after auto-scroll did not use the visible target")
             proc,frame = restart_tabs()
             edit = user.GetDlgItem(frame,1001)
             home = user.GetDlgItem(frame,1002)
