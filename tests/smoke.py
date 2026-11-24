@@ -44,6 +44,7 @@ class Fixture(BaseHTTPRequestHandler):
     seen_unicode = Event()
     seen_lua_demo = Event()
     seen_editor_reload = Event()
+    seen_editor_ready = Event()
     seen_extension_network = Event()
 
     def do_GET(self):
@@ -55,6 +56,9 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"ok", "text/plain"
         elif path == "/editor-verified":
             self.seen_editor_reload.set()
+            data, content_type = b"ok", "text/plain"
+        elif path == "/editor-ready":
+            self.seen_editor_ready.set()
             data, content_type = b"ok", "text/plain"
         elif path == "/extension-network":
             self.seen_extension_network.set()
@@ -84,8 +88,9 @@ class Fixture(BaseHTTPRequestHandler):
                 demo = (
                     '<p id="editor-proof">Original</p><script>'
                     'new MutationObserver(() => { '
-                    'if (document.querySelector("#editor-proof").textContent === "Lua editor reloaded") '
-                    'fetch("/editor-verified"); '
+                    'const text = document.querySelector("#editor-proof").textContent;'
+                    'if (text === "Lua editor reloaded") fetch("/editor-verified");'
+                    'else if (text === "Old Lua source") fetch("/editor-ready");'
                     '}).observe(document.querySelector("#editor-proof"), {childList:true});</script>'
                 )
             data = (
@@ -523,7 +528,8 @@ def run_win32(exe, base, root):
 
             set_control(edit, base + "/page/editor")
             user.PostMessageW(edit, 0x0100, 0x0D, 1)
-            sleep(1)
+            if not Fixture.seen_editor_ready.wait(15):
+                raise RuntimeError("The editor fixture did not finish loading its original Lua script")
             invoke("打开 Lua 脚本编辑器")
             tool = wait_for(lambda: owned_window("MoonLuaEditor"), "Lua editor plugin did not open", 12)
             user.PostMessageW(tool, 0x0111, 102, 0)  # OPEN_SCRIPT
