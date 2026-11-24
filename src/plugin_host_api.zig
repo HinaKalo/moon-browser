@@ -18,6 +18,7 @@ const session = @import("session.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
 pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false, navigation: u64 = 0 };
+pub const LinkInvocation = struct { context: native.MoonLinkContext, operation: sdk.LinkMenuAction, consumed: bool = false };
 pub const Context = struct {
     grants: Permissions,
     plugin_id: []const u8,
@@ -26,7 +27,25 @@ pub const Context = struct {
     consent: userscripts.Consent,
     from_page: bool = false,
     user_command: bool = false,
+    link: ?*LinkInvocation = null,
 };
+
+fn applyLink(link: *LinkInvocation) sdk.LinkResult {
+    if (link.consumed or !native.moon_link_current(&link.context)) return .unavailable;
+    link.consumed = true;
+    switch (link.operation) {
+        .open => return std.enums.fromInt(sdk.LinkResult,native.moon_link_open(&link.context)) orelse .unavailable,
+        .copy => return if (native.moon_shell_copy_text(&link.context.url)) .copied else .clipboardBusy,
+        .bookmark => {
+            if (native.moon_shell_private()) return .unavailable;
+            const url = std.mem.sliceTo(&link.context.url,0);
+            const label = std.mem.sliceTo(&link.context.label,0);
+            const title = if (std.unicode.utf8ValidateSlice(label) and std.mem.indexOfAny(u8,label,"\r\n\t") == null) label else "";
+            const outcome = bookmarks.save(.{ .title=title,.url=url }) catch return .unavailable;
+            return switch (outcome) { .saved => .saved, .alreadySaved => .alreadySaved, .noPage => .unavailable };
+        },
+    }
+}
 
 pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
     return switch (method) {
@@ -39,7 +58,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
-        .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.update", .@"bookmarks.remove" => .@"bookmarks.manage",
+        .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value",
@@ -48,7 +67,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"tabs.togglePinned", .@"tabs.toggleMuted" => .@"tabs.organize",
-        .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.closeGroup" => .@"tabs.manage",
+        .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup" => .@"tabs.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
         .@"search.getConfig", .@"search.setConfig" => .@"search.manage",
@@ -183,7 +202,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find", .@"pageSource.open", .@"pageSource.status",
-        .@"popups.open", .@"popups.status", .@"downloads.clearCompleted",
+        .@"popups.open", .@"popups.status", .@"downloads.clearCompleted", .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig",
         .@"tabs.session.status", .@"tabs.session.restore", .@"tabs.session.forget" => {
@@ -192,6 +211,17 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         else => {},
     }
     return switch (method) {
+        .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink" => {
+            const link = context.link orelse return sdk.failure(output,id,.PermissionDenied);
+            const operation: sdk.LinkMenuAction = switch (method) {
+                .@"tabs.openLink" => .open,
+                .@"tabs.copyLink" => .copy,
+                .@"bookmarks.saveLink" => .bookmark,
+                else => unreachable,
+            };
+            if (!context.user_command or link.operation!=operation) return sdk.failure(output,id,.PermissionDenied);
+            return sdk.result(output,id,applyLink(link));
+        },
         .@"host.getInfo" => sdk.result(output, id, sdk.HostInfo{
             .apiVersion = sdk.api_version,
             .browserVersion = updater.versionName(),

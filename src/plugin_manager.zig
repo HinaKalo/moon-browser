@@ -24,6 +24,7 @@ const Command = struct {
     shortcut: []const u8,
     custom: bool,
     globalShortcut: ?[]const u8,
+    linkMenu: bool,
 };
 
 pub fn reply(allocator: std.mem.Allocator, output: []u8, data: anytype) bool {
@@ -72,6 +73,7 @@ pub fn details(allocator: std.mem.Allocator, output: []u8, index: usize) bool {
             .shortcut = if (global != null and user == null) "" else std.mem.span(native.moon_plugin_action_shortcut(index,i)),
             .custom = user != null,
             .globalShortcut = if (global) |key| std.mem.span(key) else null,
+            .linkMenu = plugins.linkOnly(index,i),
         };
     }
     return reply(allocator, output, .{

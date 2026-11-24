@@ -42,6 +42,8 @@ pub const Shortcut = enum {
     @"Ctrl+U",
 };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
+pub const LinkMenuAction = enum(c_uint) { open = 1, copy, bookmark };
+pub const LinkResult = enum { opened, copied, clipboardBusy, limitReached, saved, alreadySaved, unavailable };
 pub const Command = struct {
     id: []const u8,
     label: []const u8,
@@ -49,6 +51,7 @@ pub const Command = struct {
     shortcut: ?Shortcut = null,
     menu: ?MenuGroup = null,
     siteMenu: bool = false,
+    linkMenu: ?LinkMenuAction = null,
 };
 pub const ShortcutScope = enum { browser, global };
 pub const RegisteredShortcut = struct { id: []const u8, shortcut: []const u8, scope: ShortcutScope = .browser };
@@ -226,6 +229,7 @@ pub const Method = enum {
     @"bookmarks.list",
     @"bookmarks.save",
     @"bookmarks.saveActive",
+    @"bookmarks.saveLink",
     @"bookmarks.update",
     @"bookmarks.remove",
     @"bookmarks.importHtml",
@@ -256,6 +260,8 @@ pub const Method = enum {
     @"tabs.toggleMuted",
     @"tabs.duplicate",
     @"tabs.copyAddress",
+    @"tabs.openLink",
+    @"tabs.copyLink",
     @"tabs.closeGroup",
     @"privacy.clear",
     @"privacy.status",

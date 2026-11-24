@@ -66,6 +66,7 @@ const Task = struct {
     dark: bool,
     grants: Permissions,
     rpc: ?*Rpc = null,
+    link: ?*api.LinkInvocation = null,
     outcome: Outcome = .failed,
     message: [512:0]u8 = @splat(0),
     toast: bool = false,
@@ -78,6 +79,7 @@ const Command = struct {
     shortcut: ?sdk.Shortcut = null,
     menu_group: ?sdk.MenuGroup = null,
     site_menu: bool = false,
+    link_menu: ?sdk.LinkMenuAction = null,
     menu_override: MenuOverride = .default,
     user_shortcut: ?Hotkey = null,
 };
@@ -164,12 +166,14 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     if (!copy(&plugin.network_rules,network_rules orelse "")) return;
     for (commands, 0..) |item, index| {
         if (!validComponent(item.id) or item.label.len == 0) return;
+        if (item.linkMenu != null and (item.shortcut != null or item.siteMenu or item.menu != null)) return;
         for (commands[0..index]) |prior| if (std.mem.eql(u8, prior.id, item.id)) return;
         plugin.actions[index] = .{};
         plugin.actions[index].interactive = item.interactive;
         plugin.actions[index].shortcut = item.shortcut;
         plugin.actions[index].menu_group = item.menu;
         plugin.actions[index].site_menu = item.siteMenu;
+        plugin.actions[index].link_menu = item.linkMenu;
         if (!copy(&plugin.actions[index].id, item.id) or !copy(&plugin.actions[index].label, item.label)) return;
     }
     if (bundled) {
@@ -307,12 +311,14 @@ pub fn init(app: []const u8, profile: []const u8) void {
             }
             for (grant.menu_items) |id| {
                 if (menuSize()==menu_limit) break;
-                if (findAction(plugin,id)) |index| plugin.actions[index].menu_override = .pinned;
+                if (findAction(plugin,id)) |index| {
+                    if (plugin.actions[index].link_menu==null) plugin.actions[index].menu_override = .pinned;
+                }
             }
             if (grant.hotkey) |saved_key| {
                 if (findAction(plugin,saved_key.id)) |index| {
                     if (parseHotkey(index,saved_key.shortcut,saved_key.scope)) |key| {
-                        if (!hotkeyReserved(key) and !hotkeyConflict(key,plugin)) plugin.hotkey = key;
+                        if (plugin.actions[index].link_menu==null and !hotkeyReserved(key) and !hotkeyConflict(key,plugin)) plugin.hotkey = key;
                     }
                 }
             }
@@ -418,7 +424,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"tabs.closed.manage" => "此插件可查看最近关闭标签的标题和站点，并恢复或清空这些标签。",
                 .@"privacy.clear" => "此插件可以请求清除所选浏览数据。浏览器会在删除前单独确认。",
                 .@"taskManager.manage" => "此插件可查看标签标题和浏览器进程内存，以及切换标签和卸载可回收的后台标签。",
-                .@"ui.commands" => "此插件可为已声明的命令添加主菜单入口，并设置一个快捷键。系统全局快捷键需要单独确认。",
+                .@"ui.commands" => "此插件可为已声明的命令添加菜单入口，并设置一个快捷键。链接操作由右键菜单发起，全局快捷键仍需单独确认。",
                 .@"tabs.organize" => "此插件可固定或取消固定触发命令的标签，也可切换该标签的音频静音。",
                 .@"tabs.manage" => "此插件可复制触发命令的标签或将网址写入剪贴板，也可关闭未固定且未受保护的其他标签。",
                 .@"search.manage" => "此插件可查看和修改默认搜索引擎、搜索网址和关键词。修改会影响之后主动提交的搜索。",
@@ -598,12 +604,26 @@ pub fn siteMenuVisible(index: usize, command_index: usize) bool {
     return plugin.actions[command_index].site_menu and (plugin.bundled or canContribute(plugin));
 }
 
+pub fn linkOnly(index: usize, command_index: usize) bool {
+    return all[index].actions[command_index].link_menu != null;
+}
+
+pub fn linkAction(index: usize, command_index: usize) ?sdk.LinkMenuAction {
+    if (index>=len) return null;
+    const plugin = &all[index];
+    if (!plugin.enabled or command_index>=plugin.action_count or (!plugin.bundled and !canContribute(plugin))) return null;
+    const operation = plugin.actions[command_index].link_menu orelse return null;
+    const permission: sdk.Permission = if (operation==.bookmark) .@"bookmarks.manage" else .@"tabs.manage";
+    return if (plugin.grants.contains(permission)) operation else null;
+}
+
 pub fn setMenu(owner: []const u8, id: []const u8, add: bool) sdk.UiRegistration {
     if (changing_state) return .unavailable;
     const index = contributor(owner) orelse return .unavailable;
     const plugin = &all[index];
     const command_index = findAction(plugin,id) orelse return .notFound;
     const entry = &plugin.actions[command_index];
+    if (entry.link_menu!=null) return .unavailable;
     const before = entry.menu_override;
     const after: MenuOverride = if (add) .pinned else if (entry.menu_group!=null) .hidden else .default;
     if (before==after) return .saved;
@@ -676,7 +696,7 @@ fn loadUserShortcuts() void {
     for (saved.value) |item| {
         const plugin = &all[indexOf(item.plugin) orelse continue];
         const action_index = findAction(plugin,item.command) orelse continue;
-        if (plugin.actions[action_index].user_shortcut != null) continue;
+        if (plugin.actions[action_index].user_shortcut != null or plugin.actions[action_index].link_menu!=null) continue;
         const key = parseHotkey(action_index,item.shortcut,.browser) orelse continue;
         if (hotkeyReserved(key) or userShortcutConflict(plugin,key)) continue;
         plugin.actions[action_index].user_shortcut = key;
@@ -706,6 +726,7 @@ pub fn setUserShortcut(index: usize, id: []const u8, text: ?[]const u8) sdk.UiRe
     if (!plugin.enabled) return .unavailable;
     const action_index = findAction(plugin,id) orelse return .notFound;
     const entry = &plugin.actions[action_index];
+    if (entry.link_menu!=null) return .unavailable;
     const previous = entry.user_shortcut;
     const key: ?Hotkey = if (text) |value| blk: {
         const candidate = parseHotkey(action_index,value,.browser) orelse return .invalidShortcut;
@@ -726,6 +747,7 @@ pub fn setHotkey(owner: []const u8, id: []const u8, text: ?[]const u8, scope: sd
     const index = contributor(owner) orelse return .unavailable;
     const plugin = &all[index];
     const command_index = findAction(plugin,id) orelse return .notFound;
+    if (plugin.actions[command_index].link_menu!=null) return .unavailable;
     const previous = plugin.hotkey;
     const old_slot = if (previous) |key| key.slot else null;
     var replacement: ?Hotkey = null;
@@ -895,9 +917,14 @@ pub fn readSettingsPage(address: []const u8, body: []u8) ?[:0]const u8 {
 }
 
 fn launch(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot) bool {
+    return launchBound(index,command_index,trigger,snapshot,null);
+}
+
+fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot, link: ?*api.LinkInvocation) bool {
     if (index >= len) return false;
     const plugin = &all[index];
     if (!plugin.enabled or plugin.work != null or command_index >= plugin.action_count) return false;
+    if (linkOnly(index,command_index) != (link!=null)) return false;
     const task = allocator.create(Task) catch return false;
     const rpc = if (plugin.protocol == .v2) allocator.create(Rpc) catch {
         allocator.destroy(task);
@@ -919,6 +946,7 @@ fn launch(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snaps
         .dark = native.moon_shell_dark_mode(),
         .grants = plugin.grants,
         .rpc = rpc,
+        .link = link,
     };
     plugin.work = task;
     if (!native.moon_plugin_thread(task)) {
@@ -928,6 +956,13 @@ fn launch(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snaps
         return false;
     }
     return true;
+}
+
+pub fn linkCommand(index: usize, command_index: usize, snapshot: ?Snapshot, context: *const native.MoonLinkContext) void {
+    const operation = linkAction(index,command_index) orelse return;
+    const invocation = allocator.create(api.LinkInvocation) catch return;
+    invocation.* = .{ .context=context.*, .operation=operation };
+    if (!launchBound(index,command_index,.command,snapshot,invocation)) allocator.destroy(invocation);
 }
 
 pub fn command(index: usize, command_index: usize, snapshot: ?Snapshot) void {
@@ -971,6 +1006,7 @@ fn serviceRpc(task: *Task, rpc: *Rpc) void {
         .tab = if (task.snapshot) |*snapshot| snapshot else null,
         .consent = .{ .context = task, .valid = invocationActive },
         .user_command = task.trigger == .command,
+        .link = task.link,
     }) catch {
         rpc.size = 0;
         return;
@@ -1001,6 +1037,7 @@ pub fn tick(snapshot: ?Snapshot, smoking: bool) void {
             });
         }
         if (task.rpc) |rpc| allocator.destroy(rpc);
+        if (task.link) |link| allocator.destroy(link);
         allocator.destroy(task);
         if (plugin.pending_shortcut) |pending| {
             plugin.pending_shortcut = null;

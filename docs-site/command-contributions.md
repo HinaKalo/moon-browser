@@ -18,6 +18,12 @@
 
 在命令清单添加 `"siteMenu": true`，可同时把命令放到站点菜单。普通插件需获得 `ui.commands` 授权。点击时仍调用 `commands.run`，标题和 URL 沿用 `tabs.read` 的授权。切换网页或关闭标签后，先前打开的菜单无法再执行命令。`ui.menu.add` 和 `ui.menu.remove` 仍管理「…」主菜单。
 
+## 链接右键菜单
+
+从 0.1.0-preview.35 起，命令可声明 `"linkMenu": "open"`、`"copy"` 或 `"bookmark"`。它会出现在 HTTP(S) 链接的右键菜单。外部插件需要 `ui.commands`，前两种操作另需 `tabs.manage`，加入书签需要 `bookmarks.manage`。
+
+每条链接菜单命令只在右键选中后执行。对应的宿主方法为 `tabs.openLink`、`tabs.copyLink`、`bookmarks.saveLink`，入参都是 `{}`，由宿主使用用户选中的链接。每次选择只允许执行一次操作，原文档切换后失效。链接命令没有全局入口，清单中也无需声明 `menu`、`siteMenu` 或 `shortcut`。
+
 ## 用户配置快捷键
 
 从 0.1.0-preview.29 起，在「… → 管理插件」选择已启用的插件，在「命令与快捷键」中录制组合键并保存。支持 `Ctrl+Shift` 或 `Alt+Shift` 加字母或数字。每条命令可以独立设置，浏览器保留组合与已经分配的组合会提示冲突。恢复原快捷键会回到插件原有的设置。

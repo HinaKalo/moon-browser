@@ -420,7 +420,7 @@ fn restore(tab: *Tab) void {
         return;
     }
     if (delayOpening(tab, .restore)) return;
-    tab.restoring_history = true;
+    tab.restoring_history = tab.has_document;
     tab.opening = .none;
     if (tab.session) |session| {
         if (openView(tab)) {
@@ -1388,6 +1388,43 @@ export fn moon_site_menu_run(site: *const native.MoonSiteContext, index: usize, 
     if (!hasSite(tab) or tab.id != site.tab_id or tab.navigation != site.navigation) return;
     plugins.command(index,command,tabSnapshot());
 }
+
+export fn moon_link_capture(link: *native.MoonLinkContext, id: u64) bool {
+    if (stopped or count==0 or tabs[active].id!=id or !hasSite(&tabs[active])) return false;
+    if (!history.validURL(slice(&link.url))) return false;
+    link.tab_id = id;
+    link.navigation = tabs[active].navigation;
+    return true;
+}
+
+export fn moon_link_current(link: *const native.MoonLinkContext) bool {
+    return !stopped and count!=0 and tabs[active].id==link.tab_id and tabs[active].navigation==link.navigation and hasSite(&tabs[active]);
+}
+
+export fn moon_plugin_link_action(index: usize, command: usize) c_uint {
+    return if (plugins.linkAction(index,command)) |operation| @intFromEnum(operation) else 0;
+}
+
+export fn moon_plugin_link_only(index: usize, command: usize) bool {
+    return plugins.linkOnly(index,command);
+}
+
+export fn moon_link_menu_run(link: *const native.MoonLinkContext, index: usize, command: usize) void {
+    if (moon_link_current(link)) plugins.linkCommand(index,command,tabSnapshot(),link);
+}
+
+export fn moon_link_open(link: *const native.MoonLinkContext) c_uint {
+    if (count==tabs.len) return @intFromEnum(sdk.LinkResult.limitReached);
+    var address: [4096:0]u8 = @splat(0);
+    var label: [512:0]u8 = @splat(0);
+    _ = copy(&address,slice(&link.url));
+    _ = copy(&label,slice(&link.label));
+    tabs[count] = .{ .id=next_id,.phase=.dormant,.url=address,.title=label,.last_used=native.moon_clock() };
+    count += 1;
+    next_id += 1;
+    native.moon_shell_refresh();
+    return @intFromEnum(sdk.LinkResult.opened);
+}
 export fn moon_tab_id(index: usize) u64 {
     return if (index<count) tabs[index].id else 0;
 }
@@ -1440,7 +1477,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
         .@"privacy.clear" => "允许在确认后清除浏览数据",
         .@"taskManager.manage" => "允许查看和管理标签与进程",
-        .@"ui.commands" => "允许添加主菜单入口和注册快捷键",
+        .@"ui.commands" => "允许添加菜单入口和注册快捷键",
         .@"tabs.organize" => "允许固定标签和切换标签静音",
         .@"privacy.privateWindow" => "允许打开隐私浏览窗口",
         .@"tabs.manage" => "允许复制和批量关闭标签",
@@ -1859,9 +1896,11 @@ fn actionAt(index: usize, home: bool) ?Action {
     }
     for (0..plugins.count()) |plugin| {
         if (!plugins.isEnabled(plugin)) continue;
-        const commands = plugins.actionCount(plugin);
-        if (remaining < commands) return .{ .plugin = .{ .index = plugin, .command = remaining } };
-        remaining -= commands;
+        for (0..plugins.actionCount(plugin)) |command| {
+            if (plugins.linkOnly(plugin,command)) continue;
+            if (remaining==0) return .{ .plugin = .{ .index=plugin,.command=command } };
+            remaining -= 1;
+        }
     }
     return null;
 }
@@ -1870,7 +1909,8 @@ export fn moon_action_count(home: bool) usize {
     var actions: usize = 0;
     for (shell_actions) |action| actions += @intFromBool(shellActionVisible(action,home));
     for (0..plugins.count()) |plugin| {
-        if (plugins.isEnabled(plugin)) actions += plugins.actionCount(plugin);
+        if (!plugins.isEnabled(plugin)) continue;
+        for (0..plugins.actionCount(plugin)) |command| actions += @intFromBool(!plugins.linkOnly(plugin,command));
     }
     return actions;
 }

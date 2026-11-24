@@ -12,7 +12,7 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params != .object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
-    const Action = enum { pin, mute, duplicate, copyAddress, closeOthers, closeBelow };
+    const Action = enum { pin, mute, duplicate, copyAddress, closeOthers, closeBelow, openLink, copyLink };
     const operation = std.meta.stringToEnum(Action,action) orelse return error.InvalidCommand;
     const message = switch (operation) {
         .pin => try organize(&client,.@"tabs.togglePinned"),
@@ -21,8 +21,22 @@ pub fn main() !void {
         .copyAddress => try organize(&client,.@"tabs.copyAddress"),
         .closeOthers => try close(&client,.others),
         .closeBelow => try close(&client,.below),
+        .openLink => try link(&client,.@"tabs.openLink"),
+        .copyLink => try link(&client,.@"tabs.copyLink"),
     };
     try client.reply(id, sdk.CommandResult{ .message = message, .toast = true });
+}
+
+fn link(client: *sdk.Client, method: sdk.Method) !?[]const u8 {
+    const response = try client.call(method,.{});
+    const outcome = std.meta.stringToEnum(sdk.LinkResult,sdk.string(response.get("result")) orelse "") orelse .unavailable;
+    return switch (outcome) {
+        .opened => null,
+        .copied => "链接已复制。",
+        .clipboardBusy => "剪贴板暂不可用，请重试。",
+        .limitReached => "标签页已满。关闭一页后可继续。",
+        else => "链接操作不可用。请在当前网页重新打开右键菜单。",
+    };
 }
 
 fn organize(client: *sdk.Client, method: sdk.Method) !?[]const u8 {

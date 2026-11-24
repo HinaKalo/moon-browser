@@ -11,7 +11,8 @@
       { "id": "open", "label": "管理书签", "menu": "library", "shortcut": "Ctrl+Shift+O" },
       { "id": "save", "label": "将当前页加入书签", "menu": "library", "shortcut": "Ctrl+D" },
       { "id": "import", "label": "导入 HTML 书签", "menu": "library", "interactive": true },
-      { "id": "export", "label": "导出 HTML 书签", "menu": "library", "interactive": true }
+      { "id": "export", "label": "导出 HTML 书签", "menu": "library", "interactive": true },
+      { "id": "saveLink", "label": "将链接加入书签", "linkMenu": "bookmark" }
     ]
   },
   "permissions": ["bookmarks.manage", "bookmarks.transfer"]

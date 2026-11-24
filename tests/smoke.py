@@ -57,6 +57,7 @@ class Fixture(BaseHTTPRequestHandler):
     site_data_catalog_ready = Event()
     change_page_source = Event()
     navigate_from_site_menu = Event()
+    navigate_from_link_menu = Event()
     page_source_requests = 0
     popup_attempts = set()
     popup_destinations = set()
@@ -149,6 +150,8 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = (b"change" if self.change_page_source.is_set() else b"wait"), "text/plain"
         elif path == "/site-menu-navigation":
             data, content_type = (b"change" if self.navigate_from_site_menu.is_set() else b"wait"), "text/plain"
+        elif path == "/link-menu-navigation":
+            data, content_type = (b"change" if self.navigate_from_link_menu.is_set() else b"wait"), "text/plain"
         elif path.startswith("/popup-attempt/"):
             self.popup_attempts.add(path.removeprefix("/popup-attempt/"))
             data, content_type = b"ok", "text/plain"
@@ -185,6 +188,15 @@ class Fixture(BaseHTTPRequestHandler):
             if name == "中文":
                 self.seen_unicode.set()
             demo = ""
+            if name in ("link-menu-contract","link-menu-stale"):
+                suffix = "target" if name == "link-menu-contract" else "stale-target"
+                demo = (f'<a style="position:absolute;top:10px;left:10px" href="/page/link-menu-{suffix}">本地链接验收</a>'
+                        '<a style="position:absolute;top:46px;left:10px" href="mailto:fixture@example.invalid">邮件链接</a>')
+                if name == "link-menu-stale":
+                    demo += ('<script>const poll=setInterval(async()=>{'
+                             'const r=await fetch("/link-menu-navigation",{cache:"no-store"});'
+                             'if(await r.text()==="change"){clearInterval(poll);location.replace("/page/link-menu-after");}'
+                             '},120);</script>')
             if name == "site-menu-contract":
                 demo = ('<script>const poll=setInterval(async()=>{'
                         'const response=await fetch("/site-menu-navigation",{cache:"no-store"});'
@@ -612,6 +624,7 @@ def run_win32(exe, base, root):
     search_plugin = exe.parent / "plugins" / "search" / "MoonSearch.exe"
     session_plugin = exe.parent / "plugins" / "session" / "MoonSession.exe"
     tab_tools = exe.parent / "plugins" / "tab-tools" / "MoonTabTools.exe"
+    has_web_link_menu = tab_tools.exists() and '"linkMenu"' in tab_tools.with_name("plugin.json").read_text(encoding="utf-8")
     private_window = exe.parent / "plugins" / "private-window" / "MoonPrivateWindow.exe"
     if task_manager.exists():
         profile.mkdir(parents=True,exist_ok=True)
@@ -773,6 +786,8 @@ def run_win32(exe, base, root):
             if command["id"] in ("import","export"):
                 command["label"] = "Bookmark transfer fixture " + command["id"]
                 command.pop("menu",None)
+            if command.get("linkMenu"):
+                command["label"] = "未授权的书签链接命令"
         (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
         page = (bookmarks.parent / "bookmarks.html").read_text(encoding="utf-8")
         contract = (
@@ -2137,7 +2152,7 @@ def run_win32(exe, base, root):
                 if result.get("error"):
                     raise RuntimeError(result["error"])
 
-            def native_entries(trigger=None, choose=None, before_choose=None, popup_at=None):
+            def native_entries(trigger=None, choose=None, before_choose=None, popup_at=None, owner_window=None):
                 dimensions = wt.RECT()
                 user.GetClientRect(frame,ctypes.byref(dimensions))
                 if trigger:
@@ -2184,6 +2199,8 @@ def run_win32(exe, base, root):
                             raise RuntimeError(f"Native menu entry {choose!r} was missing: {result}")
                         if before_choose:
                             before_choose()
+                            if owner_window and not open_menu():
+                                return result
                         for _ in range(menu_count):
                             user.SendMessageW(popup,0x0100,0x28,1)  # WM_KEYDOWN / VK_DOWN
                             if user.GetMenuState(handle,position,0x400)&0x80:  # MF_HILITE
@@ -2194,7 +2211,7 @@ def run_win32(exe, base, root):
                         wait_for(lambda: not open_menu(),"Selecting the native menu item did not dismiss the menu")
                     return result
                 finally:
-                    user.PostMessageW(frame,0x001F,0,0)  # WM_CANCELMODE
+                    user.PostMessageW(owner_window or frame,0x001F,0,0)  # WM_CANCELMODE
                     wait_for(lambda: not open_menu(),"Main menu did not dismiss")
 
             if has_site_menu:
@@ -2235,6 +2252,99 @@ def run_win32(exe, base, root):
                 except RuntimeError as error:
                     raise RuntimeError(f"{error}: {read_address()!r}") from error
                 print("site_menu=ok address_anchor=ok committed_origin=ok contribution_grant=ok stale_navigation=ok keyboard=ok",flush=True)
+
+            if has_web_link_menu and bookmarks.exists():
+                def visit_link_fixture(path):
+                    url = base + "/page/" + path
+                    set_control(edit,url)
+                    user.PostMessageW(edit,0x0100,0x0D,1)
+                    wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(url,)),f"{path} did not load")
+                    return url
+
+                source = visit_link_fixture("link-menu-contract")
+                target = base + "/page/link-menu-target"
+                view = visible_page_view()
+
+                def link_menu(y=18, choose=None, before_choose=None):
+                    def right_click():
+                        point = px(y)<<16 | px(30)
+                        user.PostMessageW(view,0x0204,2,point)  # WM_RBUTTONDOWN / MK_RBUTTON
+                        user.PostMessageW(view,0x0205,0,point)
+                    return native_entries(trigger=right_click,choose=choose,before_choose=before_choose,owner_window=view)
+
+                actions = {"在后台标签打开链接","复制链接地址","将链接加入书签"}
+                menu_items = link_menu()
+                if not actions.issubset(menu_items) or "未授权的书签链接命令" in menu_items:
+                    raise RuntimeError(f"Unexpected link menu entries: {menu_items}")
+                if actions & link_menu(y=54).keys():
+                    raise RuntimeError("Plugins were offered for a non-HTTP link")
+
+                def saved_link(url):
+                    database = profile / "bookmarks.sqlite3"
+                    if not database.is_file():
+                        return None
+                    try:
+                        with closing(sqlite3.connect(database,timeout=.2)) as db:
+                            return db.execute("SELECT title FROM bookmarks WHERE url=?",(url,)).fetchone()
+                    except sqlite3.OperationalError:
+                        return None
+
+                link_menu(choose="将链接加入书签")
+                wait_for(lambda: saved_link(target)==("本地链接验收",),"Right click did not save the selected href and label")
+                if user.CountClipboardFormats()==0:
+                    user.GetClipboardOwner.restype = wt.HWND
+                    user.GetClipboardData.argtypes = [wt.UINT]
+                    user.GetClipboardData.restype = wt.HANDLE
+                    kernel = ctypes.WinDLL("kernel32",use_last_error=True)
+                    kernel.GlobalLock.argtypes = [wt.HANDLE]
+                    kernel.GlobalLock.restype = ctypes.c_void_p
+                    kernel.GlobalUnlock.argtypes = [wt.HANDLE]
+
+                    def copied_target():
+                        if user.GetClipboardOwner()!=frame or not user.OpenClipboard(None):
+                            return False
+                        try:
+                            data = user.GetClipboardData(13)  # CF_UNICODETEXT
+                            pointer = kernel.GlobalLock(data) if data else None
+                            if not pointer:
+                                return False
+                            try:
+                                return ctypes.wstring_at(pointer)==target
+                            finally:
+                                kernel.GlobalUnlock(data)
+                        finally:
+                            user.CloseClipboard()
+
+                    try:
+                        link_menu(choose="复制链接地址")
+                        wait_for(copied_target,"Right click did not copy the exact destination URL")
+                        print("link_clipboard=ok",flush=True)
+                    finally:
+                        if user.GetClipboardOwner()==frame and user.OpenClipboard(None):
+                            user.EmptyClipboard()
+                            user.CloseClipboard()
+                    sleep(0.3)
+                link_menu(choose="在后台标签打开链接")
+                sleep(0.55)
+                if read_address()!=source or history_rows("SELECT id FROM visits WHERE url=?",(target,)):
+                    raise RuntimeError("A background link changed the current page or loaded before selection")
+                invoke("本地链接验收")
+                wait_for(lambda: read_address()==target,"Selecting the background tab did not use the selected link")
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),"The background link did not load on selection")
+
+                visit_link_fixture("link-menu-stale")
+                view = visible_page_view()
+                moved = base + "/page/link-menu-after"
+
+                def change_link_source():
+                    Fixture.navigate_from_link_menu.set()
+                    wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(moved,)),"Link source did not navigate")
+
+                link_menu(choose="将链接加入书签",before_choose=change_link_source)
+                sleep(0.45)
+                if saved_link(base + "/page/link-menu-stale-target"):
+                    raise RuntimeError("A stale menu saved a link from an earlier document")
+                print("link_menu=ok webkit_hit_test=ok bookmark_target=ok lazy_background=ok non_http=ok stale_navigation=ok",flush=True)
 
             groups = native_entries()
             if "管理插件" not in groups:

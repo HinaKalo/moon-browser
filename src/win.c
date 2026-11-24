@@ -835,7 +835,8 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
             if ((flags&1) && moon_utf16(permission,action,ARRAYSIZE(action)))
                 AppendMenuW(sub,MF_STRING|(flags&2?MF_CHECKED:0)|(enabled?0:MF_GRAYED),id+2+j,action);
         }
-        for(size_t j=0;j<moon_plugin_action_count(i);++j) plugin_menu_item(sub,i,j,enabled);
+        for(size_t j=0;j<moon_plugin_action_count(i);++j)
+            if (!moon_plugin_link_only(i,j)) plugin_menu_item(sub,i,j,enabled);
         AppendMenuW(extensions,MF_POPUP,(UINT_PTR)sub,name);
     }
     MapWindowPoints(hwnd,NULL,(POINT *)&button,2);

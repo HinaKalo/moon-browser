@@ -61,6 +61,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `bookmarks.list` | `bookmarks.manage` | 传入 `{ query?, before? }`。返回 `{ bookmarks, next }`，每项包含 `id`、`title`、`url` 和 `folder`。 |
 | `bookmarks.save` | `bookmarks.manage` | 传入 `{ title, url, folder? }`，返回 `saved` 或 `alreadySaved`。 |
 | `bookmarks.saveActive` | `bookmarks.manage` | 在用户命令中传入 `{}`，保存触发时的网页。返回 `saved`、`alreadySaved` 或 `noPage`。 |
+| `bookmarks.saveLink` | `bookmarks.manage` | 从 `linkMenu: bookmark` 命令传入 `{}`，保存右键选中的链接。返回 `saved`、`alreadySaved` 或 `unavailable`。 |
 | `bookmarks.update` / `bookmarks.remove` | `bookmarks.manage` | 编辑时传入 `{ id, title, url, folder? }`，删除时传入 `{ id }`。成功返回 `null`。 |
 | `downloads.list` | `downloads.manage` | 传入 `{ query?, before? }`，返回 `{ downloads, next }`。记录包含名称、状态、已传字节、可选总字节数及开始时间。 |
 | `downloads.cancel` / `downloads.remove` / `downloads.reveal` | `downloads.manage` | 传入 `{ id }`，操作活动传输、终态记录或已完成的文件。成功返回 `null`。 |
@@ -84,6 +85,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `ui.shortcuts.register` / `ui.shortcuts.unregister` | `ui.commands` | 注册传入 `{ id, shortcut, scope? }`，解除传入 `{ id }`。注册和移除结果见[菜单与快捷键](./command-contributions)。 |
 | `tabs.togglePinned` / `tabs.toggleMuted` | `tabs.organize` | 在用户命令中传入 `{}`，切换触发该命令的标签的固定或静音状态。参见[固定与静音标签](./tab-tools)。 |
 | `tabs.duplicate` / `tabs.copyAddress` / `tabs.closeGroup` | `tabs.manage` | 从用户命令复制标签、复制网址或选择范围批量关闭标签。参见[标签管理](./tab-tools)。 |
+| `tabs.openLink` / `tabs.copyLink` | `tabs.manage` | 从对应的 `linkMenu` 命令传入 `{}`。前者返回 `opened` 或 `limitReached`，后者返回 `copied` 或 `clipboardBusy`。失效的链接上下文返回 `unavailable`。 |
 | `search.getConfig` / `search.setConfig` | `search.manage` | 读取和保存默认搜索引擎与自定义关键词。参见[搜索引擎](./search)。 |
 | `siteData.update` | `siteData.read`、`siteData.write` | 从已绑定的站点面板编辑或删除 Local Storage／Session Storage 条目，提交后查看新快照中的操作结果。参见[站点数据](./site-data)。 |
 | `tabs.session.status` / `tabs.session.setPreferences` / `tabs.session.restore` / `tabs.session.forget` | `tabs.session.manage` | 查看会话状态、设置启动恢复、恢复或忘记上次普通窗口。参见[上次会话](./session)。 |

@@ -9,6 +9,9 @@
 #include <WebKit/WKFramePolicyListener.h>
 #include <WebKit/WKFrameInfoRef.h>
 #include <WebKit/WKInspector.h>
+#include <WebKit/WKArray.h>
+#include <WebKit/WKContextMenuItem.h>
+#include <WebKit/WKHitTestResult.h>
 #include <WebKit/WKNavigationActionRef.h>
 #include <WebKit/WKNavigationResponseRef.h>
 #include <WebKit/WKPage.h>
@@ -62,6 +65,9 @@ extern void WKHTTPCookieStoreDeleteAllCookies(WKHTTPCookieStoreRef, void *, void
     X(WKPageConfigurationSetPreferences) X(WKPreferencesCreate) X(WKPreferencesSetJavaScriptCanOpenWindowsAutomatically) \
     X(WKViewCreate) X(WKViewGetWindow) X(WKViewGetPage) X(WKViewSetIsInWindow) \
     X(WKPageSetPageNavigationClient) X(WKPageSetPageUIClient) X(WKPageSetPageStateClient) \
+    X(WKPageSetPageContextMenuClient) X(WKArrayCreate) X(WKArrayGetSize) X(WKArrayGetItemAtIndex) \
+    X(WKHitTestResultCopyAbsoluteLinkURL) X(WKHitTestResultCopyLinkLabel) \
+    X(WKContextMenuItemCreateAsAction) X(WKContextMenuItemGetTag) X(WKContextMenuItemSeparatorItem) \
     X(WKPageLoadURL) X(WKPageCopyTitle) X(WKPageCopyActiveURL) X(WKPageClose) \
     X(WKPageCopyCommittedURL) X(WKPageCallAsyncJavaScriptWithoutUserGesture) \
     X(WKPageSetPageInjectedBundleClient) X(WKPagePostMessageToInjectedBundle) \
@@ -122,6 +128,10 @@ struct MoonView {
     struct MoonView *next;
 };
 static MoonView *views;
+enum { LINK_COMMANDS = 32*MOON_LINK_MENU_STRIDE, LINK_MENU_GENERATIONS = 128 };
+static MoonLinkContext link_context;
+static unsigned link_menu_cycle, link_menu_base;
+static bool link_items[LINK_COMMANDS];
 static uintptr_t extension_sequence;
 typedef struct {
     WKDownloadRef download;
@@ -518,6 +528,92 @@ static bool add_message_handler(MoonView *view, const char *name, WKScriptMessag
     release(channel);
     return true;
 }
+
+static void web_context_menu(WKPageRef page,WKArrayRef proposed,WKArrayRef *result,WKHitTestResultRef hit,
+                             WKTypeRef data,const void *client) {
+    const MoonView *view=client;
+    link_context.tab_id=0;
+    if (view->extension_address) {
+        *result=(WKArrayRef)wk.WKRetain(proposed);
+        return;
+    }
+    MoonLinkContext current={0};
+    WKURLRef url=wk.WKHitTestResultCopyAbsoluteLinkURL(hit);
+    WKStringRef text=url ? wk.WKURLCopyString(url) : NULL;
+    const size_t bytes=text ? wk.WKStringGetUTF8CString(text,current.url,sizeof(current.url)) : 0;
+    release(text);
+    release(url);
+    if (bytes<=1 || bytes>=sizeof(current.url) || strlen(current.url)+1!=bytes || !moon_link_capture(&current,view->token)) {
+        *result=(WKArrayRef)wk.WKRetain(proposed);
+        return;
+    }
+    WKStringRef label=wk.WKHitTestResultCopyLinkLabel(hit);
+    if (label) wk.WKStringGetUTF8CStringNonStrict(label,current.label,sizeof(current.label));
+    release(label);
+
+    const size_t existing=wk.WKArrayGetSize(proposed);
+    WKTypeRef items[LINK_COMMANDS+257];
+    if (existing>256) {
+        *result=(WKArrayRef)wk.WKRetain(proposed);
+        return;
+    }
+    link_menu_cycle = (link_menu_cycle+1)%LINK_MENU_GENERATIONS;
+    link_menu_base = kWKContextMenuItemBaseApplicationTag+link_menu_cycle*LINK_COMMANDS;
+    memset(link_items,0,sizeof(link_items));
+    size_t used=0;
+    bool replace_open=false, replace_copy=false;
+    for (unsigned kind=MOON_LINK_OPEN;kind<=MOON_LINK_BOOKMARK;++kind) {
+        for (size_t plugin=0;plugin<moon_plugin_count() && plugin<LINK_COMMANDS/MOON_LINK_MENU_STRIDE;++plugin) {
+            for (size_t command=0;command<moon_plugin_action_count(plugin);++command) {
+                if (moon_plugin_link_action(plugin,command)!=kind) continue;
+                const size_t index=plugin*MOON_LINK_MENU_STRIDE+command;
+                WKStringRef title=wk.WKStringCreateWithUTF8CString(moon_plugin_action(plugin,command));
+                WKContextMenuItemRef item=title ? wk.WKContextMenuItemCreateAsAction(link_menu_base+(unsigned)index,title,true) : NULL;
+                release(title);
+                if (!item) continue;
+                link_items[index]=true;
+                items[used++]=item;
+                replace_open |= kind==MOON_LINK_OPEN;
+                replace_copy |= kind==MOON_LINK_COPY;
+            }
+        }
+    }
+    if (!used) {
+        *result=(WKArrayRef)wk.WKRetain(proposed);
+        return;
+    }
+    const size_t created=used;
+    bool separator=true;
+    for (size_t i=0;i<existing;++i) {
+        WKContextMenuItemRef item=(WKContextMenuItemRef)wk.WKArrayGetItemAtIndex(proposed,i);
+        if (!item) continue;
+        WKContextMenuItemTag tag=wk.WKContextMenuItemGetTag(item);
+        if ((replace_open && tag==kWKContextMenuItemTagOpenLinkInNewWindow) ||
+            (replace_copy && tag==kWKContextMenuItemTagCopyLinkToClipboard)) continue;
+        if (separator && tag==kWKContextMenuItemTagNoAction) continue;
+        if (separator) {
+            WKContextMenuItemRef divider=wk.WKContextMenuItemSeparatorItem();
+            if (divider) items[used++]=divider;
+            separator=false;
+        }
+        items[used++]=item;
+    }
+    *result=wk.WKArrayCreate(items,used);
+    for (size_t i=0;i<created;++i) release(items[i]);
+    if (*result) link_context=current;
+    else *result=(WKArrayRef)wk.WKRetain(proposed);
+}
+
+static void web_context_selected(WKPageRef page,WKContextMenuItemRef item,const void *client) {
+    const MoonView *view=client;
+    const WKContextMenuItemTag tag=wk.WKContextMenuItemGetTag(item);
+    if (link_context.tab_id!=view->token || tag<link_menu_base || tag>=link_menu_base+LINK_COMMANDS) return;
+    const unsigned index=tag-link_menu_base;
+    if (!link_items[index]) return;
+    const MoonLinkContext selected=link_context;
+    link_context.tab_id=0;
+    moon_link_menu_run(&selected,index/MOON_LINK_MENU_STRIDE,index%MOON_LINK_MENU_STRIDE);
+}
 static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef body,const void *context) {
     const MoonView *view=context;
     const bool catalog=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteCatalog");
@@ -635,6 +731,11 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
         wk.WKPageSetPageInjectedBundleClient(view->page,&client.base);
     }
     wk.WKPageSetPageUIClient(view->page,&ui.base);
+    if (!address) {
+        const WKPageContextMenuClientV2 menu = { .base={2,view},
+            .getContextMenuFromProposedMenu=web_context_menu,.customContextMenuItemSelected=web_context_selected };
+        wk.WKPageSetPageContextMenuClient(view->page,&menu.base);
+    }
     wk.WKPageListenForLayoutMilestones(view->page,kWKDidFirstVisuallyNonEmptyLayout);
     ShowWindow(view->hwnd,SW_SHOWNA);
     return view;
@@ -690,6 +791,8 @@ void moon_engine_close(MoonView *view) {
     wk.WKPageSetPageStateClient(view->page,NULL);
     wk.WKPageSetPageNavigationClient(view->page,NULL);
     wk.WKPageSetPageUIClient(view->page,NULL);
+    if (link_context.tab_id==view->token) link_context.tab_id=0;
+    if (!view->extension_address) wk.WKPageSetPageContextMenuClient(view->page,NULL);
     wk.WKPageSetPageFindClient(view->page,NULL);
     if (!view->extension_address && filter_bundle_available) wk.WKPageSetPageInjectedBundleClient(view->page,NULL);
     if (view->inspector) wk.WKInspectorClose(view->inspector);

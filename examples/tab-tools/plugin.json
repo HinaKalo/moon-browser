@@ -12,7 +12,9 @@
       { "id": "duplicate", "label": "复制当前标签", "menu": "page" },
       { "id": "copyAddress", "label": "复制当前标签网址", "menu": "page" },
       { "id": "closeOthers", "label": "关闭其他标签", "menu": "page" },
-      { "id": "closeBelow", "label": "关闭下方标签", "menu": "page" }
+      { "id": "closeBelow", "label": "关闭下方标签", "menu": "page" },
+      { "id": "openLink", "label": "在后台标签打开链接", "linkMenu": "open" },
+      { "id": "copyLink", "label": "复制链接地址", "linkMenu": "copy" }
     ]
   },
   "permissions": ["tabs.organize", "tabs.manage"]

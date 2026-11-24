@@ -25,11 +25,12 @@ pub fn main() !void {
         try client.reply(id,sdk.CommandResult{ .message=message,.toast=true });
         return;
     }
-    if (!std.mem.eql(u8,action,"save")) return error.InvalidCommand;
-    const response = try client.call(.@"bookmarks.saveActive",.{});
+    const link = std.mem.eql(u8,action,"saveLink");
+    if (!link and !std.mem.eql(u8,action,"save")) return error.InvalidCommand;
+    const response = try client.call(if (link) .@"bookmarks.saveLink" else .@"bookmarks.saveActive",.{});
     const value = sdk.string(response.get("result")) orelse "";
-    const message: []const u8 = if (std.mem.eql(u8,value,"saved")) "已将当前网页加入书签。"
-        else if (std.mem.eql(u8,value,"alreadySaved")) "这页已在书签中。"
+    const message: []const u8 = if (std.mem.eql(u8,value,"saved")) (if (link) "已将链接加入书签。" else "已将当前网页加入书签。")
+        else if (std.mem.eql(u8,value,"alreadySaved")) (if (link) "这个链接已在书签中。" else "这页已在书签中。")
         else if (std.mem.eql(u8,value,"noPage")) "请切换到已打开的网页。"
         else "无法保存书签。请检查插件权限。";
     try client.reply(id,sdk.CommandResult{ .message=message,.toast=true });
