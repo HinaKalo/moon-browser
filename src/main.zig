@@ -347,6 +347,7 @@ fn navigate(tab: *Tab, url: []const u8) void {
     if (!copy(&storage, url)) return;
     const allocator = std.heap.page_allocator;
     if (equals(url,market.address)) {
+        if (native.moon_shell_private()) return;
         market.start();
         const html = market.document(allocator) catch return;
         defer allocator.free(html);
@@ -526,6 +527,7 @@ fn organizeTab(id: u64, mute: bool) sdk.TabOrganization {
         native.moon_shell_refresh();
         return if (tab.muted) .muted else .unmuted;
     }
+    if (native.moon_shell_private()) return .unavailable;
     const was_pinned = tab.pinned;
     const pinned_count = for (tabs[0..count],0..) |*entry,position| {
         if (!entry.pinned) break position;
@@ -749,7 +751,7 @@ fn discardTab(tab: *Tab, pid: u32, now: u64) void {
 }
 fn maintenance() void {
     const now = native.moon_clock();
-    if (smoke == .off) updater.tick(now);
+    if (smoke == .off and !native.moon_shell_private()) updater.tick(now);
     if (stopped) return;
     if (pins_save_at) |save_at| {
         if (now>=save_at and !savePinnedTabs()) pins_save_at = now+5000;
@@ -854,14 +856,17 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     const allocator = std.heap.page_allocator;
     const app = slice(native.moon_app_dir());
     const profile = slice(native.moon_profile_dir());
-    updater.configure(app, native.moon_clock());
-    applySettings(profile);
+    const private = native.moon_shell_private();
+    if (!private) {
+        updater.configure(app, native.moon_clock());
+        applySettings(profile);
+        history.init(profile);
+        bookmarks.init(profile);
+        downloads.init(profile);
+        reading.init(profile);
+        userscripts.init(profile);
+    }
     plugins.init(app, profile);
-    history.init(profile);
-    bookmarks.init(profile);
-    downloads.init(profile);
-    reading.init(profile);
-    userscripts.init(profile);
     var first_url: ?[:0]u8 = null;
     defer if (first_url) |allocated| allocator.free(allocated);
     var index: usize = 1;
@@ -870,6 +875,8 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         defer allocator.free(argument);
         if (equals(argument, "--gdi")) {
             native.moon_engine_test_fallback(true);
+        } else if (private and std.mem.startsWith(u8,argument,"-")) {
+            continue;
         } else if (equals(argument, "--relhub-probe") and index + 3 < @as(usize, @intCast(argc))) {
             const report = std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.sliceTo(argv[index + 1], 0)) catch return false;
             defer allocator.free(report);
@@ -912,7 +919,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         return false;
     }
     network.select(plugins.networkSource());
-    if (smoke==.off) {
+    if (smoke==.off and !private) {
         if (std.fmt.bufPrintSentinel(&pins_path,"{s}\\pinned-tabs.json",.{profile},0)) |_|
             readPinnedTabs()
         else |_| pins_path[0] = 0;
@@ -988,6 +995,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             native.moon_shell_toast("内存诊断","请在插件菜单启用浏览器任务管理器。"),
         native.MOON_TICK => maintenance(),
         native.MOON_PLUGIN_ENABLE => {
+            if (native.moon_shell_private()) return;
             plugins.enable(index);
             network.select(plugins.networkSource());
             checkSiteDataGrant();
@@ -996,6 +1004,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             checkTabToolsGrant();
         },
         native.MOON_PLUGIN_GRANT => {
+            if (native.moon_shell_private()) return;
             const permission = std.enums.fromInt(sdk.Permission,index & 0xffffffff) orelse return;
             plugins.toggleGrant(index >> 32,permission);
             if (permission == .@"network.filter") network.select(plugins.networkSource());
@@ -1013,11 +1022,11 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_TOGGLE_SIDEBAR => native.moon_shell_toggle_sidebar(),
         native.MOON_TOGGLE_THEME => native.moon_shell_toggle_theme(),
         native.MOON_OPEN_PLUGINS => native.moon_shell_open_plugins(),
-        native.MOON_UPDATES => updater.open(native.moon_clock()),
-        native.MOON_MARKET => addTab(market.address,false),
-        native.MOON_SCRIPTS_INSTALL => userscripts.install(slice(c_text)),
-        native.MOON_SCRIPTS_TOGGLE => userscripts.toggle(index),
-        native.MOON_SCRIPTS_REMOVE => userscripts.remove(index),
+        native.MOON_UPDATES => if (!native.moon_shell_private()) updater.open(native.moon_clock()),
+        native.MOON_MARKET => if (!native.moon_shell_private()) addTab(market.address,false),
+        native.MOON_SCRIPTS_INSTALL => if (!native.moon_shell_private()) userscripts.install(slice(c_text)),
+        native.MOON_SCRIPTS_TOGGLE => if (!native.moon_shell_private()) userscripts.toggle(index),
+        native.MOON_SCRIPTS_REMOVE => if (!native.moon_shell_private()) userscripts.remove(index),
         else => {},
     }
 }
@@ -1041,8 +1050,10 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             sync(tab);
             if (tab.view) |view| {
                 var url: [4096:0]u8 = @splat(0);
-                const percent = if (zoomOrigin(tab,&url)) |key| reading.load(key) else 100;
-                native.moon_engine_set_zoom(view,percent);
+                if (!native.moon_shell_private()) {
+                    const percent = if (zoomOrigin(tab,&url)) |key| reading.load(key) else 100;
+                    native.moon_engine_set_zoom(view,percent);
+                }
             }
         },
         native.MOON_FINISHED => {
@@ -1175,7 +1186,7 @@ export fn moon_tab_flags(index: usize) c_uint {
         (if (tab.loading) @as(c_uint,native.MOON_TAB_LOADING) else 0) |
         (if (tab.pinned) @as(c_uint,native.MOON_TAB_PINNED) else 0) |
         (if (tab.muted) @as(c_uint,native.MOON_TAB_MUTED) else 0) |
-        (if (tab.pinned or (!tab.extension and tab.has_document and !tab.unsafe_history and !tab.loading and safeURL(slice(&tab.url))))
+        (if (!native.moon_shell_private() and (tab.pinned or (!tab.extension and tab.has_document and !tab.unsafe_history and !tab.loading and safeURL(slice(&tab.url)))))
             @as(c_uint,native.MOON_TAB_CAN_PIN) else 0) |
         (if (tab.muted or (!tab.extension and safeURL(slice(&tab.url)))) @as(c_uint,native.MOON_TAB_CAN_MUTE) else 0);
 }
@@ -1226,6 +1237,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"taskManager.manage" => "允许查看和管理标签与进程",
         .@"ui.commands" => "允许添加主菜单入口和注册快捷键",
         .@"tabs.organize" => "允许固定标签和切换标签静音",
+        .@"privacy.privateWindow" => "允许打开隐私浏览窗口",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {
@@ -1378,7 +1390,7 @@ export fn moon_reading_zoom(id: u64, action: c_int) c_uint {
     const view = tab.view.?;
     const percent = reading.next(@intCast(native.moon_engine_zoom(view)),command);
     var url: [4096:0]u8 = @splat(0);
-    if (zoomOrigin(tab,&url)) |key| {
+    if (!native.moon_shell_private()) if (zoomOrigin(tab,&url)) |key| {
         reading.save(key,percent) catch return 0;
         for (tabs[0..count]) |*peer| {
             if (peer.id == id or peer.phase != .live or peer.loading) continue;
@@ -1386,7 +1398,7 @@ export fn moon_reading_zoom(id: u64, action: c_int) c_uint {
             const origin = zoomOrigin(peer,&peer_url) orelse continue;
             if (equals(key,origin)) native.moon_engine_set_zoom(peer.view.?,percent);
         }
-    }
+    };
     native.moon_engine_set_zoom(view,percent);
     return percent;
 }
@@ -1414,10 +1426,19 @@ export fn moon_plugin_ui_shortcut(owner: [*c]const u8, command: [*c]const u8, sh
 
 const Action = union(enum) { built_in: ShellAction, plugin: struct { index: usize, command: usize } };
 
+fn shellActionVisible(action: ShellAction, home: bool) bool {
+    if (home and !action.home) return false;
+    if (!native.moon_shell_private()) return true;
+    return switch (action.command) {
+        native.MOON_OPEN_PLUGINS, native.MOON_UPDATES, native.MOON_MARKET => false,
+        else => true,
+    };
+}
+
 fn actionAt(index: usize, home: bool) ?Action {
     var remaining = index;
     for (shell_actions) |action| {
-        if (home and !action.home) continue;
+        if (!shellActionVisible(action,home)) continue;
         if (remaining == 0) return .{ .built_in = action };
         remaining -= 1;
     }
@@ -1432,7 +1453,7 @@ fn actionAt(index: usize, home: bool) ?Action {
 
 export fn moon_action_count(home: bool) usize {
     var actions: usize = 0;
-    for (shell_actions) |action| actions += @intFromBool(!home or action.home);
+    for (shell_actions) |action| actions += @intFromBool(shellActionVisible(action,home));
     for (0..plugins.count()) |plugin| {
         if (plugins.isEnabled(plugin)) actions += plugins.actionCount(plugin);
     }

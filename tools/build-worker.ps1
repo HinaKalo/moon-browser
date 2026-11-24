@@ -110,6 +110,7 @@ $siteData = Join-Path $prefix 'bin\MoonSiteData.exe'
 $reading = Join-Path $prefix 'bin\MoonReading.exe'
 $recentTabs = Join-Path $prefix 'bin\MoonRecentTabs.exe'
 $tabTools = Join-Path $prefix 'bin\MoonTabTools.exe'
+$privateWindow = Join-Path $prefix 'bin\MoonPrivateWindow.exe'
 $privacy = Join-Path $prefix 'bin\MoonPrivacy.exe'
 $taskManager = Join-Path $prefix 'bin\MoonTaskManager.exe'
 $commandExample = Join-Path $prefix 'bin\MoonCommandExample.exe'
@@ -137,6 +138,7 @@ $docs = @(
     (Join-Path $repo 'examples\recent-tabs\plugin.json')
     (Join-Path $repo 'examples\recent-tabs\recent.html')
     (Join-Path $repo 'examples\tab-tools\plugin.json')
+    (Join-Path $repo 'examples\private-window\plugin.json')
     (Join-Path $repo 'examples\privacy\plugin.json')
     (Join-Path $repo 'examples\privacy\privacy.html')
     (Join-Path $repo 'examples\task-manager\plugin.json')
@@ -149,7 +151,7 @@ if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $tabTools + $privacy + $taskManager + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $tabTools + $privateWindow + $privacy + $taskManager + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -193,6 +195,8 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     Copy-Item -LiteralPath $recentTabs,(Join-Path $repo 'examples\recent-tabs\plugin.json'),(Join-Path $repo 'examples\recent-tabs\recent.html') -Destination $recentPackage
     $tabToolsPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\tab-tools')).FullName
     Copy-Item -LiteralPath $tabTools,(Join-Path $repo 'examples\tab-tools\plugin.json') -Destination $tabToolsPackage
+    $privateWindowPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\private-window')).FullName
+    Copy-Item -LiteralPath $privateWindow,(Join-Path $repo 'examples\private-window\plugin.json') -Destination $privateWindowPackage
     $privacyPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\privacy')).FullName
     Copy-Item -LiteralPath $privacy,(Join-Path $repo 'examples\privacy\plugin.json'),(Join-Path $repo 'examples\privacy\privacy.html') -Destination $privacyPackage
     $taskManagerPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\task-manager')).FullName

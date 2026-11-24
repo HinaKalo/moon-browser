@@ -41,6 +41,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"tabs.togglePinned", .@"tabs.toggleMuted" => .@"tabs.organize",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
+        .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => .@"taskManager.manage",
         .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => .@"ui.commands",
     };
@@ -166,7 +167,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find",
-        .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"tabs.togglePinned", .@"tabs.toggleMuted" => {
+        .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
+        .@"tabs.togglePinned", .@"tabs.toggleMuted" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -403,6 +405,10 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             return sdk.result(output,id,privacy.start(selection,context.target_tab_id,owner,context.consent));
         },
         .@"privacy.status" => sdk.result(output,id,privacy.status(context.plugin_id)),
+        .@"privacy.openPrivateWindow" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            return sdk.result(output,id,native.moon_shell_open_private());
+        },
         .@"taskManager.snapshot" => {
             const query = decode(sdk.TaskQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             return taskSnapshot(output,id,query);

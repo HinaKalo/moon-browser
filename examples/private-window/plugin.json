@@ -1,0 +1,14 @@
+{
+  "id": "moon.private-window",
+  "name": "隐私浏览",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonPrivateWindow.exe",
+  "contributes": {
+    "commands": [
+      { "id": "open", "label": "新建隐私窗口", "menu": "privacy", "shortcut": "Ctrl+Shift+N" }
+    ]
+  },
+  "permissions": ["privacy.privateWindow"]
+}

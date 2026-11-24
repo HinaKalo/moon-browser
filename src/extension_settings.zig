@@ -5,10 +5,12 @@ const limit = 4096;
 pub const Error = error{ InvalidObject, TooLarge, IOError };
 
 fn filePath(id: []const u8, buffer: []u8) ![:0]u8 {
+    const profile = std.mem.span(native.moon_profile_dir());
+    if (profile.len==0) return error.IOError;
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(id,&digest,.{});
     const hex = std.fmt.bytesToHex(digest,.lower);
-    return std.fmt.bufPrintSentinel(buffer,"{s}\\extension-{s}.json",.{ std.mem.span(native.moon_profile_dir()),&hex },0);
+    return std.fmt.bufPrintSentinel(buffer,"{s}\\extension-{s}.json",.{ profile,&hex },0);
 }
 
 pub fn read(allocator: std.mem.Allocator,id: []const u8) !std.json.Value {

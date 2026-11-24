@@ -294,7 +294,8 @@ static WKStringRef download_destination(WKContextRef unused, WKDownloadRef downl
         wcscpy(path,L"download");
     OPENFILENAMEW dialog = { .lStructSize = sizeof(dialog), .hwndOwner = moon_shell_window(),
         .lpstrFile = path, .nMaxFile = ARRAYSIZE(path), .lpstrTitle = L"保存下载",
-        .Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER };
+        .Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER |
+            (moon_shell_private() ? OFN_DONTADDTORECENT : 0) };
     if (!GetSaveFileNameW(&dialog) || !moon_utf8(path,path_utf8,sizeof(path_utf8))) {
         finish_download(download,MOON_DL_CANCELLED,NULL);
         return NULL;
@@ -417,17 +418,21 @@ const char *moon_engine_init(void) {
     normal_page_content = wk.WKUserContentControllerCreate();
     if (!normal_page_content) return "Could not create content controller.";
 
-    WKWebsiteDataStoreConfigurationRef config = wk.WKWebsiteDataStoreConfigurationCreate();
-    if (!config) return "Could not create profile configuration.";
-    set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetGeneralStorageDirectory,"WebsiteData");
-    set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetNetworkCacheDirectory,"NetworkCache");
-    set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetCookieStorageFile,"Cookies.db");
-    set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetLocalStorageDirectory,"LocalStorage");
-    set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetIndexedDBDatabaseDirectory,"IndexedDB");
-    set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetCacheStorageDirectory,"CacheStorage");
-    set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetServiceWorkerRegistrationDirectory,"ServiceWorkers");
-    store = wk.WKWebsiteDataStoreCreateWithConfiguration(config);
-    release(config);
+    if (moon_shell_private()) {
+        store = wk.WKWebsiteDataStoreCreateNonPersistentDataStore();
+    } else {
+        WKWebsiteDataStoreConfigurationRef config = wk.WKWebsiteDataStoreConfigurationCreate();
+        if (!config) return "Could not create profile configuration.";
+        set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetGeneralStorageDirectory,"WebsiteData");
+        set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetNetworkCacheDirectory,"NetworkCache");
+        set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetCookieStorageFile,"Cookies.db");
+        set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetLocalStorageDirectory,"LocalStorage");
+        set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetIndexedDBDatabaseDirectory,"IndexedDB");
+        set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetCacheStorageDirectory,"CacheStorage");
+        set_profile_path(config,wk.WKWebsiteDataStoreConfigurationSetServiceWorkerRegistrationDirectory,"ServiceWorkers");
+        store = wk.WKWebsiteDataStoreCreateWithConfiguration(config);
+        release(config);
+    }
     if (!store) return "Could not open website data.";
     WKContextDownloadClientV0 client = { .base={0,NULL}, .didStart=download_started,
         .didReceiveResponse=download_response,.didReceiveData=download_data,

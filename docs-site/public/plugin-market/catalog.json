@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.private-window",
+      "name": "隐私浏览",
+      "description": "打开使用临时 Cookie 和站点数据的独立浏览窗口。",
+      "permission": "打开隐私浏览窗口",
+      "url": "https://docs.browser.moonl.cloud/private-window.html"
+    },
+    {
       "id": "moon.tab-tools",
       "name": "标签管理",
       "description": "从标签右键菜单固定、取消固定或静音单个标签。",

@@ -55,6 +55,7 @@ class Fixture(BaseHTTPRequestHandler):
     reading_layout = {}
     closed_loaded = {}
     privacy_reports = {}
+    private_window_reports = {}
     privacy_asset_requests = 0
     chrome_layout = None
     chrome_sequence = 0
@@ -81,6 +82,37 @@ class Fixture(BaseHTTPRequestHandler):
         elif path == "/lua-demo-verified":
             self.seen_lua_demo.set()
             data, content_type = b"ok", "text/plain"
+        elif path.startswith("/private-window-report/"):
+            token = path.rsplit("/",1)[-1]
+            report = {key: values[0] for key,values in parse_qs(urlsplit(self.path).query).items()}
+            cookies = self.headers.get("Cookie","")
+            report["http"] = next((c.split("=",1)[1] for c in cookies.split("; ") if c.startswith("moon-window-http=")),"")
+            self.private_window_reports[token] = report
+            data, content_type = b"ok", "text/plain"
+        elif path.startswith("/private-window-probe/"):
+            token = path.rsplit("/",1)[-1]
+            initial = {"regular-seed": "regular", "private-seed": "private"}.get(token)
+            if initial:
+                cookie = f"moon-window-http={initial}; Path=/; HttpOnly; Max-Age=3600"
+            script = (
+                '<!doctype html><meta charset=utf-8><title>Private window probe</title><script>'
+                'addEventListener("load",async()=>{const fields={};'
+                f'const token={json.dumps(token)};try{{const initial={json.dumps(initial)};'
+                'if(initial){localStorage.setItem("moon-window",initial);'
+                'const cache=await caches.open("moon-window");'
+                'await cache.put("/moon-window-state",new Response(initial));'
+                'await new Promise((resolve,reject)=>{const r=indexedDB.open("moon-window-"+initial,1);'
+                'r.onupgradeneeded=()=>r.result.createObjectStore("probe");'
+                'r.onsuccess=()=>{r.result.close();resolve()};r.onerror=()=>reject(r.error)});}'
+                'fields.local=localStorage.getItem("moon-window")??"";'
+                'fields.idb=(await indexedDB.databases()).map(d=>d.name).filter(n=>n.startsWith("moon-window-")).sort().join(",");'
+                'const cached=await caches.match("/moon-window-state",{cacheName:"moon-window"});'
+                'fields.cache=cached?await cached.text():"";'
+                '}catch(error){fields.error=String(error);}'
+                'await fetch("/private-window-report/"+token+"?"+new URLSearchParams(fields),{cache:"no-store"});'
+                '});</script>'
+            )
+            data,content_type = script.encode(),"text/html; charset=utf-8"
         elif path == "/editor-verified":
             self.seen_editor_reload.set()
             data, content_type = b"ok", "text/plain"
@@ -251,6 +283,10 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", "moon-privacy-http=present; HttpOnly; Path=/")
         if path == "/privacy-cacheable":
             self.send_header("Cache-Control", "public, max-age=3600")
+        if path.startswith("/private-window-probe/"):
+            self.send_header("Cache-Control","no-store")
+            if initial:
+                self.send_header("Set-Cookie",cookie)
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -480,6 +516,7 @@ def run_win32(exe, base, root):
     task_manager = exe.parent / "plugins" / "task-manager" / "MoonTaskManager.exe"
     commands = exe.parent / "plugins" / "ui-commands" / "MoonCommandExample.exe"
     tab_tools = exe.parent / "plugins" / "tab-tools" / "MoonTabTools.exe"
+    private_window = exe.parent / "plugins" / "private-window" / "MoonPrivateWindow.exe"
     if task_manager.exists():
         profile.mkdir(parents=True,exist_ok=True)
         (profile / "memory.json").write_text(
@@ -1518,6 +1555,8 @@ def run_win32(exe, base, root):
             }
             if tab_tools.exists():
                 expected["标签与页面"].update({"切换当前标签的固定状态","切换当前标签的静音状态"})
+            if private_window.exists():
+                expected["隐私与安全"].add("新建隐私窗口\tCtrl+Shift+N")
             for group, labels in expected.items():
                 if missing := labels - groups.get(group,{}).keys():
                     raise RuntimeError(f"Native menu group {group} is missing {missing}")
@@ -1631,6 +1670,95 @@ def run_win32(exe, base, root):
             tab_menu(0,"取消固定标签")
             wait_for(lambda: json.loads(pins.read_text(encoding="utf-8"))==[],"Unpinning did not clear the saved pin")
             print("tab_tools=ok background_target=ok single_tab_mute_state=ok mute_reload=ok pinned_order=ok restart_lazy_restore=ok",flush=True)
+        if private_window.exists():
+            private_title = "Moon Browser · 隐私浏览"
+            kernel = ctypes.WinDLL("kernel32",use_last_error=True)
+            kernel.OpenProcess.argtypes = [wt.DWORD,wt.BOOL,wt.DWORD]
+            kernel.OpenProcess.restype = wt.HANDLE
+            kernel.CloseHandle.argtypes = [wt.HANDLE]
+            kernel.QueryFullProcessImageNameW.argtypes = [wt.HANDLE,wt.DWORD,wt.LPWSTR,ctypes.POINTER(wt.DWORD)]
+            kernel.WaitForSingleObject.argtypes = [wt.HANDLE,wt.DWORD]
+            kernel.WaitForSingleObject.restype = wt.DWORD
+
+            def private_frames():
+                result = set()
+                win = None
+                while win := user.FindWindowExW(None,win,"MoonBrowserWindow",private_title):
+                    pid = wt.DWORD()
+                    user.GetWindowThreadProcessId(win,ctypes.byref(pid))
+                    handle = kernel.OpenProcess(0x1000,False,pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+                    if not handle:
+                        continue
+                    try:
+                        path = ctypes.create_unicode_buffer(2048)
+                        size = wt.DWORD(len(path))
+                        if kernel.QueryFullProcessImageNameW(handle,0,path,ctypes.byref(size)) and Path(path.value)==exe:
+                            result.add(win)
+                    finally:
+                        kernel.CloseHandle(handle)
+                return result
+
+            def private_probe(window, token, expected, *, cache_required=True):
+                control = user.GetDlgItem(window,1001)
+                set_control(control,base + "/private-window-probe/" + token)
+                user.PostMessageW(control,0x0100,0x0D,1)
+                result = wait_for(lambda: Fixture.private_window_reports.get(token),f"No storage report from {token}",18)
+                database_name = "moon-window-"+expected if expected else ""
+                cache = result.get("cache","")
+                if (result.get("error") or any(result.get(k,"")!=expected for k in ("http","local"))
+                        or result.get("idb","")!=database_name or cache not in (expected,"") or (cache_required and cache!=expected)):
+                    raise RuntimeError(f"Incorrect private browsing state for {token}: {result}")
+                return cache==expected
+
+            def close_private(window):
+                pid = wt.DWORD()
+                user.GetWindowThreadProcessId(window,ctypes.byref(pid))
+                handle = kernel.OpenProcess(0x100000,False,pid.value)  # SYNCHRONIZE
+                if not handle:
+                    raise RuntimeError("Could not wait on the test private-window process")
+                try:
+                    user.PostMessageW(window,0x0010,0,0)
+                    if kernel.WaitForSingleObject(handle,10000)!=0:
+                        raise RuntimeError("Closing the private window did not end its process")
+                finally:
+                    kernel.CloseHandle(handle)
+
+            def open_private():
+                existing = private_frames()
+                invoke("新建隐私窗口")
+                guest = wait_for(lambda: next(iter(private_frames()-existing),None),"The privacy plugin did not open an isolated window")
+                wait_for(lambda: user.IsWindowVisible(user.GetDlgItem(guest,1002)),"The private window did not initialize")
+                return guest
+
+            private_probe(frame,"regular-seed","regular")
+            previous_private = private_frames()
+            try:
+                guest = open_private()
+                guest_home = user.GetDlgItem(guest,1002)
+                private_probe(guest,"private-empty","")
+                private_probe(guest,"private-seed","private")
+                guest_dpi = user.GetDpiForWindow(guest)
+                x,y = (251*guest_dpi+48)//96,(104*guest_dpi+48)//96
+                user.PostMessageW(guest,0x0202,0,(y<<16)|x)
+                wait_for(lambda: user.IsWindowVisible(guest_home),"Opening a second private tab failed")
+                shared_cache = private_probe(guest,"private-second-tab","private",cache_required=False)
+                private_probe(frame,"regular-unchanged","regular")
+                other_guest = open_private()
+                private_probe(other_guest,"private-parallel","")
+                close_private(other_guest)
+                close_private(guest)
+                guest = open_private()
+                private_probe(guest,"private-reopened","")
+                close_private(guest)
+            finally:
+                for window in private_frames()-previous_private:
+                    user.PostMessageW(window,0x0010,0,0)
+            leaked = history_rows("SELECT url FROM visits WHERE url LIKE '%/private-window-probe/private-%'")
+            if leaked:
+                raise RuntimeError("Private navigations landed in the ordinary history database")
+            print("private_window=ok separate_store=ok independent_private_windows=ok ephemeral_reopen=ok "
+                  "cookies=ok local_storage=ok indexed_db=ok cache_isolation=ok no_history=ok "
+                  f"private_cache_shared={'yes' if shared_cache else 'no'}",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

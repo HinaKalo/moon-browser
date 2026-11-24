@@ -96,6 +96,12 @@ pub fn build(b: *std.Build) void {
     });
     tab_tools.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(tab_tools);
+    const private_window = b.addExecutable(.{
+        .name = "MoonPrivateWindow",
+        .root_module = b.createModule(.{ .root_source_file=b.path("examples/private-window/main.zig"),.target=target,.optimize=optimize,.link_libc=true }),
+    });
+    private_window.root_module.addImport("moon_plugin",plugin_sdk);
+    b.installArtifact(private_window);
     const fixture = b.addExecutable(.{
         .name = "MoonPluginContractClient",
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/plugin_contract_client.zig"), .target = target, .optimize = optimize, .link_libc = true }),

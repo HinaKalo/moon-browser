@@ -22,6 +22,7 @@ pub const Permission = enum {
     @"taskManager.manage",
     @"ui.commands",
     @"tabs.organize",
+    @"privacy.privateWindow",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -30,6 +31,7 @@ pub const Shortcut = enum {
     @"Ctrl+Shift+T",
     @"Ctrl+Shift+Delete",
     @"Ctrl+Shift+M",
+    @"Ctrl+Shift+N",
 };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
 pub const Command = struct {
@@ -185,6 +187,7 @@ pub const Method = enum {
     @"tabs.toggleMuted",
     @"privacy.clear",
     @"privacy.status",
+    @"privacy.openPrivateWindow",
     @"taskManager.snapshot",
     @"taskManager.focus",
     @"taskManager.discard",

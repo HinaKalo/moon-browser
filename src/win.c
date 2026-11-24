@@ -30,7 +30,7 @@ static IDWriteTextFormat *font_left, *font_center, *font_hero;
 static ID2D1HwndRenderTarget *target;
 static ID2D1SolidColorBrush *brush;
 static ULONG_PTR gdiplus;
-static bool force_fallback, quitting;
+static bool force_fallback, quitting, private_window;
 static bool show_home, focus_mode, tracking_mouse;
 static POINT hover = {-1,-1};
 
@@ -50,7 +50,7 @@ static const Theme *theme = &light;
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
 enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
 enum { MENU_ADD = 11, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET,
-       MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 16, MENU_PLUGIN_STRIDE = 24,
+       MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 24, MENU_PLUGIN_STRIDE = 32,
        MENU_SCRIPTS_PICK = 2000, MENU_SCRIPTS_BASE = 2010 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        PALETTE_TAB_OFFSET = 1000 };
@@ -83,6 +83,7 @@ static bool init_paths(void) {
     if (!slash) return false;
     *slash = 0;
     if (!moon_utf8(executable, app_dir, sizeof(app_dir))) return false;
+    if (private_window) return true;
     length = GetEnvironmentVariableW(L"MOON_BROWSER_PROFILE_DIR", location, ARRAYSIZE(location));
     if (length >= ARRAYSIZE(location)) return false;
     if (!length) {
@@ -101,6 +102,20 @@ static bool init_paths(void) {
     return moon_utf8(location, profile_dir, sizeof(profile_dir));
 }
 const char *moon_profile_dir(void) { return profile_dir; }
+bool moon_shell_private(void) { return private_window; }
+bool moon_shell_open_private(void) {
+    wchar_t executable[2048], command[2100];
+    DWORD length=GetModuleFileNameW(NULL,executable,ARRAYSIZE(executable));
+    if (!length || length>=ARRAYSIZE(executable)) return false;
+    int written=swprintf(command,ARRAYSIZE(command),L"\"%ls\" --private",executable);
+    if (written<=0 || written>=ARRAYSIZE(command)) return false;
+    STARTUPINFOW start={.cb=sizeof(start)};
+    PROCESS_INFORMATION process;
+    if (!CreateProcessW(executable,command,NULL,NULL,FALSE,0,NULL,NULL,&start,&process)) return false;
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return true;
+}
 const char *moon_app_dir(void) { return app_dir; }
 HWND moon_shell_window(void) { return frame; }
 HWND moon_shell_content(void) { return content; }
@@ -459,12 +474,16 @@ static int tile_width(int width) {
 static void paint_home(Canvas c,int width,int height) {
     int x=home_left(width), y=home_top(height), w=home_width(width);
     moon_mark(c,x,y+7,65,theme->panel);
-    heading_at(c,L"MoonBrowser",x+87,y,w-87,52);
-    text_at(c,L"\u65b0\u6807\u7b7e\u9875",x+88,y+48,w-88,25,theme->muted,false);
+    heading_at(c,private_window?L"隐私浏览":L"MoonBrowser",x+87,y,w-87,52);
+    text_at(c,private_window?L"此窗口的网页数据在关闭后清除。":L"\u65b0\u6807\u7b7e\u9875",x+88,y+48,w-88,25,theme->muted,false);
     int search=y+98;
     fill(c,x,search,w,HOME_FIELD_HEIGHT,GetFocus()==home_edit?theme->accent:theme->line,9);
     fill(c,x+1,search+1,w-2,HOME_FIELD_HEIGHT-2,theme->field,8);
     text_at(c,L"\x2315",x+5,search,34,HOME_FIELD_HEIGHT,theme->muted,true);
+    if (private_window) {
+        text_at(c,L"手动保存的文件会保留。",x,search+56,w,28,theme->muted,false);
+        return;
+    }
     if (height-search<145) return;
     text_at(c,L"\u5feb\u6377\u529f\u80fd",x,search+61,w,26,theme->muted,false);
     int tile=tile_width(width);
@@ -492,6 +511,11 @@ static void paint_chrome(Canvas c,int width,int height) {
     fill(c,address_x,ADDRESS_TOP,address_w,ADDRESS_HEIGHT,GetFocus()==address?theme->accent:theme->line,8);
     fill(c,address_x+1,ADDRESS_TOP+1,address_w-2,ADDRESS_HEIGHT-2,theme->field,7);
     text_at(c,L"\x2315",address_x+3,ADDRESS_TOP,24,ADDRESS_HEIGHT,theme->muted,true);
+    if (private_window) {
+        const int badge=address_right(width)-67;
+        fill(c,badge,ADDRESS_TOP+4,62,ADDRESS_HEIGHT-8,theme->soft,6);
+        text_at(c,L"隐私浏览",badge,ADDRESS_TOP+3,62,ADDRESS_HEIGHT-6,theme->accent,true);
+    }
     icon_button(c,L"\x25e7",width-213,8,32,32,true);
     icon_button(c,L"\x2026",width-175,8,32,32,true);
     icon_button(c,L"\x2212",width-138,0,44,TOP,true);
@@ -558,7 +582,7 @@ static void layout(void) {
         if (corners && !SetWindowRgn(content,corners,TRUE)) DeleteObject(corners);
     }
     moon_find_layout();
-    int address_width=address_right(width)-address_left()-34;
+    int address_width=address_right(width)-address_left()-34-(private_window?68:0);
     MoveWindow(address,px(address_left()+29),px(ADDRESS_TOP+3),px(address_width>10?address_width:10),
         px(ADDRESS_TOP+ADDRESS_HEIGHT-3)-px(ADDRESS_TOP+3),TRUE);
     if (home_edit) {
@@ -635,6 +659,7 @@ static void refresh_theme(void) {
     moon_dialog_refresh();
 }
 static bool theme_path(char *path,size_t size) {
+    if (private_window) return false;
     int written=snprintf(path,size,"%s\\chrome-theme",moon_profile_dir());
     return written>0 && (size_t)written<size;
 }
@@ -730,17 +755,19 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     if (!popup) return;
     AppendMenuW(popup,MF_STRING,MENU_ADD,L"\u65b0\u5efa\u6807\u7b7e\u9875\tCtrl+T");
     AppendMenuW(popup,MF_STRING,MENU_PALETTE,L"\u547d\u4ee4\u9762\u677f\tCtrl+K");
-    AppendMenuW(popup,MF_STRING,MENU_UPDATES,L"\u7248\u672c\u4e0e\u66f4\u65b0");
-    AppendMenuW(popup,MF_STRING,MENU_MARKET,L"插件市场");
+    if (!private_window) {
+        AppendMenuW(popup,MF_STRING,MENU_UPDATES,L"\u7248\u672c\u4e0e\u66f4\u65b0");
+        AppendMenuW(popup,MF_STRING,MENU_MARKET,L"插件市场");
+    }
     AppendMenuW(popup,MF_STRING|(theme==&dark?MF_CHECKED:0),MENU_THEME,L"\u6df1\u8272\u4e3b\u9898\tCtrl+Shift+L");
     AppendMenuW(popup,MF_STRING|(focus_mode?MF_CHECKED:0),MENU_FOCUS,L"\u4e13\u6ce8\u6a21\u5f0f\tCtrl+B");
-    userscript_menu(popup);
+    if (!private_window) userscript_menu(popup);
     size_t count=moon_plugin_count();
     if (count) {
         AppendMenuW(popup,MF_SEPARATOR,0,NULL);
         plugin_command_groups(popup,count);
     }
-    HMENU extensions=count ? CreatePopupMenu() : NULL;
+    HMENU extensions=count && !private_window ? CreatePopupMenu() : NULL;
     if (extensions) AppendMenuW(popup,MF_POPUP,(UINT_PTR)extensions,L"插件");
     for(size_t i=0;extensions && i<count;++i) {
         wchar_t name[256],action[300];
@@ -968,6 +995,7 @@ static void click(HWND hwnd,int psx,int psy) {
     if (show_home) {
         int home_x=home_left(width), search=home_top(height)+98;
         if (within(x,y,home_x,search,home_width(width),44)) { SetFocus(home_edit); return; }
+        if (private_window) return;
         int tile=tile_width(width), top=search+94;
         for(size_t i=0;i<3 && i<moon_action_count(true);++i) {
             if (within(x,y,home_x+(int)i*(tile+10),top,tile,61) && height-search>=145) {
@@ -1216,13 +1244,14 @@ static void init_graphics(void) {
         IDWriteTextFormat_SetWordWrapping(font_hero,DWRITE_WORD_WRAPPING_NO_WRAP);
     }
 }
-int moon_shell_run(void) {
+static int run_shell(int argc, wchar_t **argv) {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     if (!init_paths()) {
         MessageBoxW(NULL,L"Cannot open the Moon Browser profile.",L"Moon Browser",MB_ICONERROR);
         return 1;
     }
+    if (private_window) theme=&dark;
     char appearance[4096], preference[8];
     if (theme_path(appearance,sizeof(appearance)) && moon_read_text(appearance,preference,sizeof(preference)) &&
         strcmp(preference,"dark")==0) theme=&dark;
@@ -1244,7 +1273,7 @@ int moon_shell_run(void) {
     class.lpszClassName = L"MoonPalette";
     class.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);
     if (!RegisterClassExW(&class)) return 1;
-    frame = CreateWindowExW(0,L"MoonBrowserWindow",L"Moon Browser",WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+    frame = CreateWindowExW(0,L"MoonBrowserWindow",private_window?L"Moon Browser · 隐私浏览":L"Moon Browser",WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT,CW_USEDEFAULT,1120,760,NULL,NULL,instance,NULL);
     if (!frame) return 1;
     // Windows adds WS_CAPTION when creating an overlapped frame. Remove it while hidden.
@@ -1267,10 +1296,7 @@ int moon_shell_run(void) {
     layout();
     ShowWindow(frame,SW_SHOW);
     UpdateWindow(frame);
-    int argc = 0;
-    wchar_t **argv = CommandLineToArgvW(GetCommandLineW(),&argc);
     bool ready = moon_start(argc,(const uint16_t *const *)argv);
-    LocalFree(argv);
     if (!ready && !quitting) moon_quit(1);
     if (!quitting) SetTimer(frame,MAINTENANCE_TIMER,100,NULL);
     MSG msg = {0};
@@ -1299,4 +1325,13 @@ int moon_shell_run(void) {
     if (gdiplus) GdiplusShutdown(gdiplus);
     OleUninitialize();
     return next < 0 ? 1 : (int)msg.wParam;
+}
+int moon_shell_run(void) {
+    int argc=0;
+    wchar_t **argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+    if (!argv) return 1;
+    private_window=argc>1 && wcscmp(argv[1],L"--private")==0;
+    const int result=run_shell(argc,argv);
+    LocalFree(argv);
+    return result;
 }

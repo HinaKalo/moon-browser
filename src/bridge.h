@@ -59,6 +59,8 @@ void moon_shell_toast(const char *title, const char *body);
 void moon_shell_error(const char *body);
 bool moon_shell_confirm(const char *title, const char *body);
 const char *moon_profile_dir(void);
+bool moon_shell_private(void);
+bool moon_shell_open_private(void);
 const char *moon_app_dir(void);
 uint64_t moon_clock(void);
 uint64_t moon_wall_ms(void);
