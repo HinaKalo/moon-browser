@@ -56,6 +56,8 @@ class Fixture(BaseHTTPRequestHandler):
     closed_loaded = {}
     privacy_reports = {}
     privacy_asset_requests = 0
+    chrome_layout = None
+    chrome_sequence = 0
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -109,6 +111,12 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"cache fixture", "text/plain"
         elif path == "/privacy-worker.js":
             data, content_type = b"self.addEventListener('fetch',()=>{});", "application/javascript"
+        elif path.startswith("/chrome-layout/"):
+            sequence, *layout = map(int,path.removeprefix("/chrome-layout/").split("/"))
+            if sequence >= self.chrome_sequence:
+                type(self).chrome_sequence = sequence
+                type(self).chrome_layout = tuple(layout)
+            data, content_type = b"ok", "text/plain"
         elif path.startswith("/privacy-report/"):
             stage = path.removeprefix("/privacy-report/")
             report = {key: values[0] for key, values in parse_qs(urlsplit(self.path).query).items()}
@@ -181,6 +189,17 @@ class Fixture(BaseHTTPRequestHandler):
                 )
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
+            if name == "chrome-window":
+                demo = (
+                    '<style>body{min-height:300vh;background:#64bfa8}main{position:sticky;top:0}'
+                    'aside{position:fixed;right:0;top:0;width:42px;height:100%;background:#ed795b;transform:translateZ(0)}</style>'
+                    '<aside></aside><script>let timer,sequence=0;const report=()=>{clearTimeout(timer);'
+                    'timer=setTimeout(()=>fetch("/chrome-layout/"+'
+                    '[++sequence,Math.round(performance.timeOrigin),innerWidth,innerHeight,Math.round(scrollY)].join("/"),'
+                    '{cache:"no-store"}),90);};'
+                    'addEventListener("load",()=>{scrollTo(0,280);report();});'
+                    'addEventListener("resize",report);addEventListener("scroll",report);</script>'
+                )
             if name == "closed-post":
                 demo = ('<form action="/closed-submit" method="post"><input name="fixture" value="test"></form>'
                         '<script>document.forms[0].submit();</script>')
@@ -429,6 +448,7 @@ def run_win32(exe, base, root):
     user.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
     user.ClientToScreen.argtypes = [wt.HWND, ctypes.POINTER(wt.POINT)]
     user.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+    user.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
     user.GetDlgItem.argtypes = [wt.HWND, ctypes.c_int]
     user.GetDlgItem.restype = wt.HWND
     user.IsWindowVisible.argtypes = [wt.HWND]
@@ -966,6 +986,49 @@ def run_win32(exe, base, root):
             user.PostMessageW(home, 0x0100, 0x0D, 1)  # WM_KEYDOWN / Enter
         if not Fixture.seen_unicode.wait(15):
             raise RuntimeError("Unicode address did not reach the loopback fixture")
+        setup = base + "/page/chrome-window"
+        set_control(edit,setup)
+        user.PostMessageW(edit,0x0100,0x0D,1)
+        baseline = wait_for(lambda: Fixture.chrome_layout if Fixture.chrome_layout and Fixture.chrome_layout[3]==280 else None,
+                            "The compositor fixture did not load and scroll")
+        rect = wt.RECT()
+        user.GetWindowRect(frame,ctypes.byref(rect))
+        selected_text = "https://moon.example/Selection-Wgq-中文示例"
+        # Native selection must survive geometry changes without an address rewrite.
+        user.PostMessageW(frame,0x0100,0x75,1)  # VK_F6
+        sleep(0.08)
+        set_control(edit,selected_text)
+        user.SendMessageW(edit,0x00B1,0,len(selected_text))  # EM_SETSEL
+        user.SendMessageW(frame,0x0231,0,0)  # WM_ENTERSIZEMOVE
+        for left, width in ((-260,820),(140,970),(225,1050),(rect.left,rect.right-rect.left))*3:
+            user.SetWindowPos(frame,None,left,rect.top,width,rect.bottom-rect.top,0x0014)
+            sleep(0.02)
+        user.SendMessageW(frame,0x0232,0,0)  # WM_EXITSIZEMOVE
+        user.ShowWindow(frame,3)  # SW_MAXIMIZE
+        wait_for(lambda: Fixture.chrome_layout and Fixture.chrome_layout[1]>baseline[1],
+                 "WebKit viewport did not expand after maximizing")
+        user.ShowWindow(frame,9)  # SW_RESTORE
+        user.SetWindowPos(frame,None,rect.left,rect.top,rect.right-rect.left,rect.bottom-rect.top,0x0014)
+        try:
+            wait_for(lambda: Fixture.chrome_layout and Fixture.chrome_layout[:3]==baseline[:3] and
+                     abs(Fixture.chrome_layout[3]-baseline[3])<=3,
+                     "Moving and restoring changed the document, viewport or scroll position")
+        except RuntimeError as error:
+            raise RuntimeError(f"{error}: {baseline} --> {Fixture.chrome_layout}") from error
+        addr_bounds, text_bounds = wt.RECT(), wt.RECT()
+        user.GetClientRect(edit,ctypes.byref(addr_bounds))
+        user.SendMessageW(edit,0x00B2,0,ctypes.addressof(text_bounds))  # EM_GETRECT
+        if addr_bounds.bottom < px(25) or text_bounds.bottom > addr_bounds.bottom:
+            raise RuntimeError("Address text formatting is clipped by the native input bounds")
+        selection = user.SendMessageW(edit,0x00B0,0,0)  # EM_GETSEL
+        if selection != (len(selected_text)<<16) or read_control(edit)!=selected_text:
+            raise RuntimeError("Window movement lost the selected address text")
+        window_rect, client_origin = wt.RECT(), wt.POINT()
+        user.GetWindowRect(frame,ctypes.byref(window_rect))
+        user.ClientToScreen(frame,ctypes.byref(client_origin))
+        if user.GetWindowLongPtrW(frame,-16)&0x00C00000 or client_origin.y!=window_rect.top:
+            raise RuntimeError("A system caption returned after maximize and restore")
+        print("chrome_move_reflow=ok scroll_retained=ok native_address_selection=ok",flush=True)
         if not user.IsWindowVisible(content) or user.IsWindowVisible(home):
             raise RuntimeError("The WebKit view did not replace the native new-tab view")
         print(f"win32_unicode_address=ok resized_dpi={dpi} chrome_px={expected_chrome} fallback=GDI+")

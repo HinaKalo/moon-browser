@@ -48,6 +48,7 @@ static const Theme dark = {
 static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
+enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
 enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET,
        MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 16, MENU_PLUGIN_STRIDE = 24,
        MENU_SCRIPTS_PICK = 2000, MENU_SCRIPTS_BASE = 2010 };
@@ -453,9 +454,9 @@ static void paint_home(Canvas c,int width,int height) {
     heading_at(c,L"MoonBrowser",x+87,y,w-87,52);
     text_at(c,L"\u65b0\u6807\u7b7e\u9875",x+88,y+48,w-88,25,theme->muted,false);
     int search=y+98;
-    fill(c,x,search,w,44,GetFocus()==home_edit?theme->accent:theme->line,9);
-    fill(c,x+1,search+1,w-2,42,theme->field,8);
-    text_at(c,L"\x2315",x+5,search,34,44,theme->muted,true);
+    fill(c,x,search,w,HOME_FIELD_HEIGHT,GetFocus()==home_edit?theme->accent:theme->line,9);
+    fill(c,x+1,search+1,w-2,HOME_FIELD_HEIGHT-2,theme->field,8);
+    text_at(c,L"\x2315",x+5,search,34,HOME_FIELD_HEIGHT,theme->muted,true);
     if (height-search<145) return;
     text_at(c,L"\u5feb\u6377\u529f\u80fd",x,search+61,w,26,theme->muted,false);
     int tile=tile_width(width);
@@ -480,9 +481,9 @@ static void paint_chrome(Canvas c,int width,int height) {
     icon_button(c,L"\x2192",left+34,8,31,32,controls&2);
     icon_button(c,L"\x21bb",left+68,8,31,32,true);
     int address_x=address_left(), address_w=address_right(width)-address_x;
-    fill(c,address_x,8,address_w,32,GetFocus()==address?theme->accent:theme->line,8);
-    fill(c,address_x+1,9,address_w-2,30,theme->field,7);
-    text_at(c,L"\x2315",address_x+3,8,24,32,theme->muted,true);
+    fill(c,address_x,ADDRESS_TOP,address_w,ADDRESS_HEIGHT,GetFocus()==address?theme->accent:theme->line,8);
+    fill(c,address_x+1,ADDRESS_TOP+1,address_w-2,ADDRESS_HEIGHT-2,theme->field,7);
+    text_at(c,L"\x2315",address_x+3,ADDRESS_TOP,24,ADDRESS_HEIGHT,theme->muted,true);
     icon_button(c,L"\x25e7",width-213,8,32,32,true);
     icon_button(c,L"\x2026",width-175,8,32,32,true);
     icon_button(c,L"\x2212",width-138,0,44,TOP,true);
@@ -550,11 +551,13 @@ static void layout(void) {
     }
     moon_find_layout();
     int address_width=address_right(width)-address_left()-34;
-    MoveWindow(address,px(address_left()+29),px(14),px(address_width>10?address_width:10),px(21),TRUE);
+    MoveWindow(address,px(address_left()+29),px(ADDRESS_TOP+3),px(address_width>10?address_width:10),
+        px(ADDRESS_TOP+ADDRESS_HEIGHT-3)-px(ADDRESS_TOP+3),TRUE);
     if (home_edit) {
         int field_width=home_width(width)-48;
-        MoveWindow(home_edit,px(home_left(width)+40),px(home_top(height)+110),
-            px(field_width>10?field_width:10),px(23),TRUE);
+        int top=home_top(height)+98;
+        MoveWindow(home_edit,px(home_left(width)+40),px(top+6),px(field_width>10?field_width:10),
+            px(top+HOME_FIELD_HEIGHT-6)-px(top+6),TRUE);
     }
     if (target) {
         D2D1_SIZE_U size = {(UINT32)r.right,(UINT32)r.bottom};
@@ -591,7 +594,10 @@ void moon_shell_focus_address(void) { SetFocus(address); SendMessageW(address, E
 void moon_shell_address(const char *value, bool force) {
     if (GetFocus() == address && !force) return;
     wchar_t wide[4096];
-    if (moon_utf16(value,wide,ARRAYSIZE(wide))) SetWindowTextW(address,wide);
+    if (!moon_utf16(value,wide,ARRAYSIZE(wide))) return;
+    wchar_t current[4096];
+    GetWindowTextW(address,current,ARRAYSIZE(current));
+    if (wcscmp(current,wide)!=0) SetWindowTextW(address,wide);
 }
 void moon_shell_status(const char *value) {
     moon_utf16(value,content_status,ARRAYSIZE(content_status));
@@ -915,15 +921,21 @@ static void click(HWND hwnd,int psx,int psy) {
     }
 }
 
+static void size_content_views(HWND parent, bool dpi_changed) {
+    RECT bounds;
+    GetClientRect(parent,&bounds);
+    for (HWND view=GetWindow(parent,GW_CHILD); view; view=GetWindow(view,GW_HWNDNEXT)) {
+        if (dpi_changed) {
+            // WebKit on Windows updates the viewport scale in WM_SIZE.
+            SendMessageW(view,WM_SIZE,SIZE_RESTORED,MAKELPARAM(bounds.right,bounds.bottom));
+        } else {
+            MoveWindow(view,0,0,bounds.right,bounds.bottom,TRUE);
+        }
+    }
+}
 static LRESULT CALLBACK content_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     if (msg == WM_SIZE) {
-        HWND view = GetWindow(hwnd,GW_CHILD);
-        RECT r;
-        GetClientRect(hwnd,&r);
-        while (view) {
-            MoveWindow(view,0,0,r.right,r.bottom,TRUE);
-            view = GetWindow(view,GW_HWNDNEXT);
-        }
+        size_content_views(hwnd,false);
         return 0;
     }
     if (msg == WM_PAINT) {
@@ -944,18 +956,34 @@ static LRESULT CALLBACK content_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) 
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
+static void refresh_presentation(HWND hwnd) {
+    if (IsIconic(hwnd) || !IsWindowVisible(hwnd) || quitting) return;
+    RedrawWindow(hwnd,NULL,NULL,RDW_INVALIDATE|RDW_NOCHILDREN);
+    // WebKit presents through its own child HWND. Keep host repaint out of that surface.
+    if (content) RedrawWindow(content,NULL,NULL,RDW_INVALIDATE|RDW_NOCHILDREN);
+    if (address) InvalidateRect(address,NULL,FALSE);
+    if (home_edit && IsWindowVisible(home_edit)) InvalidateRect(home_edit,NULL,FALSE);
+}
+static void queue_presentation(HWND hwnd) {
+    if (!IsIconic(hwnd) && IsWindowVisible(hwnd) && !SetTimer(hwnd,PRESENTATION_TIMER,65,NULL))
+        refresh_presentation(hwnd);
+}
 static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     switch (msg) {
-        case WM_NCCALCSIZE:
-            if (wp) {
-                if (IsZoomed(hwnd)) {
-                    MONITORINFO area={.cbSize=sizeof(area)};
-                    NCCALCSIZE_PARAMS *client=(NCCALCSIZE_PARAMS *)lp;
-                    if (GetMonitorInfoW(MonitorFromRect(&client->rgrc[0],MONITOR_DEFAULTTONEAREST),&area))
-                        client->rgrc[0]=area.rcWork;
-                }
-                return 0;
+        case WM_NCCALCSIZE: {
+            if (IsZoomed(hwnd)) {
+                MONITORINFO area={.cbSize=sizeof(area)};
+                RECT *client=wp ? &((NCCALCSIZE_PARAMS *)lp)->rgrc[0] : (RECT *)lp;
+                if (GetMonitorInfoW(MonitorFromRect(client,MONITOR_DEFAULTTONEAREST),&area))
+                    *client=area.rcWork;
             }
+            return 0;
+        }
+        case WM_NCPAINT:
+            if (!IsIconic(hwnd)) return 0;
+            break;
+        case WM_NCACTIVATE:
+            if (!IsIconic(hwnd)) return DefWindowProcW(hwnd,msg,wp,-1);
             break;
         case WM_NCHITTEST: {
             POINT point={(short)LOWORD(lp),(short)HIWORD(lp)};
@@ -974,7 +1002,19 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 (point.y>=px(TOP-6) && point.y<px(TOP) && point.x<px(client_width()-140))) return HTCAPTION;
             return HTCLIENT;
         }
-        case WM_SIZE: if (content && address) layout(); return 0;
+        case WM_SIZE:
+            if (content && address && wp!=SIZE_MINIMIZED) {
+                layout();
+                queue_presentation(hwnd);
+            }
+            return 0;
+        case WM_MOVE: case WM_EXITSIZEMOVE:
+            queue_presentation(hwnd);
+            return 0;
+        case WM_DISPLAYCHANGE: case WM_DWMCOMPOSITIONCHANGED:
+            release_target();
+            queue_presentation(hwnd);
+            break;
         case WM_DPICHANGED: {
             dpi = LOWORD(wp);
             const RECT *r = (RECT *)lp;
@@ -983,7 +1023,9 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             if (address && content) {
                 set_font();
                 layout();
+                size_content_views(content,true);
             }
+            queue_presentation(hwnd);
             return 0;
         }
         case WM_GETMINMAXINFO: {
@@ -1022,7 +1064,13 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 InvalidateRect(hwnd,NULL,FALSE);
             }
             return 0;
-        case WM_TIMER: moon_command(MOON_TICK,0,NULL); return 0;
+        case WM_TIMER:
+            if (wp==MAINTENANCE_TIMER) moon_command(MOON_TICK,0,NULL);
+            if (wp==PRESENTATION_TIMER) {
+                KillTimer(hwnd,PRESENTATION_TIMER);
+                refresh_presentation(hwnd);
+            }
+            return 0;
         case WM_CLOSE: moon_quit(0); return 0;
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
@@ -1135,8 +1183,9 @@ int moon_shell_run(void) {
     frame = CreateWindowExW(0,L"MoonBrowserWindow",L"Moon Browser",WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT,CW_USEDEFAULT,1120,760,NULL,NULL,instance,NULL);
     if (!frame) return 1;
+    // Windows adds WS_CAPTION when creating an overlapped frame. Remove it while hidden.
     SetWindowLongPtrW(frame,GWL_STYLE,GetWindowLongPtrW(frame,GWL_STYLE) & ~(LONG_PTR)WS_CAPTION);
-    SetWindowPos(frame,NULL,0,0,0,0,SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    SetWindowPos(frame,NULL,0,0,0,0,SWP_FRAMECHANGED|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE);
     dpi = GetDpiForWindow(frame);
     address_brush = CreateSolidBrush(rgb(theme->field));
     content = CreateWindowExW(0,L"MoonContent",NULL,WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
@@ -1159,7 +1208,7 @@ int moon_shell_run(void) {
     bool ready = moon_start(argc,(const uint16_t *const *)argv);
     LocalFree(argv);
     if (!ready && !quitting) moon_quit(1);
-    if (!quitting) SetTimer(frame,1,100,NULL);
+    if (!quitting) SetTimer(frame,MAINTENANCE_TIMER,100,NULL);
     MSG msg = {0};
     BOOL next;
     while ((next=GetMessageW(&msg,NULL,0,0)) > 0) {
