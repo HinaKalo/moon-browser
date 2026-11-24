@@ -92,6 +92,12 @@ pub fn build(b: *std.Build) void {
     });
     reading.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(reading);
+    const appearance = b.addExecutable(.{
+        .name = "MoonAppearance",
+        .root_module = b.createModule(.{ .root_source_file=b.path("examples/appearance/main.zig"),.target=target,.optimize=optimize,.link_libc=true }),
+    });
+    appearance.root_module.addImport("moon_plugin",plugin_sdk);
+    b.installArtifact(appearance);
     const command_example = b.addExecutable(.{
         .name = "MoonCommandExample",
         .root_module = b.createModule(.{ .root_source_file=b.path("examples/ui-commands/main.zig"),.target=target,.optimize=optimize,.link_libc=true }),

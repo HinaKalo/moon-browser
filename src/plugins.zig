@@ -43,6 +43,7 @@ const Grant = struct {
     tabs_session_manage: bool = false,
     bookmarks_transfer: ?bool = null,
     window_fullscreen: ?bool = null,
+    window_appearance: ?bool = null,
     page_save: ?bool = null,
     page_reader: ?bool = null,
     tabs_groups: ?bool = null,
@@ -228,7 +229,8 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             else if (std.mem.eql(u8,id,"moon.tab-tools")) .@"tabs.organize"
             else if (std.mem.eql(u8,id,"moon.private-window")) .@"privacy.privateWindow"
             else if (std.mem.eql(u8,id,"moon.search")) .@"search.manage"
-            else if (std.mem.eql(u8,id,"moon.session")) .@"tabs.session.manage" else null;
+            else if (std.mem.eql(u8,id,"moon.session")) .@"tabs.session.manage"
+            else if (std.mem.eql(u8,id,"moon.appearance")) .@"window.appearance" else null;
         if (default_permission) |scope| {
             if (requests.contains(scope)) {
                 plugin.enabled = true;
@@ -334,7 +336,7 @@ fn discover(root: []const u8, bundled: bool) void {
 fn privatePlugin(id: []const u8) bool {
     const allowed = [_][]const u8{
         "moon.private-window", "moon.devtools", "moon.site-data", "moon.reading", "moon.source",
-        "moon.recent-tabs", "moon.tab-tools", "moon.task-manager",
+        "moon.recent-tabs", "moon.tab-tools", "moon.task-manager", "moon.appearance",
     };
     for (allowed) |item| if (std.mem.eql(u8,id,item)) return true;
     return false;
@@ -394,6 +396,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"bookmarks.transfer")) plugin.grants.insert(.@"bookmarks.transfer");
         if (grant.enabled and (grant.window_fullscreen orelse plugin.default_grants.contains(.@"window.fullscreen")) and
             plugin.requests.contains(.@"window.fullscreen")) plugin.grants.insert(.@"window.fullscreen");
+        if (grant.enabled and (grant.window_appearance orelse plugin.default_grants.contains(.@"window.appearance")) and
+            plugin.requests.contains(.@"window.appearance")) plugin.grants.insert(.@"window.appearance");
         if (grant.enabled and (grant.page_save orelse plugin.default_grants.contains(.@"page.save")) and
             plugin.requests.contains(.@"page.save")) plugin.grants.insert(.@"page.save");
         if (grant.enabled and (grant.page_reader orelse plugin.default_grants.contains(.@"page.reader")) and
@@ -481,6 +485,7 @@ fn persist() bool {
         .tabs_session_manage = plugin.grants.contains(.@"tabs.session.manage"),
         .bookmarks_transfer = plugin.grants.contains(.@"bookmarks.transfer"),
         .window_fullscreen = plugin.grants.contains(.@"window.fullscreen"),
+        .window_appearance = plugin.grants.contains(.@"window.appearance"),
         .page_save = plugin.grants.contains(.@"page.save"),
         .page_reader = plugin.grants.contains(.@"page.reader"),
         .tabs_groups = plugin.grants.contains(.@"tabs.groups"),
@@ -536,6 +541,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
                 .@"siteData.cookieDetails" => "此插件可在绑定到网页的站点数据面板查看 Cookie 属性及值，包含可能用于登录的 HttpOnly Cookie。",
+                .@"window.appearance" => "此插件可以切换浏览器亮色或深色主题，并显示或隐藏当前窗口的标签侧栏。",
                 .@"siteData.cacheWrite" => "此插件经你确认后，可删除当前站点数据面板中指定的 Cache Storage 缓存。",
                 .@"siteData.records" => "此插件可在当前站点数据面板按需读取 IndexedDB 记录的键和值预览。",
                 .@"page.reading" => "此插件可在当前页打开查找栏，并调整页面缩放。",
@@ -954,6 +960,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
     return switch (mods) {
         0 => switch (vk) { 0x78 => .F9, 0x7a => .F11, 0x7b => .F12, else => null },
         ctrl => switch (vk) {
+            'B' => .@"Ctrl+B",
             'H' => .@"Ctrl+H",
             'J' => .@"Ctrl+J",
             'D' => .@"Ctrl+D",
@@ -969,6 +976,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
             'C' => .@"Ctrl+Shift+C",
             'I' => .F12,
             'J' => .@"Ctrl+Shift+J",
+            'L' => .@"Ctrl+Shift+L",
             'R' => .@"Ctrl+Shift+R",
             'O' => .@"Ctrl+Shift+O",
             'T' => .@"Ctrl+Shift+T",
@@ -1017,7 +1025,10 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
                 !plugin.grants.contains(.@"window.fullscreen"))) continue;
             if (key==.@"Ctrl+Shift+R" and (!plugin.grants.contains(.@"page.inspect") or
                 (!plugin.bundled and !canContribute(plugin)))) continue;
-            if (!repeated or (key!=.F9 and key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C" and key!=.@"Ctrl+S" and key!=.@"Ctrl+Shift+R"))
+            const appearance = key==.@"Ctrl+B" or key==.@"Ctrl+Shift+L";
+            if (appearance and (!plugin.grants.contains(.@"window.appearance") or
+                (!plugin.bundled and !canContribute(plugin)))) continue;
+            if (!repeated or (!appearance and key!=.F9 and key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C" and key!=.@"Ctrl+S" and key!=.@"Ctrl+Shift+R"))
                 runShortcut(index,command_index,snapshot,repeated);
             return true;
         }

@@ -72,7 +72,7 @@ static const Theme *theme = &light;
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48, BOOKMARK_HEIGHT = 32 };
 enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, FULLSCREEN_HINT_TIMER = 3, TAB_DRAG_TIMER = 4,
        ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
-enum { MENU_ADD = 11, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_MANAGE_PLUGINS,
+enum { MENU_ADD = 11, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_MANAGE_PLUGINS,
        MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 2 + MOON_PLUGIN_MENU_PERMISSION_LIMIT, MENU_PLUGIN_STRIDE = 64,
        MENU_SCRIPTS_PICK = 0x2000, MENU_SCRIPTS_BASE = 0x2010 };
 _Static_assert(MENU_PLUGIN_ACTIONS + MOON_LINK_MENU_STRIDE <= MENU_PLUGIN_STRIDE,
@@ -338,6 +338,7 @@ MoonDialogTheme moon_dialog_theme(void) {
 }
 uint64_t moon_shell_window_handle(void) { return (uintptr_t)frame; }
 bool moon_shell_dark_mode(void) { return theme==&dark; }
+bool moon_shell_focus_mode(void) { return focus_mode; }
 static D2D1_COLOR_F color_value(unsigned color) {
     return (D2D1_COLOR_F){ (float)((color >> 16) & 255) / 255, (float)((color >> 8) & 255) / 255,
         (float)(color & 255) / 255, 1 };
@@ -658,7 +659,7 @@ static void paint_chrome(Canvas c,int width,int height) {
         fill(c,badge,ADDRESS_TOP+4,62,ADDRESS_HEIGHT-8,theme->soft,6);
         text_at(c,L"隐私浏览",badge,ADDRESS_TOP+3,62,ADDRESS_HEIGHT-6,theme->accent,true);
     }
-    icon_button(c,L"\x25e7",width-213,8,32,32,true);
+    icon_button(c,L"\x25e7",width-213,8,32,32,moon_appearance_available() || focus_mode);
     icon_button(c,L"\x2026",width-175,8,32,32,true);
     icon_button(c,L"\x2212",width-138,0,44,TOP,true);
     icon_button(c,IsZoomed(frame)?L"\x29c9":L"\x25a1",width-94,0,44,TOP,true);
@@ -864,11 +865,6 @@ void moon_shell_show_home(bool visible) {
     ShowWindow(home_edit,visible?SW_SHOWNA:SW_HIDE);
     InvalidateRect(frame,NULL,FALSE);
 }
-void moon_shell_toggle_sidebar(void) {
-    cancel_tab_drag();
-    focus_mode=!focus_mode;
-    layout();
-}
 static void refresh_theme(void) {
     HBRUSH old=address_brush;
     address_brush=CreateSolidBrush(rgb(theme->field));
@@ -885,12 +881,23 @@ static bool theme_path(char *path,size_t size) {
     int written=snprintf(path,size,"%s\\chrome-theme",moon_profile_dir());
     return written>0 && (size_t)written<size;
 }
-void moon_shell_toggle_theme(void) {
-    theme=theme==&light?&dark:&light;
-    char path[4096];
-    if (theme_path(path,sizeof(path))) moon_write_text(path,theme==&dark?"dark":"light");
-    refresh_theme();
-    moon_engine_refresh_extension_theme();
+bool moon_shell_set_appearance(bool dark_mode, bool focused) {
+    const Theme *next=dark_mode?&dark:&light;
+    const bool theme_changed=next!=theme, focus_changed=focused!=focus_mode;
+    if (!theme_changed && !focus_changed) return true;
+    if (theme_changed && !private_window) {
+        char path[4096];
+        if (!theme_path(path,sizeof(path)) || !moon_write_text(path,dark_mode?"dark":"light")) return false;
+    }
+    theme=next;
+    focus_mode=focused;
+    if (theme_changed) refresh_theme();
+    if (focus_changed) {
+        cancel_tab_drag();
+        layout();
+    }
+    moon_engine_refresh_extension_appearance();
+    return true;
 }
 void moon_shell_refresh_tab_order(bool reveal_active) {
     clamp_tab_strip(reveal_active);
@@ -1056,8 +1063,6 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
         AppendMenuW(popup,MF_STRING,MENU_MARKET,L"插件市场");
         AppendMenuW(popup,MF_STRING,MENU_MANAGE_PLUGINS,L"管理插件");
     }
-    AppendMenuW(popup,MF_STRING|(theme==&dark?MF_CHECKED:0),MENU_THEME,L"\u6df1\u8272\u4e3b\u9898\tCtrl+Shift+L");
-    AppendMenuW(popup,MF_STRING|(focus_mode?MF_CHECKED:0),MENU_FOCUS,L"\u4e13\u6ce8\u6a21\u5f0f\tCtrl+B");
     if (!private_window) userscript_menu(popup);
     size_t count=moon_plugin_count();
     if (count) {
@@ -1095,8 +1100,6 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
         above?button.top:button.bottom,hwnd,&placement);
     DestroyMenu(popup);
     if (command==MENU_ADD) moon_command(MOON_NEW,0,NULL);
-    else if (command==MENU_THEME) moon_shell_toggle_theme();
-    else if (command==MENU_FOCUS) moon_shell_toggle_sidebar();
     else if (command==MENU_PALETTE) open_palette();
     else if (command==MENU_UPDATES) moon_command(MOON_UPDATES,0,NULL);
     else if (command==MENU_MARKET) moon_command(MOON_MARKET,0,NULL);
@@ -1359,7 +1362,7 @@ static void click(HWND hwnd,int psx,int psy) {
         if (x>=width-138) { ShowWindow(hwnd,SW_MINIMIZE); return; }
         if (x>=width-175) { menu(hwnd,rectangle(width-175,8,32,32),false,true); return; }
         if (x>=width-213) {
-            moon_shell_toggle_sidebar();
+            moon_command(MOON_TOGGLE_SIDEBAR,0,NULL);
             return;
         }
         if (x>=left && x<left+31) moon_command(MOON_BACK,0,NULL);
@@ -1684,10 +1687,8 @@ static bool keyboard(MSG *msg) {
         if (moon_utf8(wide,value,sizeof(value))) moon_command(MOON_ADDRESS,0,value);
         return true;
     }
-    if (ctrl && shift && msg->wParam == 'L') { moon_shell_toggle_theme(); return true; }
     if ((ctrl && msg->wParam == 'L') || msg->wParam == VK_F6) { moon_shell_focus_address(); return true; }
     if (ctrl && msg->wParam == 'K') { open_palette(); return true; }
-    if (modifiers==MOD_CONTROL && msg->wParam == 'B') { moon_shell_toggle_sidebar(); return true; }
     if (ctrl && !shift && !alt && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
     if (ctrl && msg->wParam == 'W') { moon_command(MOON_CLOSE,moon_active_index(),NULL); return true; }
     if (ctrl && msg->wParam == VK_TAB) { moon_command(shift ? MOON_KEY_PREV : MOON_KEY_NEXT,0,NULL); return true; }
@@ -1696,6 +1697,10 @@ static bool keyboard(MSG *msg) {
         if (!repeated) moon_tab_nudge(msg->wParam==VK_NEXT);
         return true;
     }
+    const bool appearance=(modifiers==MOD_CONTROL && msg->wParam=='B') ||
+        (modifiers==(MOD_CONTROL|MOD_SHIFT) && msg->wParam=='L');
+    if (appearance && !moon_ime_composing(msg->hwnd) &&
+        moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
     const bool hard_reload=(modifiers==(MOD_CONTROL|MOD_SHIFT) && msg->wParam=='R') ||
         (modifiers==MOD_SHIFT && msg->wParam==VK_F5);
     if (hard_reload && (moon_ime_composing(msg->hwnd) ||

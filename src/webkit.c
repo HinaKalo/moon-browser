@@ -836,11 +836,13 @@ bool moon_engine_load_extension(MoonView *view, const char *html) {
     static const char policy[] = "<meta charset=utf-8><meta http-equiv=\"Content-Security-Policy\" "
         "content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; "
         "connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'\">";
-    const char *theme = moon_shell_dark_mode() ? "<!doctype html><html data-moon-theme=dark>" : "<!doctype html><html data-moon-theme=light>";
-    size_t size = sizeof(policy)+strlen(theme)+strlen(html);
+    char appearance[80];
+    snprintf(appearance,sizeof(appearance),"<!doctype html><html data-moon-theme=%s data-moon-focus-mode=%s>",
+        moon_shell_dark_mode()?"dark":"light",moon_shell_focus_mode()?"true":"false");
+    size_t size = sizeof(policy)+strlen(appearance)+strlen(html);
     char *document = malloc(size);
     if (!document) return false;
-    snprintf(document,size,"%s%s%s",theme,policy,html);
+    snprintf(document,size,"%s%s%s",appearance,policy,html);
     WKStringRef source = wk.WKStringCreateWithUTF8CString(document);
     WKURLRef base = wk.WKURLCreateWithUTF8CString(view->extension_address);
     free(document);
@@ -850,9 +852,10 @@ bool moon_engine_load_extension(MoonView *view, const char *html) {
     release(base);
     return ok;
 }
-void moon_engine_refresh_extension_theme(void) {
-    const char *script = moon_shell_dark_mode() ? "document.documentElement.dataset.moonTheme='dark'" :
-        "document.documentElement.dataset.moonTheme='light'";
+void moon_engine_refresh_extension_appearance(void) {
+    char script[160];
+    snprintf(script,sizeof(script),"Object.assign(document.documentElement.dataset,{moonTheme:'%s',moonFocusMode:'%s'})",
+        moon_shell_dark_mode()?"dark":"light",moon_shell_focus_mode()?"true":"false");
     for (MoonView *view=views; view; view=view->next)
         if (view->extension_address) moon_engine_apply_dom(view,script);
 }

@@ -763,6 +763,9 @@ def run_win32(exe, base, root):
     user.GetWindow.argtypes = [wt.HWND, wt.UINT]
     user.GetWindow.restype = wt.HWND
     user.IsWindow.argtypes = [wt.HWND]
+    user.ChildWindowFromPointEx.argtypes = [wt.HWND,wt.POINT,wt.UINT]
+    user.ChildWindowFromPointEx.restype = wt.HWND
+    user.MapWindowPoints.argtypes = [wt.HWND,wt.HWND,ctypes.POINTER(wt.POINT),wt.UINT]
     profile = Path(preview_env(root)["MOON_BROWSER_PROFILE_DIR"])
     example_manifest = exe.parent / "plugins" / "example" / "plugin.json"
     modern_example = json.loads(example_manifest.read_text(encoding="utf-8")).get("apiVersion") == 2
@@ -773,6 +776,7 @@ def run_win32(exe, base, root):
     docked_devtools = "window" in devtools_commands
     picker_devtools = "elements" in devtools_commands
     inspect_menu = devtools_commands.get("elements",{}).get("inspectElementMenu")
+    appearance = exe.parent / "plugins" / "appearance" / "MoonAppearance.exe"
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
@@ -898,6 +902,9 @@ def run_win32(exe, base, root):
             ('const soundDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"13",method:"siteSettings.sound.get",params:{}}));'
              'if(JSON.parse(soundDenied).error?.code!==-32001)return;' if sound_settings else '') +
+            ('const appearanceDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"14",method:"window.appearance.set",params:{theme:"dark"}}));'
+             'if(JSON.parse(appearanceDenied).error?.code!==-32001)return;' if appearance.is_file() else '') +
             ('const downloadsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"10",method:"downloads.clearCompleted",params:{}}));'
              'if(JSON.parse(downloadsDenied).error?.code!==-32001)return;'
@@ -1704,6 +1711,27 @@ def run_win32(exe, base, root):
                 sleep(0.05)
             raise RuntimeError("Native command palette did not open")
 
+        def wait_for(predicate, reason, seconds=10):
+            deadline = monotonic() + seconds
+            while monotonic() < deadline:
+                value = predicate()
+                if value:
+                    return value
+                sleep(0.05)
+            raise RuntimeError(reason)
+
+        def sidebar_visible(expected):
+            client_box, pane_box = wt.RECT(), wt.RECT()
+            if not user.GetClientRect(frame,ctypes.byref(client_box)) or not user.GetClientRect(content,ctypes.byref(pane_box)):
+                return False
+            width = client_box.right - pane_box.right
+            return width == (side if expected else 2*px(9))
+
+        def click_sidebar_control():
+            bounds = wt.RECT()
+            user.GetClientRect(frame,ctypes.byref(bounds))
+            click(bounds.right-px(197),px(25))
+
         if not user.IsWindowVisible(home) or user.IsWindowVisible(content):
             raise RuntimeError("The native new-tab view did not open")
         click(px(70), px(65))
@@ -1720,23 +1748,13 @@ def run_win32(exe, base, root):
             raise RuntimeError("The command palette did not create a tab")
         user.PostMessageW(user.GetDlgItem(palette, 1003), 0x0100, 0x1B, 1)
         sleep(0.2)
-        click(client.right - px(197), px(25))
-        sleep(0.2)
-        user.GetClientRect(content, ctypes.byref(pane))
-        if client.right - pane.right != 2 * px(9):
-            raise RuntimeError("The native sidebar did not collapse")
-        click(client.right - px(197), px(25))
-        sleep(0.2)
+        click_sidebar_control()
+        wait_for(lambda: sidebar_visible(False),"The native sidebar did not collapse")
+        # The command's worker can still be returning when the layout first reflows.
+        sleep(0.25)
+        click_sidebar_control()
+        wait_for(lambda: sidebar_visible(True),"The native sidebar did not reappear")
         print("native_home=ok command_palette=ok sidebar_focus_mode=ok")
-
-        def wait_for(predicate, reason, seconds=10):
-            deadline = monotonic() + seconds
-            while monotonic() < deadline:
-                value = predicate()
-                if value:
-                    return value
-                sleep(0.05)
-            raise RuntimeError(reason)
 
         def owned_window(class_name, title=None):
             candidate = None
@@ -1819,6 +1837,16 @@ def run_win32(exe, base, root):
         def visible_page_view():
             surface = next(visible_children(content),None)
             return next(visible_children(surface),None) if docked_devtools and surface else surface
+
+        def page_click(x,y):
+            point = wt.POINT(x,y)
+            view = content
+            while (child := user.ChildWindowFromPointEx(view,point,1)) and child != view:
+                user.MapWindowPoints(view,child,ctypes.byref(point),1)
+                view = child
+            coords = point.y << 16 | point.x
+            user.PostMessageW(view,0x0201,1,coords)
+            user.PostMessageW(view,0x0202,0,coords)
 
         def pick_html_file(title, selected):
             dialog = wait_for(lambda: owned_window("#32770",title),f"The {title} dialog did not open")
@@ -2633,20 +2661,6 @@ def run_win32(exe, base, root):
                     raise RuntimeError("A page over the length limit was saved or left staging data")
                 print("page_save_system_plugin=ok unicode=ok full_source=ok no_refetch=ok cancelled=ok stale_navigation=ok size_limit=ok",flush=True)
         if popups.exists():
-            user.ChildWindowFromPointEx.argtypes = [wt.HWND,wt.POINT,wt.UINT]
-            user.ChildWindowFromPointEx.restype = wt.HWND
-            user.MapWindowPoints.argtypes = [wt.HWND,wt.HWND,ctypes.POINTER(wt.POINT),wt.UINT]
-
-            def popup_click(x,y):
-                point = wt.POINT(x,y)
-                view = content
-                while (child := user.ChildWindowFromPointEx(view,point,1)) and child != view:
-                    user.MapWindowPoints(view,child,ctypes.byref(point),1)
-                    view = child
-                coords = point.y << 16 | point.x
-                user.PostMessageW(view,0x0201,1,coords)
-                user.PostMessageW(view,0x0202,0,coords)
-
             def popup_loaded(stage, origin):
                 wait_for(lambda: stage in Fixture.popup_destinations,
                          f"The {stage} popup did not reach its target")
@@ -2667,7 +2681,7 @@ def run_win32(exe, base, root):
             user.GetClientRect(content,ctypes.byref(panel))
             # Click the bound notice action in the bundled page at the fixed smoke viewport size.
             sleep(0.45)
-            popup_click(panel.right-px(88),px(245))
+            page_click(panel.right-px(88),px(245))
             confirm = wait_for(lambda: owned_window("#32770","打开一次弹窗？"),
                                "The blocked popup did not offer a one-time confirmation")
             user.SendMessageW(confirm,0x0111,6,0)  # IDYES
@@ -2678,7 +2692,7 @@ def run_win32(exe, base, root):
             user.PostMessageW(edit,0x0100,0x0D,1)
             wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
                      "User-initiated popup fixture did not load")
-            popup_click(px(30),px(20))
+            page_click(px(30),px(20))
             popup_loaded("click",base)
 
             def configure_site_rule(origin, mode, *, confirm=None, expected="saved", autoplay=False):
@@ -2722,7 +2736,7 @@ def run_win32(exe, base, root):
                 user.PostMessageW(edit,0x0100,0x0D,1)
                 wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
                          "Popup rule link fixture did not load")
-                popup_click(px(30),px(20))
+                page_click(px(30),px(20))
                 wait_for(lambda: stage in Fixture.popup_attempts,"Popup link did not receive a click")
                 if mode == "block":
                     sleep(0.35)
@@ -2740,7 +2754,8 @@ def run_win32(exe, base, root):
                     attempts = (stage,stage+"-retry") if url is None else (stage,)
                     outcome = None
                     for probe in attempts:
-                        set_control(edit,url or origin + "/page/autoplay-" + probe)
+                        address = url or origin + "/page/autoplay-" + probe
+                        set_control(edit,address)
                         user.PostMessageW(edit,0x0100,0x0D,1)
                         try:
                             outcome = wait_for(lambda: Fixture.autoplay_reports.get(probe),
@@ -2750,6 +2765,9 @@ def run_win32(exe, base, root):
                                 raise
                             continue
                         if not outcome.startswith("timeout-"):
+                            if url is None:
+                                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(address,)),
+                                         f"Autoplay probe did not finish navigating: {probe}",15)
                             return outcome
                     return outcome
 
@@ -2782,9 +2800,7 @@ def run_win32(exe, base, root):
                 print("site_settings_autoplay=ok allow_confirmation=ok muted=ok strict_block=ok redirect_scope=ok reset=ok persisted=ok",flush=True)
             if sound_settings:
                 def visit_sound(url):
-                    set_control(edit,url)
-                    user.PostMessageW(edit,0x0100,0x0D,1)
-                    wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(url,)),"The sound fixture page did not load")
+                    navigate_reading(url)
 
                 def sound_menu(choose=None):
                     bounds=wt.RECT()
@@ -4093,6 +4109,50 @@ def run_win32(exe, base, root):
             invoke("显示或隐藏书签栏")
             wait_for(lambda: viewport_top(frame)==collapsed,"Hiding the bookmark bar did not restore the viewport")
             print("bookmarks_bar=ok session_preference=ok nested_menu=ok direct_navigation=ok menu_anchor=ok live_refresh=ok overflow=ok fullscreen=ok private=ok",flush=True)
+        if appearance.is_file():
+            appearance_env = preview_env(root/"appearance")
+            theme_path = Path(appearance_env["MOON_BROWSER_PROFILE_DIR"])/"chrome-theme"
+            page_menu = "标签与页面"
+            theme_action = "切换亮色 / 深色主题\tCtrl+Shift+L"
+            focus_action = "切换专注模式\tCtrl+B"
+
+            def restart_appearance():
+                user.PostMessageW(frame,0x0010,0,0)
+                if proc.wait(8)!=0:
+                    raise RuntimeError("Could not close the browser before the appearance check")
+                process = subprocess.Popen([str(exe),"--gdi"],env=appearance_env)
+                window = browser_frame(process)
+                user.SetWindowPos(window,None,0,0,px(1080),px(650),0x0016)
+                return process,window,user.GetDlgItem(window,1001),user.FindWindowExW(window,None,"MoonContent",None)
+
+            def theme_stored(expected):
+                try:
+                    return theme_path.read_text(encoding="utf-8")==expected
+                except (FileNotFoundError, PermissionError):
+                    return False
+
+            proc,frame,edit,content = restart_appearance()
+            entries = native_entries(choose=(page_menu,"外观设置"))
+            if not {theme_action,focus_action} <= entries[page_menu].keys():
+                raise RuntimeError("The appearance plugin did not contribute both familiar shortcuts")
+            wait_for(lambda: read_address()=="extension://moon.appearance/appearance.html","The appearance page did not open")
+            wait_for(visible_page_view,"The appearance page has no WebKit view")
+            pane_rect = wt.RECT()
+            user.GetClientRect(content,ctypes.byref(pane_rect))
+            # Click inside the second theme preview. This exercises the shipped page's radio control and its API call.
+            for _ in range(12):
+                if theme_stored("dark"):
+                    break
+                page_click(3*pane_rect.right//4,px(166))
+                sleep(0.2)
+            wait_for(lambda: theme_stored("dark"),"The appearance page did not apply and persist its dark theme")
+            native_entries(choose=(page_menu,focus_action))
+            wait_for(lambda: sidebar_visible(False),"The focus command did not hide the native sidebar")
+            proc,frame,edit,content = restart_appearance()
+            wait_for(lambda: sidebar_visible(True),"The restarted window persisted focus mode")
+            native_entries(choose=(page_menu,theme_action))
+            wait_for(lambda: theme_stored("light"),"The theme toggle failed to start from the persisted dark theme")
+            print("appearance_system_plugin=ok page_theme_control=ok native_focus=ok persistent_theme=ok window_scoped_focus=ok",flush=True)
         if commands.exists():
             user.PostMessageW(frame,0x0010,0,0)
             if proc.wait(8)!=0:

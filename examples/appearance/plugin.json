@@ -1,0 +1,17 @@
+{
+  "id": "moon.appearance",
+  "name": "浏览器外观",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonAppearance.exe",
+  "settingsPage": "appearance.html",
+  "contributes": {
+    "commands": [
+      { "id": "settings", "label": "外观设置", "menu": "page" },
+      { "id": "theme", "label": "切换亮色 / 深色主题", "menu": "page", "shortcut": "Ctrl+Shift+L" },
+      { "id": "focus", "label": "切换专注模式", "menu": "page", "shortcut": "Ctrl+B" }
+    ]
+  },
+  "permissions": ["window.appearance"]
+}

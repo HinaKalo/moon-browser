@@ -25,6 +25,7 @@ export default defineConfig({
         { text: '站点设置', link: '/popups' },
         { text: '清除浏览数据', link: '/privacy' },
         { text: '浏览器任务管理器', link: '/task-manager' },
+        { text: '浏览器外观', link: '/appearance' },
         { text: '查找与缩放', link: '/reading' },
         { text: '最近关闭的标签', link: '/recent-tabs' },
         { text: '上次会话', link: '/session' },

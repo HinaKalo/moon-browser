@@ -109,6 +109,7 @@ $bookmarks = Join-Path $prefix 'bin\MoonBookmarks.exe'
 $downloads = Join-Path $prefix 'bin\MoonDownloads.exe'
 $siteData = Join-Path $prefix 'bin\MoonSiteData.exe'
 $reading = Join-Path $prefix 'bin\MoonReading.exe'
+$appearance = Join-Path $prefix 'bin\MoonAppearance.exe'
 $recentTabs = Join-Path $prefix 'bin\MoonRecentTabs.exe'
 $session = Join-Path $prefix 'bin\MoonSession.exe'
 $tabTools = Join-Path $prefix 'bin\MoonTabTools.exe'
@@ -143,6 +144,8 @@ $docs = @(
     (Join-Path $repo 'examples\site-data\site-data.html')
     (Join-Path $repo 'examples\reading\plugin.json')
     (Join-Path $repo 'examples\reading\reader.html')
+    (Join-Path $repo 'examples\appearance\plugin.json')
+    (Join-Path $repo 'examples\appearance\appearance.html')
     (Join-Path $repo 'examples\recent-tabs\plugin.json')
     (Join-Path $repo 'examples\recent-tabs\recent.html')
     (Join-Path $repo 'examples\session\plugin.json')
@@ -166,7 +169,7 @@ if ($Action -eq 'release') {
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
 $pageSource = Join-Path $prefix 'bin\MoonPageSource.exe'
 $popups = Join-Path $prefix 'bin\MoonPopups.exe'
-$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $legacyFixture + $luaManager + $devTools + $pageSource + $popups + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $session + $tabTools + $privateWindow + $search + $privacy + $taskManager + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $legacyFixture + $luaManager + $devTools + $pageSource + $popups + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $appearance + $recentTabs + $session + $tabTools + $privateWindow + $search + $privacy + $taskManager + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -210,6 +213,8 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     Copy-Item -LiteralPath $siteData,(Join-Path $repo 'examples\site-data\plugin.json'),(Join-Path $repo 'examples\site-data\site-data.html') -Destination $siteDataPackage
     $readingPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\reading')).FullName
     Copy-Item -LiteralPath $reading,(Join-Path $repo 'examples\reading\plugin.json'),(Join-Path $repo 'examples\reading\reader.html') -Destination $readingPackage
+    $appearancePackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\appearance')).FullName
+    Copy-Item -LiteralPath $appearance,(Join-Path $repo 'examples\appearance\plugin.json'),(Join-Path $repo 'examples\appearance\appearance.html') -Destination $appearancePackage
     $recentPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\recent-tabs')).FullName
     Copy-Item -LiteralPath $recentTabs,(Join-Path $repo 'examples\recent-tabs\plugin.json'),(Join-Path $repo 'examples\recent-tabs\recent.html') -Destination $recentPackage
     $sessionPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\session')).FullName

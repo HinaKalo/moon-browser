@@ -37,3 +37,5 @@ await callSettings('write', { ...current, refreshOnSave: true });
 0.1.0-preview.11 起，站点数据的查看权限绑定到用户实际打开的面板和当前网页。由 EXE 发起 `siteData.open`，由面板读取条目和值。[站点数据](./site-data)
 
 宿主在文档根节点设置 `data-moon-theme="light"` 或 `data-moon-theme="dark"`，切换浏览器主题时同步更新。页面可使用 CSS 属性选择器适配。
+
+从 0.1.0-preview.56 起，`data-moon-focus-mode` 随当前窗口的专注模式更新，取值为 `"true"` 或 `"false"`。

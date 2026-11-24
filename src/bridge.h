@@ -8,7 +8,7 @@ enum MoonCommand {
     MOON_NEW = 1, MOON_CLOSE, MOON_SELECT, MOON_BACK, MOON_FORWARD, MOON_RELOAD,
     MOON_ADDRESS, MOON_TICK, MOON_INPUT, MOON_DIAGNOSTICS, MOON_PLUGIN_COMMAND,
     MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
-    MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES,
+    MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_OPEN_PLUGINS, MOON_UPDATES,
     MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_SETTINGS, MOON_MARKET,
     MOON_TAB_PIN, MOON_TAB_MUTE, MOON_TAB_CLOSE_TARGET, MOON_TAB_DUPLICATE, MOON_TAB_COPY_ADDRESS,
     MOON_TAB_CLOSE_OTHERS, MOON_TAB_CLOSE_BELOW, MOON_TAB_GROUP_NEW, MOON_TAB_GROUP_PANEL, MOON_TAB_GROUP_REMOVE
@@ -51,9 +51,11 @@ void moon_shell_show_home(bool visible);
 void moon_shell_refresh(void);
 uint64_t moon_shell_window_handle(void);
 bool moon_shell_dark_mode(void);
+bool moon_shell_focus_mode(void);
+bool moon_shell_set_appearance(bool dark, bool focused);
+bool moon_appearance_available(void);
+bool moon_appearance_page_active(uint64_t panel);
 void moon_shell_focus_address(void);
-void moon_shell_toggle_sidebar(void);
-void moon_shell_toggle_theme(void);
 int moon_shell_toggle_fullscreen(void);
 void moon_shell_leave_fullscreen(void);
 void moon_shell_info(const char *title, const char *body);
@@ -111,7 +113,7 @@ void moon_engine_show(MoonView *view, bool visible);
 bool moon_engine_load(MoonView *view, const char *url);
 MoonView *moon_engine_open_extension(uint64_t token, const char *plugin_id, const char *address);
 bool moon_engine_load_extension(MoonView *view, const char *html);
-void moon_engine_refresh_extension_theme(void);
+void moon_engine_refresh_extension_appearance(void);
 bool moon_engine_inspect(MoonView *view, int panel, bool independent);
 bool moon_engine_close_inspector(MoonView *view);
 void moon_engine_context_inspect_available(bool available);

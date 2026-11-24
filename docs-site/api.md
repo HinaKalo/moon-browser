@@ -25,7 +25,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 
 将 `plugin.json` 和同目录 EXE 放进浏览器程序或配置目录下的 `plugins/<目录>`，重启后从工具栏菜单启用。命令在插件菜单与命令面板中使用同一 ID。每个插件可声明一到八条命令，ID 在插件内唯一。
 
-命令可选填 `shortcut`。当前支持 `Ctrl+H`、`Ctrl+D`、`Ctrl+Shift+O`、`Ctrl+J`、`F11`、`F12`、`Ctrl+Shift+C`、`Ctrl+Shift+J`、`Ctrl+U`、`Ctrl+S`、`Ctrl+F`、`Ctrl++`、`Ctrl+-`、`Ctrl+0`、`Ctrl+Shift+T`、`Ctrl+Shift+Delete`、`Ctrl+Shift+M` 和 `Ctrl+Shift+N`。同一组合键由第一个符合条件且声明该组合键的插件处理，随浏览器分发的插件优先。使用 `F11` 需要 `window.fullscreen` 权限，外部插件还需要 `ui.commands` 权限。
+命令可选填 `shortcut`。支持的组合键见 [清单 Schema](https://github.com/HinaKalo/moon-browser/blob/main/sdk/plugin.schema.json)。同一组合键由第一个符合条件且声明该组合键的插件处理，随浏览器分发的插件优先。使用 `F11` 需要 `window.fullscreen` 权限，使用 `Ctrl+B` 和 `Ctrl+Shift+L` 需要 `window.appearance` 权限。外部插件使用这些预设组合键还需要 `ui.commands` 权限。
 
 插件启用与权限授权分别由用户确认。`tabs.read` 允许访问触发时的活动标签，`lua.scripts.manage` 允许管理已安装用户脚本。撤销权限后，后续调用失效。EXE 自身按当前 Windows 用户权限运行。
 
@@ -93,6 +93,9 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `reading.read` | `page.reader` | 绑定页传入 `{ generation, offset }`，返回 `{ dataBase64, next }`。从偏移 0 顺序读取 UTF-8 JSON，`next: null` 表示读完。 |
 | `reading.returnToPage` | `page.reader` | 当前活动的绑定页传入 `{}`，切回原标签页。返回布尔值。 |
 | `window.toggleFullscreen` | `window.fullscreen` | 用户触发的原生命令传入 `{}`。返回 `true`（全屏）、`false`（已退出）或 `null`（来源页面已切换或窗口不可用）。 |
+| `window.appearance.get` | `window.appearance` | 传入 `{}`，返回当前窗口的 `{ theme, focusMode }`。主题为 `light` 或 `dark`。 |
+| `window.appearance.set` | `window.appearance` | 用户触发的原生命令或当前活动配置页传入 `{ theme?, focusMode? }`，至少提供一项。返回应用后的完整外观状态。 |
+| `window.appearance.toggle` | `window.appearance` | 用户触发的原生命令传入 `{ target }`。目标为 `theme` 或 `focusMode`。返回切换后的完整外观状态。 |
 | `tabs.closed.list` | `tabs.closed.manage` | 无参数，返回最近关闭标签的数组 `[{ id, title, origin }]`。 |
 | `tabs.closed.reopen` | `tabs.closed.manage` | 在用户命令或活动插件页面中传入 `{ id? }`。省略 ID 时恢复最近一项。返回 `reopened`、`notFound`、`tabLimit` 或 `unavailable`。 |
 | `tabs.closed.clear` | `tabs.closed.manage` | 在用户命令或插件页面中调用，无参数。成功返回 `null`。 |

@@ -40,6 +40,7 @@ pub const Permission = enum {
     @"page.reader",
     @"siteData.cacheWrite",
     @"siteData.records",
+    @"window.appearance",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -55,8 +56,14 @@ pub const Shortcut = enum {
     @"Ctrl+S",
     @"Ctrl+Shift+B",
     @"Ctrl+Shift+R",
+    @"Ctrl+B",
+    @"Ctrl+Shift+L",
     F9,
 };
+pub const Theme = enum { light, dark };
+pub const Appearance = struct { theme: Theme, focusMode: bool };
+pub const AppearanceChange = struct { theme: ?Theme = null, focusMode: ?bool = null };
+pub const AppearanceTarget = enum { theme, focusMode };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
 pub const LinkMenuAction = enum(c_uint) { open = 1, copy, bookmark };
 pub const LinkResult = enum { opened, copied, clipboardBusy, limitReached, saved, alreadySaved, unavailable };
@@ -363,6 +370,9 @@ pub const Method = enum {
     @"reading.read",
     @"reading.returnToPage",
     @"window.toggleFullscreen",
+    @"window.appearance.get",
+    @"window.appearance.set",
+    @"window.appearance.toggle",
     @"tabs.closed.list",
     @"tabs.closed.reopen",
     @"tabs.closed.clear",

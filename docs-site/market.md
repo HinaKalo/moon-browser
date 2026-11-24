@@ -18,7 +18,7 @@
 
 | 菜单 | 系统插件 |
 | --- | --- |
-| 标签与页面 | [页内查找、缩放和全屏](./reading)、[最近关闭的标签](./recent-tabs)、[启动与会话](./session)、[标签管理与分组](./tab-tools)、[搜索引擎](./search)、网页另存为 HTML |
+| 标签与页面 | [浏览器外观](./appearance)、[页内查找、缩放和全屏](./reading)、[最近关闭的标签](./recent-tabs)、[启动与会话](./session)、[标签管理与分组](./tab-tools)、[搜索引擎](./search)、网页另存为 HTML |
 | 浏览资料 | [历史记录](./history)、[书签和下载](./library) |
 | 隐私与安全 | [隐私浏览](./private-window)、[清除浏览数据](./privacy)、[站点数据](./site-data)、[站点设置](./popups)、[严格去广告](./blocker) |
 | 开发与诊断 | [WebKit 检查器、控制台、元素拾取和网页源代码](./devtools)、[浏览器任务管理器](./task-manager) |

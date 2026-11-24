@@ -109,8 +109,6 @@ const ShellAction = struct {
 const shell_actions = [_]ShellAction{
     .{ .label = "新建标签页", .command = native.MOON_NEW },
     .{ .label = "聚焦地址栏", .command = native.MOON_FOCUS_ADDRESS },
-    .{ .label = "切换侧边栏", .command = native.MOON_TOGGLE_SIDEBAR },
-    .{ .label = "切换亮色 / 深色主题", .command = native.MOON_TOGGLE_THEME },
     .{ .label = "内存诊断", .command = native.MOON_DIAGNOSTICS, .home = true },
     .{ .label = "管理插件", .command = native.MOON_OPEN_PLUGINS, .home = true },
     .{ .label = "版本与更新", .command = native.MOON_UPDATES, .home = true },
@@ -1567,8 +1565,13 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         },
         native.MOON_PLUGIN_COMMAND => plugins.command(index >> 32, index & 0xffffffff, tabSnapshot()),
         native.MOON_FOCUS_ADDRESS => native.moon_shell_focus_address(),
-        native.MOON_TOGGLE_SIDEBAR => native.moon_shell_toggle_sidebar(),
-        native.MOON_TOGGLE_THEME => native.moon_shell_toggle_theme(),
+        native.MOON_TOGGLE_SIDEBAR => {
+            if (moon_appearance_available()) {
+                _ = plugins.namedCommand("moon.appearance","focus",tabSnapshot());
+            } else if (native.moon_shell_focus_mode()) {
+                _ = native.moon_shell_set_appearance(native.moon_shell_dark_mode(),false);
+            }
+        },
         native.MOON_OPEN_PLUGINS => if (!native.moon_shell_private()) { _ = openInternalPage(plugin_manager.address); },
         native.MOON_UPDATES => if (!native.moon_shell_private()) updater.open(native.moon_clock()),
         native.MOON_MARKET => if (!native.moon_shell_private()) { _ = openInternalPage(market.address); },
@@ -1878,6 +1881,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"siteData.cookieDetails" => "允许查看 Cookie 属性和 HttpOnly Cookie",
+        .@"window.appearance" => "允许设置浏览器主题和专注模式",
         .@"siteData.cacheWrite" => "允许经确认删除单个站点缓存",
         .@"siteData.records" => "允许查看 IndexedDB 记录预览",
         .@"page.source" => "允许查看当前网页源代码",
@@ -2087,6 +2091,14 @@ export fn moon_plugin_open_page(id: [*c]const u8) bool {
     var buffer: [256]u8 = undefined;
     const address = plugins.addressForId(slice(id),&buffer) orelse return false;
     return openInternalPage(address);
+}
+
+export fn moon_appearance_available() bool {
+    return !stopped and plugins.systemEnabled(.@"window.appearance");
+}
+
+export fn moon_appearance_page_active(panel: u64) bool {
+    return !stopped and count!=0 and tabs[active].id==panel and tabs[active].extension;
 }
 
 fn openInternalPage(address: []const u8) bool {

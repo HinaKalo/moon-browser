@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.appearance",
+      "name": "浏览器外观",
+      "description": "在设置页预览并切换浏览器主题，用专注模式隐藏当前窗口的标签侧栏。",
+      "permission": "切换浏览器主题和专注模式",
+      "url": "https://docs.browser.moonl.cloud/appearance.html"
+    },
+    {
       "id": "moon.popups",
       "name": "站点设置",
       "description": "按网站管理弹窗、媒体自动播放和网站静音。",

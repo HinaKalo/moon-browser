@@ -81,6 +81,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"reading.open", .@"reading.article", .@"reading.read", .@"reading.returnToPage" => .@"page.reader",
         .@"window.toggleFullscreen" => .@"window.fullscreen",
+        .@"window.appearance.get", .@"window.appearance.set", .@"window.appearance.toggle" => .@"window.appearance",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.reorder" => .@"tabs.organize",
         .@"tabs.groups.open", .@"tabs.groups.create", .@"tabs.groups.removeTab", .@"tabs.groups.list",
@@ -212,6 +213,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"privacy.clear", .@"privacy.status" => {},
         .@"search.getConfig", .@"search.setConfig" => {},
         .@"tabs.session.status", .@"tabs.session.setPreferences", .@"tabs.session.restore", .@"tabs.session.forget" => {},
+        .@"window.appearance.get", .@"window.appearance.set" => {},
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => {},
         .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
@@ -701,6 +703,38 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const state = native.moon_window_fullscreen(context.target_tab_id,context.target_navigation,owner.ptr);
             const result: ?bool = if (state < 0) null else state != 0;
             return sdk.result(output,id,result);
+        },
+        .@"window.appearance.get", .@"window.appearance.set", .@"window.appearance.toggle" => {
+            var appearance: sdk.Appearance = .{
+                .theme = if (native.moon_shell_dark_mode()) .dark else .light,
+                .focusMode = native.moon_shell_focus_mode(),
+            };
+            switch (method) {
+                .@"window.appearance.get" => {
+                    if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+                    return sdk.result(output,id,appearance);
+                },
+                .@"window.appearance.set" => {
+                    if (!context.user_command and (!context.from_page or !native.moon_appearance_page_active(context.target_tab_id)))
+                        return sdk.failure(output,id,.PermissionDenied);
+                    const change = decode(sdk.AppearanceChange,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+                    if (change.theme == null and change.focusMode == null) return sdk.failure(output,id,.InvalidParams);
+                    if (change.theme) |theme| appearance.theme = theme;
+                    if (change.focusMode) |focused| appearance.focusMode = focused;
+                },
+                .@"window.appearance.toggle" => {
+                    if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+                    const change = decode(struct { target: sdk.AppearanceTarget },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+                    switch (change.target) {
+                        .theme => appearance.theme = if (appearance.theme == .dark) .light else .dark,
+                        .focusMode => appearance.focusMode = !appearance.focusMode,
+                    }
+                },
+                else => unreachable,
+            }
+            if (!native.moon_shell_set_appearance(appearance.theme == .dark,appearance.focusMode))
+                return sdk.failure(output,id,.InternalError);
+            return sdk.result(output,id,appearance);
         },
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

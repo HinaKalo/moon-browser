@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>外观设置</title>
+<style>
+  :root {
+    color-scheme:light;
+    font:15px/1.55 "Segoe UI","Microsoft YaHei UI",sans-serif;
+    --page:#f6f7fa; --surface:#fff; --text:#171b27; --quiet:#535d73; --line:#d7ddeb; --accent:#4055bf;
+    background:var(--page); color:var(--text);
+  }
+  :root[data-moon-theme=dark] {
+    color-scheme:dark;
+    --page:#171a22; --surface:#222634; --text:#eef1f8; --quiet:#b8c1d5; --line:#3d465b; --accent:#b3bfff;
+  }
+  body { margin:0; }
+  main { max-width:700px; padding:clamp(20px,5vw,48px); margin:auto; }
+  h1 { margin:0 0 22px; font-size:30px; line-height:1.22; }
+  h2,legend { margin:0; font-size:17px; font-weight:600; }
+  fieldset { border:0; margin:0; padding:0; min-width:0; }
+  p { margin:6px 0; color:var(--quiet); }
+  p:empty { display:none; }
+  .choices { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:14px; }
+  .choice {
+    display:grid; gap:8px; background:var(--surface); border:1px solid var(--line);
+    border-radius:10px; padding:10px; cursor:pointer;
+  }
+  .choice:has(input:checked) { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+  .choice:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:3px; }
+  .preview {
+    display:grid; grid-template-columns:24% 1fr; grid-template-rows:12px 1fr; gap:5px;
+    height:clamp(46px,10vw,86px); padding:7px; border-radius:6px;
+    background:var(--frame); border:1px solid var(--edge);
+  }
+  .light { --frame:#e1e5ef; --layer:#f6f7fb; --edge:#cbd3e4; }
+  .dark { --frame:#272c3b; --layer:#414a62; --edge:#53617d; }
+  .preview span { background:var(--layer); border-radius:4px; }
+  .preview span:first-child { grid-column:1 / -1; margin-inline:22%; }
+  .caption { display:flex; gap:6px; align-items:center; padding:2px 4px; }
+  input { margin:0; accent-color:var(--accent); }
+  fieldset:disabled, .focus:has(input:disabled) { opacity:.58; }
+  section { margin-top:23px; padding-top:17px; border-top:1px solid var(--line); }
+  .focus { display:grid; grid-template-columns:1fr auto; align-items:center; gap:6px 15px; }
+  .focus label { cursor:pointer; }
+  .focus span { display:block; color:var(--quiet); margin-top:5px; }
+  #feedback { margin-top:18px; }
+</style>
+<main>
+  <h1>外观设置</h1>
+  <fieldset id="themes" disabled>
+    <legend>浏览器主题</legend>
+    <div class="choices">
+      <label class="choice">
+        <span aria-hidden="true" class="preview light"><span></span><span></span><span></span></span>
+        <span class="caption"><input name="theme" type="radio" value="light"> 亮色</span>
+      </label>
+      <label class="choice">
+        <span aria-hidden="true" class="preview dark"><span></span><span></span><span></span></span>
+        <span class="caption"><input name="theme" type="radio" value="dark"> 深色</span>
+      </label>
+    </div>
+  </fieldset>
+  <section aria-labelledby="focus-heading">
+    <div class="focus">
+      <div>
+        <h2 id="focus-heading"><label for="focus">专注模式</label></h2>
+        <span id="focus-help">隐藏当前窗口的标签侧栏。按 Ctrl+B 或点击工具栏的侧栏按钮切换。</span>
+      </div>
+      <input id="focus" type="checkbox" aria-describedby="focus-help" disabled>
+    </div>
+  </section>
+  <p id="feedback" role="status"></p>
+</main>
+<script>
+  const themes=document.getElementById('themes'), focus=document.getElementById('focus');
+  const feedback=document.getElementById('feedback'), root=document.documentElement;
+  let sequence=0, state, busy=false;
+  async function host(method,params={}) {
+    const id=String(++sequence);
+    const reply=JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(
+      JSON.stringify({jsonrpc:'2.0',id,method:'window.appearance.'+method,params})));
+    if (reply.id!==id || reply.error) throw Error('APPEARANCE_UNAVAILABLE');
+    return reply.result;
+  }
+  function show() {
+    themes.disabled=focus.disabled=!state || busy;
+    for (const input of themes.querySelectorAll('input')) input.checked=input.value===state?.theme;
+    focus.checked=state?.focusMode===true;
+  }
+  async function change(params) {
+    busy=true;
+    feedback.textContent='';
+    show();
+    try { state=await host('set',params); }
+    catch { feedback.textContent='无法保存外观设置。请检查插件权限或配置目录。'; }
+    finally { busy=false; show(); }
+  }
+  themes.onchange=event=>change({theme:event.target.value});
+  focus.onchange=()=>change({focusMode:focus.checked});
+  new MutationObserver(()=>{
+    if (!state || busy) return;
+    state={theme:root.dataset.moonTheme,focusMode:root.dataset.moonFocusMode==='true'};
+    show();
+  }).observe(root,{attributes:true,attributeFilter:['data-moon-theme','data-moon-focus-mode']});
+  host('get').then(value=>{state=value;show();}).catch(()=>{
+    feedback.textContent='无法读取外观设置。请在管理插件中检查外观权限。';
+  });
+</script>
