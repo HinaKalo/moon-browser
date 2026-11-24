@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.search",
+      "name": "搜索引擎",
+      "description": "设置默认搜索引擎，并在地址栏使用自定义关键词。",
+      "permission": "查看和修改浏览器搜索引擎",
+      "url": "https://docs.browser.moonl.cloud/search.html"
+    },
+    {
       "id": "moon.private-window",
       "name": "隐私浏览",
       "description": "打开使用临时 Cookie 和站点数据的独立浏览窗口。",

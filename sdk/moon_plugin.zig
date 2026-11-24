@@ -24,6 +24,7 @@ pub const Permission = enum {
     @"tabs.organize",
     @"privacy.privateWindow",
     @"tabs.manage",
+    @"search.manage",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -77,6 +78,11 @@ pub const TabOrganization = enum(c_int) {
 };
 pub const TabCloseScope = enum { others, below };
 pub const TabCloseResult = struct { closed: u32, kept: u32 };
+pub const search_custom_limit = 5;
+pub const SearchEngine = struct { alias: []const u8, name: []const u8, template: []const u8 };
+pub const SearchConfig = struct { preferred: []const u8 = "g", custom: []const SearchEngine = &.{} };
+pub const SearchState = struct { config: SearchConfig, builtins: []const SearchEngine, customLimit: usize };
+pub const SearchSave = enum { saved, invalidAlias, duplicateAlias, invalidName, invalidTemplate, invalidDefault, tooMany, unavailable };
 pub const PrivacySelection = struct { history: bool = false, siteData: bool = false, cache: bool = false };
 pub const PrivacyStart = enum { started, cancelled, busy, unavailable };
 pub const PrivacyState = enum { idle, running, waitingForEngine, complete, incomplete };
@@ -197,6 +203,8 @@ pub const Method = enum {
     @"privacy.clear",
     @"privacy.status",
     @"privacy.openPrivateWindow",
+    @"search.getConfig",
+    @"search.setConfig",
     @"taskManager.snapshot",
     @"taskManager.focus",
     @"taskManager.discard",

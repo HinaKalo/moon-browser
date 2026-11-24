@@ -11,6 +11,7 @@ const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const privacy = @import("privacy.zig");
+const search = @import("search.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
 pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false };
@@ -43,6 +44,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.closeGroup" => .@"tabs.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
+        .@"search.getConfig", .@"search.setConfig" => .@"search.manage",
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => .@"taskManager.manage",
         .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => .@"ui.commands",
     };
@@ -155,6 +157,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         .@"privacy.clear", .@"privacy.status" => {},
+        .@"search.getConfig", .@"search.setConfig" => {},
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => {},
         .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
@@ -169,7 +172,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
-        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress" => {
+        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -425,6 +428,16 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"privacy.openPrivateWindow" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
             return sdk.result(output,id,native.moon_shell_open_private());
+        },
+        .@"search.getConfig" => {
+            var engines: [sdk.search_custom_limit]sdk.SearchEngine = undefined;
+            const state: sdk.SearchState = .{ .config=search.get(&engines), .builtins=&search.builtins, .customLimit=sdk.search_custom_limit };
+            return sdk.result(output,id,state);
+        },
+        .@"search.setConfig" => {
+            if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const config = decode(sdk.SearchConfig,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            return sdk.result(output,id,search.save(allocator,config,params.?));
         },
         .@"taskManager.snapshot" => {
             const query = decode(sdk.TaskQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);

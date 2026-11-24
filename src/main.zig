@@ -15,6 +15,7 @@ const reading = @import("reading.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const market = @import("market.zig");
 const updater = @import("updater.zig");
+const search = @import("search.zig");
 
 const max_tabs = 128;
 const max_pinned = 24;
@@ -169,24 +170,7 @@ fn normalize(input: []const u8, buffer: []u8) ?[:0]const u8 {
         if (std.mem.indexOfScalar(u8, value, ':') != null) return null;
     }
 
-    const search = "https://www.google.com/search?q=";
-    if (buffer.len <= search.len) return null;
-    @memcpy(buffer[0..search.len], search);
-    var len = search.len;
-    const hex = "0123456789ABCDEF";
-    for (value) |ch| {
-        if (std.ascii.isAlphanumeric(ch) or std.mem.indexOfScalar(u8, "-._~", ch) != null) {
-            if (len + 1 >= buffer.len) return null;
-            buffer[len] = ch;
-            len += 1;
-        } else {
-            if (len + 3 >= buffer.len) return null;
-            buffer[len..][0..3].* = .{ '%', hex[ch >> 4], hex[ch & 15] };
-            len += 3;
-        }
-    }
-    buffer[len] = 0;
-    return buffer[0..len :0];
+    return search.resolve(value,buffer,plugins.systemEnabled(.@"search.manage"));
 }
 fn applySettings(profile: []const u8) void {
     var path: [4096]u8 = undefined;
@@ -940,6 +924,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         downloads.init(profile);
         reading.init(profile);
         userscripts.init(profile);
+        search.init();
     }
     plugins.init(app, profile);
     var first_url: ?[:0]u8 = null;
@@ -1329,6 +1314,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"tabs.organize" => "允许固定标签和切换标签静音",
         .@"privacy.privateWindow" => "允许打开隐私浏览窗口",
         .@"tabs.manage" => "允许复制和批量关闭标签",
+        .@"search.manage" => "允许调整浏览器搜索引擎",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {

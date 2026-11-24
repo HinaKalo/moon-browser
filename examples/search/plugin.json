@@ -1,0 +1,13 @@
+{
+  "id": "moon.search",
+  "name": "搜索引擎",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonSearch.exe",
+  "settingsPage": "engines.html",
+  "contributes": {
+    "commands": [{ "id": "open", "label": "管理搜索引擎", "menu": "page" }]
+  },
+  "permissions": ["search.manage"]
+}

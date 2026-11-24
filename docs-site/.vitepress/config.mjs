@@ -28,6 +28,7 @@ export default defineConfig({
         { text: '最近关闭的标签', link: '/recent-tabs' },
         { text: '标签管理', link: '/tab-tools' },
         { text: '隐私浏览', link: '/private-window' },
+        { text: '搜索引擎', link: '/search' },
         { text: '浏览历史', link: '/history' },
         { text: '严格去广告', link: '/blocker' },
         { text: '书签与下载', link: '/library' }

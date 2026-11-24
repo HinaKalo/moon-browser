@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>搜索引擎</title>
+<style>
+  :root {
+    color-scheme: light;
+    font: 15px/1.55 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    --page: #f6f7fa; --surface: #fff; --border: #dadfec; --text: #171b27;
+    --subtle: #535d73; --accent: #4158bf; --button: #4158bf; --on-button: #fff;
+    color: var(--text); background: var(--page);
+  }
+  :root[data-moon-theme="dark"] {
+    color-scheme: dark;
+    --page: #181b23; --surface: #222634; --border: #39435a; --text: #eef1f8;
+    --subtle: #b8c1d5; --accent: #aab8ff; --button: #aab8ff; --on-button: #151925;
+  }
+  body { margin: 0; }
+  main { max-width: 760px; margin: auto; padding: 40px clamp(18px,5vw,44px); }
+  h1 { margin: 0 0 18px; font-size: 30px; }
+  h2 { margin: 0; font-size: 17px; }
+  p { margin: 8px 0; color: var(--subtle); }
+  section { padding: 18px 0; border-top: 1px solid var(--border); }
+  label { display: grid; gap: 4px; min-width: 0; }
+  label span { font-size: 13px; color: var(--subtle); }
+  input, select, button {
+    font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; min-width: 0; box-sizing: border-box;
+  }
+  button { cursor: pointer; }
+  button:disabled { opacity: .56; cursor: default; }
+  button.primary { background: var(--button); color: var(--on-button); border-color: var(--button); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  code { color: var(--accent); font: .9em Consolas, monospace; }
+  #providers { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 12px 0 0; padding: 0; list-style: none; }
+  #providers code { margin-inline-start: 6px; }
+  #default { width: min(100%, 350px); margin-top: 10px; }
+  .header, footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .header { justify-content: space-between; }
+  .engine {
+    display: grid; grid-template-columns: 1fr 125px 1.8fr auto; gap: 10px;
+    align-items: end; background: var(--surface); padding: 12px; border-radius: 9px;
+    border: 1px solid var(--border); margin: 10px 0;
+  }
+  footer p { margin: 0; }
+  @media (max-width: 620px) {
+    .engine { grid-template-columns: 1fr 1fr; }
+    .engine label:last-of-type { grid-column: 1 / -1; }
+    .engine button { justify-self: start; }
+  }
+</style>
+<main>
+  <h1>搜索引擎</h1>
+  <form id="settings">
+    <section>
+      <h2><label for="default">默认搜索引擎</label></h2>
+      <select id="default" disabled></select>
+    </section>
+    <section>
+      <h2>关键词搜索</h2>
+      <p>在地址栏或命令面板输入 <code>@关键词 搜索词</code>，例如 <code>@ddg 月亮</code>。</p>
+      <ul id="providers"></ul>
+    </section>
+    <section>
+      <div class="header">
+        <h2>自定义搜索引擎</h2>
+        <button type="button" id="add" disabled>添加引擎</button>
+      </div>
+      <p>网址使用 HTTPS，在搜索参数的位置加入 <code>{query}</code>。</p>
+      <div id="engines"></div>
+    </section>
+    <footer>
+      <button class="primary" type="submit" id="save" disabled>保存</button>
+      <p id="status" role="status">正在读取设置…</p>
+    </footer>
+  </form>
+</main>
+<template id="row">
+  <div class="engine">
+    <label><span>名称</span><input data-field="name" maxlength="64" required placeholder="维基百科"></label>
+    <label><span>关键词</span><input data-field="alias" maxlength="16" pattern="[a-z0-9][a-z0-9\-]*" required placeholder="wiki" spellcheck="false"></label>
+    <label><span>搜索网址</span><input data-field="template" maxlength="480" required
+      placeholder="https://zh.wikipedia.org/w/index.php?search={query}" spellcheck="false"></label>
+    <button type="button" data-remove>移除</button>
+  </div>
+</template>
+<script>
+  const el = id => document.getElementById(id);
+  const preferred = el('default');
+  const engines = el('engines');
+  const status = el('status');
+  const add = el('add');
+  const save = el('save');
+  let builtins = [], limit = 0, sequence = 0, keys = 0;
+  const rows = () => [...engines.children];
+  const value = (row, field) => row.querySelector('[data-field="' + field + '"]').value.trim();
+  const option = (id, label) => new Option(label, id);
+  async function call(method, params = {}) {
+    const body = JSON.stringify({jsonrpc:'2.0', id:String(++sequence), method, params});
+    const reply = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(body));
+    if (reply.error) throw Error(reply.error.message);
+    return reply.result;
+  }
+  function refreshOptions(selected = preferred.value) {
+    preferred.replaceChildren(...builtins.map(engine => option(engine.alias, engine.name)));
+    for (const row of rows()) {
+      const name = value(row, 'name');
+      const alias = value(row, 'alias');
+      if (name && alias) preferred.add(option(row.dataset.key, name + '  @' + alias));
+    }
+    preferred.value = [...preferred.options].some(item => item.value === selected) ? selected : 'g';
+    add.disabled = rows().length >= limit;
+  }
+  function addRow(engine = {name:'', alias:'', template:''}) {
+    const row = el('row').content.firstElementChild.cloneNode(true);
+    row.dataset.key = 'custom-' + ++keys;
+    for (const field of row.querySelectorAll('[data-field]')) field.value = engine[field.dataset.field];
+    row.querySelector('[data-remove]').onclick = () => {
+      row.remove();
+      refreshOptions();
+      add.focus();
+    };
+    row.oninput = event => {
+      if (event.target.dataset.field !== 'template') refreshOptions();
+      status.textContent = '';
+    };
+    engines.append(row);
+    return row;
+  }
+  add.onclick = () => {
+    if (rows().length >= limit) return;
+    const row = addRow();
+    refreshOptions();
+    row.querySelector('input').focus();
+  };
+  preferred.onchange = () => { status.textContent = ''; };
+  el('settings').onsubmit = async event => {
+    event.preventDefault();
+    save.disabled = true;
+    try {
+      const selectedRow = rows().find(row => row.dataset.key === preferred.value);
+      const config = {
+        preferred: selectedRow ? value(selectedRow, 'alias') : preferred.value,
+        custom: rows().map(row => ({name:value(row,'name'), alias:value(row,'alias'), template:value(row,'template')}))
+      };
+      const result = await call('search.setConfig', config);
+      status.textContent = ({
+        saved:'已保存。', invalidAlias:'关键词只能使用小写字母、数字和连字符。',
+        duplicateAlias:'关键词重复，或已由内置引擎使用。', invalidName:'请输入有效的引擎名称。',
+        invalidTemplate:'请输入带有一个 {query} 查询参数值的有效 HTTPS 网址。',
+        invalidDefault:'请选择有效的默认搜索引擎。', tooMany:'已达到自定义引擎上限。',
+        unavailable:'无法写入搜索设置。'
+      })[result] || '无法保存设置。';
+    } catch {
+      status.textContent = '无法保存设置，请检查插件权限。';
+    } finally {
+      save.disabled = false;
+    }
+  };
+  (async () => {
+    try {
+      const state = await call('search.getConfig');
+      builtins = state.builtins;
+      limit = state.customLimit;
+      for (const engine of builtins) {
+        const item = document.createElement('li');
+        const key = document.createElement('code');
+        key.textContent = '@' + engine.alias;
+        item.append(engine.name, key);
+        el('providers').append(item);
+      }
+      let selected = state.config.preferred;
+      for (const engine of state.config.custom) {
+        const row = addRow(engine);
+        if (selected === engine.alias) selected = row.dataset.key;
+      }
+      refreshOptions(selected);
+      preferred.disabled = save.disabled = false;
+      status.textContent = '';
+    } catch {
+      status.textContent = '无法读取设置，请先授予管理搜索引擎权限。';
+    }
+  })();
+</script>
+</html>

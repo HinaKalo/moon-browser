@@ -14,7 +14,7 @@ import sys
 import tempfile
 from threading import Event, Thread
 from time import monotonic, sleep
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 from zipfile import ZipFile
 
 
@@ -515,6 +515,7 @@ def run_win32(exe, base, root):
     privacy = exe.parent / "plugins" / "privacy" / "MoonPrivacy.exe"
     task_manager = exe.parent / "plugins" / "task-manager" / "MoonTaskManager.exe"
     commands = exe.parent / "plugins" / "ui-commands" / "MoonCommandExample.exe"
+    search_plugin = exe.parent / "plugins" / "search" / "MoonSearch.exe"
     tab_tools = exe.parent / "plugins" / "tab-tools" / "MoonTabTools.exe"
     private_window = exe.parent / "plugins" / "private-window" / "MoonPrivateWindow.exe"
     if task_manager.exists():
@@ -538,6 +539,7 @@ def run_win32(exe, base, root):
             {"id": "moon.privacy-data-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.task-fixture", "enabled": True, "tabs_read": False, "task_manager_manage": True},
             {"id": "moon.command-fixture", "enabled": True, "tabs_read": False, "ui_commands": True},
+            {"id": "moon.search-fixture", "enabled": True, "tabs_read": False, "search_manage": True},
             {"id": "moon.tab-tools", "enabled": True, "tabs_read": False, "tabs_organize": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
@@ -864,6 +866,43 @@ def run_win32(exe, base, root):
             'await emit({phase:"installed"});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "commands.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
+    if search_plugin.exists():
+        fixture = profile / "plugins" / "search-contract"
+        fixture.mkdir(parents=True)
+        manifest = json.loads(search_plugin.with_name("plugin.json").read_text(encoding="utf-8"))
+        manifest.update(id="moon.search-fixture",name="Search settings fixture")
+        manifest["contributes"]["commands"][0].pop("menu")
+        (fixture / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+        shutil.copyfile(search_plugin,fixture / search_plugin.name)
+        page = search_plugin.with_name("engines.html").read_text(encoding="utf-8")
+        contract = (
+            '<script>(async()=>{const settings=window.webkit.messageHandlers.moonSettings;'
+            'const emit=value=>settings.postMessage(JSON.stringify({op:"write",value}));'
+            'const wait=async(fn,label)=>{for(let i=0;i<160;i++){if(fn())return;'
+            'await new Promise(r=>setTimeout(r,40));}throw Error(label);};'
+            'try{await wait(()=>!save.disabled,"search settings did not load");'
+            'const first={name:"Fixture Search",alias:"probe",template:"https://search-test.invalid/find?q={query}&scope=title"};'
+            'const other={name:"Second Search",alias:"other",template:"https://other-search.invalid/?terms={query}"};'
+            'for(const engine of [first,other]){add.click();const row=rows().at(-1);'
+            'for(const field of row.querySelectorAll("[data-field]")){field.value=engine[field.dataset.field];'
+            'field.dispatchEvent(new Event("input",{bubbles:true}));}}'
+            'preferred.value=rows()[0].dataset.key;'
+            'if(!el("settings").checkValidity())throw Error("form rejected a valid engine");'
+            'el("settings").requestSubmit();await wait(()=>!save.disabled&&status.textContent.length,"save did not finish");'
+            'const state=await call("search.getConfig");'
+            'if(state.config.preferred!=="probe"||state.config.custom.length!==2||!state.builtins.some(e=>e.alias==="ddg"))'
+            'throw Error(status.textContent||"valid config did not persist");'
+            'for(const template of ["http://search-test.invalid/?q={query}",'
+            '"https://search-test.invalid/{query}?x=1","https://safe.invalid@other.invalid/?q={query}",'
+            '"https://search-test.invalid/?q={query}&x={query}","https://search-test.invalid/?{query}=x"]) {'
+            'if(await call("search.setConfig",{preferred:"probe",custom:[{...first,template}]})!=="invalidTemplate")'
+            'throw Error("accepted an invalid template");}'
+            'if(await call("search.setConfig",{preferred:"g",custom:[{...first,alias:"g"}]})!=="duplicateAlias")'
+            'throw Error("accepted a reserved alias");'
+            'if((await call("search.getConfig")).config.preferred!=="probe")throw Error("invalid save changed the active configuration");'
+            'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
+        )
+        (fixture / "engines.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
     def browser_frame(process):
         deadline = monotonic() + 20
         while monotonic() < deadline:
@@ -1557,6 +1596,8 @@ def run_win32(exe, base, root):
             if tab_tools.exists():
                 expected["标签与页面"].update({"切换当前标签的固定状态","切换当前标签的静音状态",
                                                  "复制当前标签","复制当前标签网址","关闭其他标签","关闭下方标签"})
+            if search_plugin.exists():
+                expected["标签与页面"].add("管理搜索引擎")
             if private_window.exists():
                 expected["隐私与安全"].add("新建隐私窗口\tCtrl+Shift+N")
             for group, labels in expected.items():
@@ -1822,6 +1863,41 @@ def run_win32(exe, base, root):
             print("private_window=ok separate_store=ok independent_private_windows=ok ephemeral_reopen=ok "
                   "cookies=ok local_storage=ok indexed_db=ok cache_isolation=ok no_history=ok "
                   f"private_cache_shared={'yes' if shared_cache else 'no'}",flush=True)
+        if search_plugin.exists():
+            invoke("管理搜索引擎")
+            wait_for(lambda: read_address()=="extension://moon.search/engines.html","The search command did not open its packaged settings page")
+            set_control(edit,"extension://moon.search-fixture/engines.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            library_result("moon.search-fixture")
+
+            def search_input(control, value, expected):
+                set_control(control,value)
+                user.PostMessageW(control,0x0100,0x0D,1)
+                wait_for(lambda: read_address()==expected,"Unexpected URL for the submitted search: "+read_address())
+
+            query = "月亮 +& /"
+            encoded = quote(query,safe="")
+            expected = "https://search-test.invalid/find?q="+encoded+"&scope=title"
+            search_input(edit,query,expected)
+            invoke("@Other "+query)
+            wait_for(lambda: read_address()=="https://other-search.invalid/?terms="+encoded,"The command palette did not resolve the custom alias")
+            normal = base + "/page/search-direct"
+            search_input(edit,normal,normal)
+            invoke("新建标签页")
+            home = user.GetDlgItem(frame,1002)
+            wait_for(lambda: user.IsWindowVisible(home),"The new tab did not show the home search")
+            search_input(home,query,expected)
+
+            user.PostMessageW(frame,0x0010,0,0)
+            if proc.wait(8)!=0:
+                raise RuntimeError("Browser did not exit for the search preference restart check")
+            frame = None
+            proc = subprocess.Popen([str(exe),"--gdi"],env=preview_env(root))
+            frame = browser_frame(proc)
+            edit = user.GetDlgItem(frame,1001)
+            wait_for(lambda: user.IsWindowVisible(user.GetDlgItem(frame,1002)),"Restarted shell did not initialize")
+            search_input(edit,query,expected)
+            print("search_engines=ok live_config=ok custom_default=ok palette_alias=ok home_search=ok utf8_encoding=ok validation=ok restart=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:
