@@ -57,6 +57,8 @@ void moon_shell_toggle_theme(void);
 void moon_shell_open_plugins(void);
 void moon_shell_info(const char *title, const char *body);
 void moon_shell_toast(const char *title, const char *body);
+int moon_shell_pick_bookmarks(bool save, char *path, size_t capacity);
+bool moon_bookmark_transfer_allowed(uint64_t source, const char *owner);
 bool moon_shell_copy_text(const char *text);
 void moon_shell_error(const char *body);
 bool moon_shell_confirm(const char *title, const char *body);

@@ -36,6 +36,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.update", .@"bookmarks.remove" => .@"bookmarks.manage",
+        .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => .@"downloads.manage",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
@@ -156,6 +157,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     if (context.from_page) switch (method) {
         .@"history.list", .@"history.remove", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
+        .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
@@ -173,7 +175,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     const params = object.get("params");
     switch (method) {
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
-        .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
+        .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig",
@@ -327,6 +329,13 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             bookmarks.remove(value.id) catch |err| return sdk.failure(output,id,libraryReason(err));
             break :remove sdk.result(output,id,null);
+        },
+        .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => {
+            if ((!context.user_command and !context.from_page) or !context.grants.contains(.@"bookmarks.manage"))
+                return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const result = bookmarks.transfer(allocator,owner,context.target_tab_id,method==.@"bookmarks.exportHtml",context.consent);
+            return sdk.result(output,id,result);
         },
         .@"downloads.list" => list: {
             const options = decode(sdk.HistoryQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);

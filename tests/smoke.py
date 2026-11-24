@@ -430,7 +430,25 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
     if contract_client.exists():
         Thread(target=answer_contract_prompts, args=(browser,), daemon=True).start()
     try:
-        status = browser.wait(timeout=320)
+        deadline = monotonic() + 320
+        while True:
+            remaining = deadline-monotonic()
+            if remaining<=0:
+                raise subprocess.TimeoutExpired(args,320)
+            try:
+                status = browser.wait(timeout=min(remaining,1 if quick else 320))
+                break
+            except subprocess.TimeoutExpired:
+                if quick:
+                    try:
+                        progress = report.read_text(encoding="utf-8")
+                    except OSError:
+                        progress = ""
+                    if "process_terminated tab=1\n" in progress.partition("download=ok")[0]:
+                        browser.kill()
+                        browser.wait()
+                        print("WebKit terminated before the intentional crash test.",flush=True)
+                        raise SystemExit(75)
     except subprocess.TimeoutExpired:
         browser.kill()
         browser.wait()
@@ -443,6 +461,9 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
     if contract_client.exists() and "plugin_api_v2=ok" not in log:
         missing.append("plugin_api_v2=ok")
     if status or missing:
+        if quick and "process_terminated tab=1\n" in log.partition("download=ok")[0]:
+            print("WebKit terminated before the intentional crash test.",flush=True)
+            raise SystemExit(75)
         contract_error = profile / "plugins" / "api-contract" / "contract-error.txt"
         if contract_error.exists():
             print("Plugin contract client:", contract_error.read_text(encoding="utf-8"))
@@ -517,6 +538,7 @@ def run_win32(exe, base, root):
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
+    bookmark_transfer = bookmarks.exists() and '"bookmarks.transfer"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
@@ -541,7 +563,7 @@ def run_win32(exe, base, root):
             {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
             {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True},
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
-            {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True},
+            {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
             {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True, "site_data_write": True},
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
@@ -661,6 +683,10 @@ def run_win32(exe, base, root):
         fixture.mkdir(parents=True)
         manifest = json.loads((bookmarks.parent / "plugin.json").read_text(encoding="utf-8"))
         manifest["id"] = "moon.bookmark-fixture"
+        for command in manifest["contributes"]["commands"]:
+            if command["id"] in ("import","export"):
+                command["label"] = "Bookmark transfer fixture " + command["id"]
+                command.pop("menu",None)
         (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
         page = (bookmarks.parent / "bookmarks.html").read_text(encoding="utf-8")
         contract = (
@@ -675,6 +701,8 @@ def run_win32(exe, base, root):
             'await wait(()=>!document.getElementById("editor").open);'
             'const input=document.getElementById("search");input.value="测试文件夹";input.dispatchEvent(new Event("input"));'
             'await wait(()=>document.querySelector("#results").textContent.includes("编辑后的书签"));'
+            'if(document.getElementById("export")){document.getElementById("export").click();'
+            'await wait(()=>document.getElementById("transfer-status").textContent.includes("已导出 1 个"));}'
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "bookmarks.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
@@ -1298,12 +1326,115 @@ def run_win32(exe, base, root):
                      "The bookmark system executable did not open its page")
             set_control(edit,"extension://moon.bookmark-fixture/bookmarks.html")
             user.PostMessageW(edit,0x0100,0x0D,1)
+
+            def pick_bookmark_file(title, selected):
+                dialog = wait_for(lambda: owned_window("#32770",title),f"The {title} dialog did not open")
+                if selected is None:
+                    user.PostMessageW(dialog,0x0111,2,0)  # IDCANCEL
+                else:
+                    field = user.GetDlgItem(dialog,0x0480)  # edt1
+                    if not field:
+                        combo = user.GetDlgItem(dialog,0x047C)  # cmb13
+                        field = user.SendMessageW(combo,0x0407,0,0) if combo else None  # CBEM_GETEDITCONTROL
+                    if not field:
+                        callback = ctypes.WINFUNCTYPE(wt.BOOL,wt.HWND,wt.LPARAM)
+                        user.EnumChildWindows.argtypes = [wt.HWND,callback,wt.LPARAM]
+                        user.GetClassNameW.argtypes = [wt.HWND,wt.LPWSTR,ctypes.c_int]
+                        user.GetDlgCtrlID.argtypes = [wt.HWND]
+
+                        @callback
+                        def find_filename(child,_):
+                            nonlocal field
+                            kind = ctypes.create_unicode_buffer(64)
+                            user.GetClassNameW(child,kind,len(kind))
+                            if kind.value=="Edit" and user.GetDlgCtrlID(child)==1001:
+                                field = child
+                                return False
+                            return True
+
+                        user.EnumChildWindows(dialog,find_filename,0)
+                    if not field:
+                        raise RuntimeError("The bookmark file chooser's filename edit is unavailable")
+                    set_control(field,str(selected))
+                    if read_control(field)!=str(selected):
+                        raise RuntimeError("The bookmark file chooser did not accept the test path")
+                    user.PostMessageW(dialog,0x0111,1,0)  # IDOK
+                wait_for(lambda: not user.IsWindow(dialog),f"The {title} dialog did not close")
+
+            if bookmark_transfer:
+                page_export = profile / "书签页导出.html"
+                pick_bookmark_file("导出 HTML 书签",page_export)
             library_result("moon.bookmark-fixture")
             with closing(sqlite3.connect(profile / "bookmarks.sqlite3")) as db:
                 row = db.execute("SELECT title,url,folder FROM bookmarks").fetchall()
             if row != [("编辑后的书签",target,"测试文件夹")]:
                 raise RuntimeError(f"Bookmark save or edit was not persisted: {row}")
             print("bookmark_system_plugin=ok native_bookmark_toast=ok bookmark_edit=ok",flush=True)
+            if bookmark_transfer:
+                if "编辑后的书签" not in page_export.read_text(encoding="utf-8"):
+                    raise RuntimeError("Exporting from the bookmark page did not write its bookmark")
+                imported = profile / "导入书签.html"
+                exported = profile / "迁移结果.html"
+                invalid = profile / "非书签文件.html"
+                invalid.write_text('<a href="https://invalid-file.invalid/">not a bookmark file</a>',encoding="utf-8")
+                unicode_url = "https://search-example.invalid/?a=1&b=2"
+                nested_url = "https://folder-example.invalid/page"
+                root_url = "https://root-example.invalid/"
+                imported.write_text(
+                    '<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<!-- <A HREF="https://comment.invalid/">ignored</A> -->\n'
+                    '<DL><p><DT><H3 PERSONAL_TOOLBAR_FOLDER="true">收藏 &amp; 工具</H3><DL><p>'
+                    f'<DT><A HREF="{target}">A duplicate must keep the original</A>'
+                    '<DT><A ADD_DATE="42" HREF=\'https://search-example.invalid/?a=1&amp;b=2\' '
+                    'ICON="data:image/png;base64,eA==">中文 &#x6708; &quot;书签&quot;</A>'
+                    '<DT><H3>子目录</H3><DL><p>'
+                    '<DT><A HREF=https://folder-example.invalid/page>Nested &lt;title&gt;</A>'
+                    '<DT><A HREF="file:///C:/ignored.html">Unsupported file URL</A>'
+                    '</DL><p></DL><p>'
+                    '<DT><A HREF="https://root-example.invalid/">Root</A>'
+                    '<script>const text=\'<A HREF="https://script.invalid/">ignored</A>\';</script>'
+                    '</DL><p>',encoding="utf-8-sig")
+
+                def read_bookmarks():
+                    with closing(sqlite3.connect(profile / "bookmarks.sqlite3")) as db:
+                        return set(db.execute("SELECT title,url,folder FROM bookmarks"))
+
+                def import_bookmarks(path, *, feedback=True):
+                    invoke("导入 HTML 书签")
+                    pick_bookmark_file("导入 HTML 书签",path)
+                    if feedback:
+                        result = wait_for(lambda: owned_window("#32770","书签"),"The bookmark import did not report a result")
+                        wait_for(lambda: not user.IsWindow(result),"The bookmark transfer feedback did not close")
+
+                expected_rows = set(row) | {
+                    ('中文 月 "书签"',unicode_url,"收藏 & 工具"),
+                    ("Nested <title>",nested_url,"收藏 & 工具 / 子目录"),
+                    ("Root",root_url,""),
+                }
+                import_bookmarks(imported)
+                if read_bookmarks()!=expected_rows:
+                    raise RuntimeError("Import changed an existing bookmark, imported unsupported content or lost a folder")
+                import_bookmarks(invalid)
+                if read_bookmarks()!=expected_rows:
+                    raise RuntimeError("Importing invalid HTML changed the bookmark database")
+                invoke("导出 HTML 书签")
+                pick_bookmark_file("导出 HTML 书签",exported)
+                wait_for(exported.is_file,"The exported HTML was not saved")
+                result = wait_for(lambda: owned_window("#32770","书签"),"Bookmark export did not report completion")
+                wait_for(lambda: not user.IsWindow(result),"The bookmark export feedback did not close")
+                text = exported.read_text(encoding="utf-8")
+                if ('<!DOCTYPE NETSCAPE-Bookmark-file-1>' not in text
+                        or '<H3>收藏 &amp; 工具</H3>' not in text or '<H3>子目录</H3>' not in text
+                        or 'HREF="https://search-example.invalid/?a=1&amp;b=2"' not in text):
+                    raise RuntimeError("Export dropped folder structure or failed to escape HTML")
+                with closing(sqlite3.connect(profile / "bookmarks.sqlite3")) as db, db:
+                    db.execute("DELETE FROM bookmarks WHERE url=?",(nested_url,))
+                import_bookmarks(exported)
+                if read_bookmarks()!=expected_rows:
+                    raise RuntimeError("The exported file did not round-trip with its original bookmark and folder")
+                import_bookmarks(None,feedback=False)
+                if read_bookmarks()!=expected_rows:
+                    raise RuntimeError("Cancelling the file chooser changed bookmarks")
+                print("bookmark_transfer=ok native_open_and_save=ok dedup=ok nested_folders=ok unicode_path=ok round_trip=ok cancel=ok",flush=True)
         if downloads.exists():
             set_control(edit,base + "/slow-download")
             user.PostMessageW(edit,0x0100,0x0D,1)
@@ -1672,6 +1803,8 @@ def run_win32(exe, base, root):
                 expected["标签与页面"].add("管理搜索引擎")
             if session_plugin.exists():
                 expected["标签与页面"].update({"管理启动与会话","恢复上次会话"})
+            if bookmark_transfer:
+                expected["浏览资料"].update({"导入 HTML 书签","导出 HTML 书签"})
             if private_window.exists():
                 expected["隐私与安全"].add("新建隐私窗口\tCtrl+Shift+N")
             for group, labels in expected.items():

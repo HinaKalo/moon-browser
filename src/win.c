@@ -685,6 +685,18 @@ void moon_engine_test_fallback(bool value) {
 }
 
 static void open_palette(void);
+int moon_shell_pick_bookmarks(bool save,char *path,size_t capacity) {
+    wchar_t file[2048]=L"";
+    if (save) wcscpy(file,L"Moon-Bookmarks.html");
+    OPENFILENAMEW dialog={.lStructSize=sizeof(dialog), .hwndOwner=frame,
+        .lpstrFilter=L"HTML 文件 (*.html;*.htm)\0*.html;*.htm\0\0",
+        .lpstrFile=file, .nMaxFile=ARRAYSIZE(file), .lpstrDefExt=L"html",
+        .lpstrTitle=save?L"导出 HTML 书签":L"导入 HTML 书签",
+        .Flags=OFN_EXPLORER|OFN_NOCHANGEDIR|OFN_PATHMUSTEXIST|(save?OFN_OVERWRITEPROMPT:OFN_FILEMUSTEXIST)};
+    const BOOL chosen=save?GetSaveFileNameW(&dialog):GetOpenFileNameW(&dialog);
+    if (!chosen) return CommDlgExtendedError() ? -1 : 0;
+    return moon_utf8(file,path,capacity) ? 1 : -1;
+}
 static void pick_userscript(void) {
     wchar_t file[2048] = {0};
     char path[4096];

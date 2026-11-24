@@ -1369,6 +1369,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"history.manage" => "允许管理浏览历史",
         .@"network.filter" => "允许拦截网页请求",
         .@"bookmarks.manage" => "允许管理书签",
+        .@"bookmarks.transfer" => "允许导入和导出 HTML 书签",
         .@"downloads.manage" => "允许管理下载",
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
@@ -1414,6 +1415,12 @@ export fn moon_extension_request(panel: u64, id: [*c]const u8, request: [*c]cons
 
 export fn moon_privacy_allowed(tab: u64, owner: [*c]const u8) bool {
     return !stopped and count != 0 and tabs[active].id == tab and plugins.hasGrant(slice(owner),.@"privacy.clear");
+}
+
+export fn moon_bookmark_transfer_allowed(source: u64, owner: [*c]const u8) bool {
+    if (stopped or count==0 or tabs[active].id!=source or native.moon_shell_private()) return false;
+    const id = slice(owner);
+    return plugins.hasGrant(id,.@"bookmarks.manage") and plugins.hasGrant(id,.@"bookmarks.transfer");
 }
 
 export fn moon_plugin_open_page(id: [*c]const u8) bool {

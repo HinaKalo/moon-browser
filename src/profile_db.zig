@@ -12,6 +12,7 @@ const Sqlite = struct {
     sqlite3_bind_int64: *const fn (*Statement,c_int,i64) callconv(.c) c_int,
     sqlite3_bind_text: *const fn (*Statement,c_int,[*]const u8,c_int,?*anyopaque) callconv(.c) c_int,
     sqlite3_step: *const fn (*Statement) callconv(.c) c_int,
+    sqlite3_reset: *const fn (*Statement) callconv(.c) c_int,
     sqlite3_column_int64: *const fn (*Statement,c_int) callconv(.c) i64,
     sqlite3_column_text: *const fn (*Statement,c_int) callconv(.c) ?[*:0]const u8,
     sqlite3_column_bytes: *const fn (*Statement,c_int) callconv(.c) c_int,

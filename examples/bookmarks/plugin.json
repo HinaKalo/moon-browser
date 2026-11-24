@@ -1,7 +1,7 @@
 {
   "id": "moon.bookmarks",
   "name": "书签",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonBookmarks.exe",
@@ -9,8 +9,10 @@
   "contributes": {
     "commands": [
       { "id": "open", "label": "管理书签", "menu": "library", "shortcut": "Ctrl+Shift+O" },
-      { "id": "save", "label": "将当前页加入书签", "menu": "library", "shortcut": "Ctrl+D" }
+      { "id": "save", "label": "将当前页加入书签", "menu": "library", "shortcut": "Ctrl+D" },
+      { "id": "import", "label": "导入 HTML 书签", "menu": "library", "interactive": true },
+      { "id": "export", "label": "导出 HTML 书签", "menu": "library", "interactive": true }
     ]
   },
-  "permissions": ["bookmarks.manage"]
+  "permissions": ["bookmarks.manage", "bookmarks.transfer"]
 }

@@ -74,8 +74,8 @@
     {
       "id": "moon.bookmarks",
       "name": "书签",
-      "description": "保存常用网页，按标题、网址或文件夹搜索。",
-      "permission": "管理书签",
+      "description": "保存和搜索常用网页，导入或导出带文件夹的 HTML 书签。",
+      "permission": "管理书签并选择导入或导出文件",
       "url": "https://docs.browser.moonl.cloud/library.html"
     },
     {

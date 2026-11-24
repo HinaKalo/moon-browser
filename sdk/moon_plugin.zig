@@ -27,6 +27,7 @@ pub const Permission = enum {
     @"search.manage",
     @"siteData.write",
     @"tabs.session.manage",
+    @"bookmarks.transfer",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -123,6 +124,8 @@ pub const BookmarkInput = struct { title: []const u8, url: []const u8, folder: [
 pub const BookmarkEdit = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 = "" };
 pub const Bookmark = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 };
 pub const BookmarkPage = struct { bookmarks: []const Bookmark, next: ?u32 };
+pub const BookmarkTransferState = enum { done, cancelled, invalidFile, limitExceeded, unavailable };
+pub const BookmarkTransfer = struct { state: BookmarkTransferState, count: usize = 0, skipped: usize = 0 };
 pub const BookmarkSave = enum { saved, alreadySaved, noPage };
 pub const DownloadState = enum { choosing, transferring, complete, failed, cancelled, interrupted };
 pub const Download = struct {
@@ -191,6 +194,8 @@ pub const Method = enum {
     @"bookmarks.saveActive",
     @"bookmarks.update",
     @"bookmarks.remove",
+    @"bookmarks.importHtml",
+    @"bookmarks.exportHtml",
     @"downloads.list",
     @"downloads.cancel",
     @"downloads.remove",

@@ -34,6 +34,7 @@ const Grant = struct {
     search_manage: bool = false,
     site_data_write: ?bool = null,
     tabs_session_manage: bool = false,
+    bookmarks_transfer: ?bool = null,
     menu_items: []const []const u8 = &.{},
     hidden_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
@@ -190,6 +191,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"siteData.write");
             plugin.grants.insert(.@"siteData.write");
         }
+        if (std.mem.eql(u8,id,"moon.bookmarks") and plugin.enabled and requests.contains(.@"bookmarks.transfer")) {
+            plugin.default_grants.insert(.@"bookmarks.transfer");
+            plugin.grants.insert(.@"bookmarks.transfer");
+        }
         if (std.mem.eql(u8,id,"moon.blocker") and requests.contains(.@"network.filter"))
             plugin.default_grants.insert(.@"network.filter");
     }
@@ -275,6 +280,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and (grant.site_data_write orelse plugin.default_grants.contains(.@"siteData.write")) and
             plugin.requests.contains(.@"siteData.write")) plugin.grants.insert(.@"siteData.write");
         if (grant.enabled and grant.tabs_session_manage and plugin.requests.contains(.@"tabs.session.manage")) plugin.grants.insert(.@"tabs.session.manage");
+        if (grant.enabled and (grant.bookmarks_transfer orelse plugin.default_grants.contains(.@"bookmarks.transfer")) and
+            plugin.requests.contains(.@"bookmarks.transfer")) plugin.grants.insert(.@"bookmarks.transfer");
         if (canContribute(plugin)) {
             for (grant.hidden_menu_items) |id| {
                 if (findAction(plugin,id)) |index| {
@@ -343,6 +350,7 @@ fn persist() bool {
         .search_manage = plugin.grants.contains(.@"search.manage"),
         .site_data_write = plugin.grants.contains(.@"siteData.write"),
         .tabs_session_manage = plugin.grants.contains(.@"tabs.session.manage"),
+        .bookmarks_transfer = plugin.grants.contains(.@"bookmarks.transfer"),
         .menu_items = menus[index][0..used],
         .hidden_menu_items = hidden_menus[index][0..hidden],
         .hotkey = saved_key,
@@ -378,6 +386,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",
                 .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",
+                .@"bookmarks.transfer" => "此插件可打开文件选择框，从所选 HTML 文件导入书签，或导出书签到你选的位置。",
                 .@"downloads.manage" => "此插件可读取本机下载记录、取消传输，并在文件夹中显示已保存的文件。",
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",

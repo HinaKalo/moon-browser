@@ -18,6 +18,13 @@ pub fn main() !void {
         try client.reply(id,sdk.CommandResult{ .message=if (value == .bool and value.bool) null else "无法打开书签页。" });
         return;
     }
+    const exporting = std.mem.eql(u8,action,"export");
+    if (exporting or std.mem.eql(u8,action,"import")) {
+        const response = try client.call(if (exporting) .@"bookmarks.exportHtml" else .@"bookmarks.importHtml",.{});
+        const message: ?[]const u8 = transferMessage(client.allocator,response.get("result"),exporting);
+        try client.reply(id,sdk.CommandResult{ .message=message,.toast=true });
+        return;
+    }
     if (!std.mem.eql(u8,action,"save")) return error.InvalidCommand;
     const response = try client.call(.@"bookmarks.saveActive",.{});
     const value = sdk.string(response.get("result")) orelse "";
@@ -26,4 +33,19 @@ pub fn main() !void {
         else if (std.mem.eql(u8,value,"noPage")) "请切换到已打开的网页。"
         else "无法保存书签。请检查插件权限。";
     try client.reply(id,sdk.CommandResult{ .message=message,.toast=true });
+}
+
+fn transferMessage(allocator: std.mem.Allocator, value: ?std.json.Value, exporting: bool) ?[]const u8 {
+    const failure = "无法完成书签迁移，请检查插件权限和文件位置。";
+    const result = std.json.parseFromValueLeaky(sdk.BookmarkTransfer,allocator,value orelse return failure,.{}) catch return failure;
+    return switch (result.state) {
+        .done => if (exporting)
+            std.fmt.allocPrint(allocator,"已导出 {d} 个书签。",.{result.count}) catch failure
+        else
+            std.fmt.allocPrint(allocator,"已导入 {d} 个，跳过 {d} 个。",.{result.count,result.skipped}) catch failure,
+        .cancelled => null,
+        .invalidFile => "请选择有效的 UTF-8 HTML 书签文件，最大 8 MiB。",
+        .limitExceeded => "书签数量、文件大小或文件夹深度超出支持范围。",
+        .unavailable => failure,
+    };
 }

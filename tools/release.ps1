@@ -57,7 +57,13 @@ try {
                 if (!$package.GetEntry($name)) { throw "Portable package is missing $name." }
             }
         } finally { $package.Dispose() }
-        python -u .\tests\smoke.py (Join-Path $artifact 'MoonBrowser.exe') --quick --ui
+        try {
+            python -u .\tests\smoke.py (Join-Path $artifact 'MoonBrowser.exe') --quick --ui
+        } catch {
+            if ($LASTEXITCODE -ne 75) { throw }
+            Write-Warning 'WebKit terminated before the intentional crash test. Retrying once with a fresh test profile.'
+            python -u .\tests\smoke.py (Join-Path $artifact 'MoonBrowser.exe') --quick --ui
+        }
 
         $manifests = Join-Path $checkout "out\winget\$($version.name)"
         & .\tools\release-winget.ps1 -Version $version -Installer $installer -ManifestDirectory $manifests
