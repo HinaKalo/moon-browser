@@ -21,7 +21,7 @@ if (!$Submit) {
     $installerHash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash
     $manifests = @{
         "$id.yaml" = @"
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.28.0.schema.json
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.28.0.schema.json
 PackageIdentifier: $id
 PackageVersion: $name
 DefaultLocale: en-US
@@ -29,7 +29,7 @@ ManifestType: version
 ManifestVersion: 1.28.0
 "@
         "$id.installer.yaml" = @"
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
 PackageIdentifier: $id
 PackageVersion: $name
 InstallerType: inno
@@ -43,7 +43,7 @@ ManifestType: installer
 ManifestVersion: 1.28.0
 "@
         "$id.locale.en-US.yaml" = @"
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.28.0.schema.json
+# yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.28.0.schema.json
 PackageIdentifier: $id
 PackageVersion: $name
 PackageLocale: en-US
