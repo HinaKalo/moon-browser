@@ -216,6 +216,7 @@ bool moon_popups_open_blocked(const char *owner, uint64_t panel, uint64_t notice
 bool moon_popups_change_allowed(const char *owner, uint64_t panel, const char *origin, bool allow);
 enum MoonSiteDataAction { MOON_SITE_REFRESH, MOON_SITE_INSPECTOR, MOON_SITE_CATALOG };
 bool moon_site_data_action(uint64_t panel, const char *id, int action);
+bool moon_site_data_cookie_url(uint64_t panel, const char *id, char *url, size_t cap);
 bool moon_site_data_update(uint64_t panel, const char *id, bool session, uint32_t entry, uint64_t generation,
     const char *value, size_t length);
 bool moon_site_data_create(uint64_t panel, const char *id, bool session, uint64_t generation,

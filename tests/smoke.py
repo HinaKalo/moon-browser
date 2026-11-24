@@ -373,6 +373,9 @@ class Fixture(BaseHTTPRequestHandler):
         if path == "/page/site-data-contract":
             self.send_header("Set-Cookie", "moon-visible=cookie-value; Path=/")
             self.send_header("Set-Cookie", "moon-http-only=private-value; HttpOnly; Path=/")
+            self.send_header("Set-Cookie", "moon-http-only=unrelated-value; HttpOnly; Path=/page/site")
+            self.send_header("Set-Cookie", "moon-http-only=scoped-value; HttpOnly; Path=/page")
+            self.send_header("Set-Cookie", "moon-persistent=persistent-value; Max-Age=3600; Path=/")
         if path == "/page/privacy-seed":
             self.send_header("Set-Cookie", "moon-privacy-visible=present; Path=/")
             self.send_header("Set-Cookie", "moon-privacy-http=present; HttpOnly; Path=/")
@@ -700,7 +703,8 @@ def run_win32(exe, base, root):
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
-            {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True, "site_data_write": True},
+            {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True,
+             "site_data_write": True, "site_data_cookie_details": True},
             {"id": "moon.source-fixture", "enabled": True, "tabs_read": False, "page_source": True},
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
@@ -728,6 +732,10 @@ def run_win32(exe, base, root):
             ('const siteDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"2",method:"siteData.status",params:{}}));'
              'if(JSON.parse(siteDenied).error?.code!==-32001)return;' if site_data.exists() else '') +
+            ('const cookieDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"11",method:"siteData.cookieDetails",params:{generation:1}}));'
+             'if(JSON.parse(cookieDenied).error?.code!==-32001)return;'
+             if site_data.exists() and "siteData.cookieDetails" in (site_data.parent / "plugin.json").read_text(encoding="utf-8") else '') +
             ('const readingDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"3",method:"reading.find",params:{}}));'
              'if(JSON.parse(readingDenied).error?.code!==-32601)return;' if reading.exists() else '') +
@@ -942,6 +950,28 @@ def run_win32(exe, base, root):
         manifest["contributes"]["commands"][0]["label"] = "运行站点数据验收"
         (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
         page = (site_data.parent / "site-data.html").read_text(encoding="utf-8")
+        cookie_contract = (
+            'if(!result.cookieDetails)throw Error("Cookie details grant missing");'
+            'const raw=await host("siteData.cookieDetails",{generation:result.generation});'
+            'const secrets=raw.entries.filter(row=>row.name==="moon-http-only");'
+            'const persisted=raw.entries.find(row=>row.name==="moon-persistent");'
+            'const top=secrets.find(row=>row.path==="/");'
+            'const scoped=secrets.find(row=>row.path==="/page");'
+            'if(!raw.available||raw.generation!==result.generation||secrets.length!==2||'
+            'top?.domain!==new URL(result.origin).hostname||top.expiresAt!==null||!top.httpOnly||top.secure||'
+            '!scoped?.httpOnly||!(persisted?.expiresAt>Date.now()&&persisted.expiresAt<Date.now()+3700000)||'
+            'JSON.stringify(raw).includes("private-value"))throw Error("Cookie metadata or scope");'
+            'if(await host("siteData.cookieValue",{id:scoped.id,generation:raw.generation})!=="scoped-value")'
+            'throw Error("duplicate Cookie names did not resolve by path");'
+            'document.querySelector("[data-group=cookies]").click();'
+            'const httpRow=await wait(()=>[...document.querySelectorAll("#results li")].find(row=>'
+            'row.querySelector("code").textContent==="moon-http-only"&&row.textContent.includes("路径 /")&&'
+            '!row.textContent.includes("路径 /page")),"HttpOnly row");'
+            'const hidden=httpRow.querySelector("pre"), show=httpRow.querySelector("button");'
+            'if(!httpRow.textContent.includes("会话 · HttpOnly")||!hidden.hidden||hidden.textContent)throw Error("Cookie row renders a value");'
+            'show.click();await wait(()=>!hidden.hidden&&hidden.textContent==="private-value","reveal HttpOnly value");'
+            'show.click();if(!hidden.hidden||hidden.textContent)throw Error("HttpOnly value remains in DOM");'
+        ) if "siteData.cookieDetails" in manifest["permissions"] else ""
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
             'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
@@ -951,6 +981,7 @@ def run_win32(exe, base, root):
             'if(data.state==="unavailable"||data.state==="stale")throw Error("snapshot "+data.state+": "+data.failure);'
             'return data.state==="ready"&&data;},"snapshot ready");'
             f'if(result.origin!=="{base}")throw Error("origin");'
+            + cookie_contract +
             'for(const [section,key,secret] of [["cookies","moon-visible","cookie-value"],'
             '["local","moon-local","local-value"],["session","moon-session","session-value"]]){'
             'document.querySelector("[data-group="+section+"]").click();'
@@ -1051,6 +1082,9 @@ def run_win32(exe, base, root):
             'await wait(()=>!document.querySelector("#results li"),"clear rows");'
             'let rejected=false;try{await host("siteData.value",{group:"cookies",id:0,generation:result.generation});}'
             'catch(error){rejected=error.message==="NOT_FOUND";}if(!rejected)throw Error("stale credential read");'
+            'if(result.cookieDetails){let missing=false;'
+            'try{await host("siteData.cookieValue",{id:0,generation:result.generation});}'
+            'catch(error){missing=error.message==="NOT_FOUND";}if(!missing)throw Error("stale HttpOnly value");}'
             'if(document.querySelector("[data-group=indexedDB]")){let staleCatalog=false;'
             'try{await host("siteData.catalog",{group:"indexedDB"});}catch(error){staleCatalog=error.message==="NOT_FOUND";}'
             'if(!staleCatalog)throw Error("catalog after navigation");}'
@@ -1984,6 +2018,8 @@ def run_win32(exe, base, root):
                 raise RuntimeError(f"Site data invalidation: {result}")
             if has_catalog:
                 print("site_catalog=ok indexeddb_version=ok cache_limit=ok isolated_apis=ok catalog_search=ok stale_catalog=ok",flush=True)
+            if "siteData.cookieDetails" in json.loads((site_data.parent / "plugin.json").read_text(encoding="utf-8"))["permissions"]:
+                print("site_cookie_details=ok httponly_reveal=ok expiry=ok cookie_path_scope=ok stale_cookie_value=ok",flush=True)
             print("site_data_system_plugin=ok isolated_storage=ok storage_edit=ok storage_remove=ok stale_write_rejected=ok conflict_preserved=ok site_data_navigation_cleanup=ok",flush=True)
             if bulk_storage:
                 print("site_storage_create=ok duplicate_conflict=ok full_group_clear=ok other_group_kept=ok cancel=ok stale_confirmation=ok",flush=True)

@@ -74,8 +74,8 @@
     {
       "id": "moon.site-data",
       "name": "站点数据",
-      "description": "查看网页可读的 Cookie，并在当前站点面板编辑或删除 Local Storage 和 Session Storage。",
-      "permission": "查看站点数据和编辑站点存储",
+      "description": "检查 Cookie 的域、路径、到期时间及 HttpOnly，并编辑或删除 Local Storage 和 Session Storage。",
+      "permission": "查看站点数据、Cookie 属性和 HttpOnly Cookie，以及编辑站点存储",
       "url": "https://docs.browser.moonl.cloud/site-data.html"
     },
     {

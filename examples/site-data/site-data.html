@@ -28,6 +28,7 @@
   .entry { display:flex; align-items:center; justify-content:space-between; gap:12px; }
   .entry code { font-size:14px; overflow-wrap:anywhere; }
   .caption { color:var(--muted); display:block; margin-top:3px; }
+  .cookie-meta { overflow-wrap:anywhere; }
   pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:10px 0 0; background:var(--page); border-radius:6px; padding:9px 11px; }
   .actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
   #editor { margin-top:16px; padding:14px; background:var(--surface); border:1px solid var(--line); border-radius:9px; }
@@ -85,7 +86,7 @@
   const editor=el('editor'), feedback=el('feedback'), newValue=el('new-value'), commit=el('commit');
   const newKey=el('key'), storageActions=el('storage-actions'), clearStorage=el('clear-storage');
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
-  let clearing=false;
+  let clearing=false, cookieGeneration;
   let dismissedMutation;
   const isCatalog=() => group==='indexedDB' || group==='cacheStorage';
   async function host(method,params={}) {
@@ -206,6 +207,15 @@
       caption.className='caption';
       caption.textContent=item.length + ' 字节' + (item.shortened ? ' · 已截断' : '');
       content.append(name,caption);
+      if (page.cookieDetails) {
+        const scope=document.createElement('small'), attributes=document.createElement('small');
+        scope.className='caption cookie-meta';
+        attributes.className='caption';
+        scope.textContent=`域 ${item.domain} · 路径 ${item.path}` + (item.metadataShortened ? ' · 属性已截断' : '');
+        attributes.textContent=[item.expiresAt==null ? '会话' : `到期 ${new Date(item.expiresAt).toLocaleString()}`,
+          item.httpOnly && 'HttpOnly',item.secure && 'Secure'].filter(Boolean).join(' · ');
+        content.append(scope,attributes);
+      }
       const show=document.createElement('button');
       show.dataset.reveal='';
       show.textContent='显示值';
@@ -216,12 +226,13 @@
         const current=page;
         show.disabled=true;
         try {
-          const secret=await host('siteData.value',{group,id:item.id,generation:current.generation});
+          const target={id:item.id,generation:current.generation};
+          const secret=current.cookieDetails ? await host('siteData.cookieValue',target) : await host('siteData.value',{group,...target});
           if (current!==page || !row.isConnected || document.hidden) return;
           value.textContent=secret || '（空值）';
           value.hidden=false;
           show.textContent='隐藏值';
-        } catch { status.textContent='该条目已过期。请刷新。'; }
+        } catch { if (current===page && row.isConnected) status.textContent='该条目已变更或过期。请刷新。'; }
         finally { show.disabled=false; }
       };
       const actions=document.createElement('div');
@@ -242,8 +253,9 @@
     }
     rows.hidden=rows.children.length===0;
     status.textContent=rows.hidden ? (query ? '没有匹配的条目。' : '暂无数据。') : '';
-    details.textContent=(group==='cookies' ? '此处显示网页可读的 Cookie。使用开发者工具可查看 HttpOnly Cookie 及完整属性。' : '') +
-      (page.more ? ' 已显示前 32 条。' : '');
+    details.textContent=(group==='cookies' ? (page.cookieDetails ? '显示与原网页域名、路径和协议匹配的 Cookie。' :
+      '当前显示网页可读的 Cookie。可使用开发者工具查看其他 Cookie 属性。') : '') +
+      (page.more ? ` 已显示前 ${page.entries.length} 条。` : '');
   }
   function renderCatalog() {
     rows.replaceChildren();
@@ -284,6 +296,15 @@
         renderCatalog();
         return;
       }
+      if (group==='cookies' && cookieGeneration!==undefined) {
+        const detailsPage=await host('siteData.cookieDetails',{generation:cookieGeneration}).catch(() => null);
+        if (ticket!==request) return;
+        if (detailsPage?.available) {
+          page={...detailsPage,cookieDetails:true};
+          render();
+          return;
+        }
+      }
       const value=await host('siteData.list',{group});
       if (ticket!==request) return;
       page=value;
@@ -311,10 +332,11 @@
     try {
       const current=await host('siteData.status');
       writable=current.writable;
+      cookieGeneration=current.cookieDetails ? current.generation : undefined;
       el('origin').textContent=current.origin;
       const unavailable=['idle','stale','pending'].includes(current.state);
       el('refresh').disabled=el('inspector').disabled=unavailable;
-      const identity=current.state + ':' + current.generation + ':' + writable;
+      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails;
       if (identity===latest) {
         if (selected==='ready' && isCatalog() && (!catalog || catalog.state==='pending')) await load();
         return;

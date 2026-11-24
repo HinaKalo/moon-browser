@@ -33,6 +33,7 @@ const Grant = struct {
     tabs_manage: ?bool = null,
     search_manage: bool = false,
     site_data_write: ?bool = null,
+    site_data_cookie_details: ?bool = null,
     popups_manage: bool = false,
     page_source: bool = false,
     tabs_session_manage: bool = false,
@@ -232,6 +233,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"siteData.write");
             plugin.grants.insert(.@"siteData.write");
         }
+        if (std.mem.eql(u8,id,"moon.site-data") and plugin.enabled and requests.contains(.@"siteData.cookieDetails")) {
+            plugin.default_grants.insert(.@"siteData.cookieDetails");
+            plugin.grants.insert(.@"siteData.cookieDetails");
+        }
         if (std.mem.eql(u8,id,"moon.bookmarks") and plugin.enabled and requests.contains(.@"bookmarks.transfer")) {
             plugin.default_grants.insert(.@"bookmarks.transfer");
             plugin.grants.insert(.@"bookmarks.transfer");
@@ -333,6 +338,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.search_manage and plugin.requests.contains(.@"search.manage")) plugin.grants.insert(.@"search.manage");
         if (grant.enabled and (grant.site_data_write orelse plugin.default_grants.contains(.@"siteData.write")) and
             plugin.requests.contains(.@"siteData.write")) plugin.grants.insert(.@"siteData.write");
+        if (grant.enabled and (grant.site_data_cookie_details orelse plugin.default_grants.contains(.@"siteData.cookieDetails")) and
+            plugin.requests.contains(.@"siteData.cookieDetails")) plugin.grants.insert(.@"siteData.cookieDetails");
         if (grant.enabled and grant.tabs_session_manage and plugin.requests.contains(.@"tabs.session.manage")) plugin.grants.insert(.@"tabs.session.manage");
         if (grant.enabled and (grant.bookmarks_transfer orelse plugin.default_grants.contains(.@"bookmarks.transfer")) and
             plugin.requests.contains(.@"bookmarks.transfer")) plugin.grants.insert(.@"bookmarks.transfer");
@@ -413,6 +420,7 @@ fn persist() bool {
         .tabs_manage = plugin.grants.contains(.@"tabs.manage"),
         .search_manage = plugin.grants.contains(.@"search.manage"),
         .site_data_write = plugin.grants.contains(.@"siteData.write"),
+        .site_data_cookie_details = plugin.grants.contains(.@"siteData.cookieDetails"),
         .page_source = plugin.grants.contains(.@"page.source"),
         .popups_manage = plugin.grants.contains(.@"popups.manage"),
         .tabs_session_manage = plugin.grants.contains(.@"tabs.session.manage"),
@@ -468,6 +476,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"downloads.manage" => "此插件可读取本机下载记录、取消传输，并在文件夹中显示已保存的文件。",
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
+                .@"siteData.cookieDetails" => "此插件可在绑定到网页的站点数据面板查看 Cookie 属性及值，包含可能用于登录的 HttpOnly Cookie。",
                 .@"page.reading" => "此插件可在当前页打开查找栏，并调整页面缩放。",
                 .@"window.fullscreen" => "此插件可在你触发命令时切换浏览器全屏。按 Esc 可以退出全屏。",
                 .@"tabs.closed.manage" => "此插件可查看最近关闭标签的标题和站点，并恢复或清空这些标签。",

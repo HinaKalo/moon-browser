@@ -1,10 +1,10 @@
 # 站点数据
 
-在已加载的网页上，点击地址栏左侧的调节图标，或从 Ctrl+K 命令面板选择「查看当前站点数据」。面板绑定触发命令的网页，显示它的来源，可按名称筛选网页可读的 Cookie、Local Storage 和 Session Storage。值默认折叠，点击「显示值」可以检查单条内容。
+在已加载的网页上，点击地址栏左侧的调节图标，或从 Ctrl+K 命令面板选择「查看当前站点数据」。面板绑定触发命令的网页，显示它的来源，可按名称筛选 Cookie、Local Storage 和 Session Storage。值默认折叠，点击「显示值」可以检查单条内容。
 
-当前面板每类最多预览 32 条。长条目会标记截断。要查看 HttpOnly Cookie、Cookie 属性或完整值，可用面板中的「打开开发者工具」回到原网页的 WebKit Inspector，再选择 Storage。
+从 0.1.0-preview.46 起，普通窗口可查看当前网页域名、路径和协议匹配的 Cookie，包括 HttpOnly Cookie。每条显示 Domain、Path、会话或到期时间，以及适用的 HttpOnly 和 Secure 标记。同名 Cookie 按各自的域名和路径显示。隐私窗口或内核数据库不可用时，面板使用网页可见的 Cookie。可用面板中的「打开开发者工具」查看内核提供的完整数据。
 
-Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。Cookie 在此面板为只读，Inspector 可查看完整属性。
+当前面板每类最多预览 32 条。长条目会标记截断。Cookie 为只读，单条值最多预览 2048 UTF-8 字节。Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。
 
 从 0.1.0-preview.40 起，在 Local Storage 或 Session Storage 可选择「新增条目」和「清空此类」。新增同名条目会报告冲突。清空时，系统对话框会显示来源和类别。确认会移除该类别中的全部条目，包含筛选结果之外和预览上限之后的条目。
 
@@ -17,6 +17,8 @@ Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑�
 原生插件声明 `siteData.read`，并在用户触发的命令中调用 `siteData.open`。插件清单需要提供 `settingsPage`。宿主把授权绑定到实际打开的这个面板和触发命令的网页。
 
 面板通过 `moonHost` 请求 `siteData.status`、`siteData.list` 和 `siteData.value`。列表只返回名称和长度。读取值需要同时传入类别、条目 ID 和列表返回的快照代数 `generation`。EXE 负责发起查看命令，查看结果由绑定面板读取。
+
+Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限。`siteData.status` 的 `cookieDetails` 字段表示该窗口允许尝试读取。当前活动且已绑定的面板调用 `siteData.cookieDetails({ generation })`，返回 `{ available, entries, more, generation }`。条目包含 `id`、`name`、`domain`、`path`、`expiresAt`、`httpOnly`、`secure`、`length`、`shortened` 和 `metadataShortened`。`expiresAt` 是 Unix 毫秒时间戳，会话 Cookie 传 `null`。`available: false` 时可调用 `siteData.list({ group: "cookies" })` 显示网页可读的 Cookie。通过 `siteData.cookieValue({ id, generation })` 单独读取一个预览值。面板离开前台、网页导航、权限撤销或 Cookie 更新后，旧条目无法继续读取。
 
 面板调用 `siteData.catalog` 时传入 `{ group }`，其值为 `indexedDB` 或 `cacheStorage`。首次调用会按需读取，响应为 `pending` 时可再次查询同一代快照。目录条目包含 `name`、`shortened`，IndexedDB 还包含 `version`。对应目录为 `null` 表示当前网页无法读取该类别。
 

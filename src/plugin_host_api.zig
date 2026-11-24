@@ -69,6 +69,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
+        .@"siteData.cookieDetails", .@"siteData.cookieValue" => .@"siteData.cookieDetails",
         .@"siteData.update", .@"siteData.create", .@"siteData.clear" => .@"siteData.write",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"window.toggleFullscreen" => .@"window.fullscreen",
@@ -192,7 +193,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
-        .@"siteData.create", .@"siteData.clear" => {},
+        .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
@@ -487,7 +488,9 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         },
         .@"siteData.status" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
-            return sdk.result(output,id,site_data.status(context.target_tab_id,context.plugin_id,context.grants.contains(.@"siteData.write")));
+            return sdk.result(output,id,site_data.status(context.target_tab_id,context.plugin_id,
+                context.grants.contains(.@"siteData.write"),
+                !native.moon_shell_private() and context.grants.contains(.@"siteData.cookieDetails")));
         },
         .@"siteData.list" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
@@ -501,6 +504,23 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
             const options = decode(sdk.SiteDataItem,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             const result = site_data.value(context.target_tab_id,context.plugin_id,options) orelse return sdk.failure(output,id,.NotFound);
+            return sdk.result(output,id,result);
+        },
+        .@"siteData.cookieDetails", .@"siteData.cookieValue" => {
+            if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            var url: [4096:0]u8 = @splat(0);
+            if (!native.moon_site_data_cookie_url(context.target_tab_id,owner.ptr,&url,url.len))
+                return sdk.failure(output,id,.NotFound);
+            if (method == .@"siteData.cookieDetails") {
+                const options = decode(struct { generation: u64 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+                const result = site_data.cookieDetails(context.target_tab_id,context.plugin_id,options.generation,std.mem.span(@as([*:0]const u8,&url))) orelse
+                    return sdk.failure(output,id,.NotFound);
+                return sdk.result(output,id,result);
+            }
+            const options = decode(sdk.SiteCookieItem,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const result = site_data.cookieValue(allocator,context.target_tab_id,context.plugin_id,options,std.mem.span(@as([*:0]const u8,&url))) orelse
+                return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,result);
         },
         .@"siteData.catalog" => {

@@ -5,6 +5,7 @@ pub const Statement = opaque {};
 pub const Link = struct { title: []const u8, url: []const u8 };
 const Sqlite = struct {
     sqlite3_open: *const fn ([*:0]const u8,*?*Database) callconv(.c) c_int,
+    sqlite3_open_v2: *const fn ([*:0]const u8,*?*Database,c_int,?[*:0]const u8) callconv(.c) c_int,
     sqlite3_close: *const fn (*Database) callconv(.c) c_int,
     sqlite3_busy_timeout: *const fn (*Database,c_int) callconv(.c) c_int,
     sqlite3_exec: *const fn (*Database,[*:0]const u8,?*anyopaque,?*anyopaque,?*anyopaque) callconv(.c) c_int,
@@ -31,17 +32,32 @@ pub const done = 101;
 pub var sqlite: Sqlite = undefined;
 var loaded = false;
 
+fn load() !void {
+    if (loaded) return;
+    const system32 = 0x00000800;
+    const module = LoadLibraryExW(std.unicode.utf8ToUtf16LeStringLiteral("winsqlite3.dll"),null,system32) orelse return error.IOError;
+    errdefer _ = FreeLibrary(module);
+    inline for (@typeInfo(Sqlite).@"struct".field_names) |name| {
+        @field(sqlite,name) = @ptrCast(GetProcAddress(module,name) orelse return error.IOError);
+    }
+    loaded = true;
+}
+
+pub fn openReadOnly(path: [:0]const u8) !*Database {
+    if (path.len == 0) return error.IOError;
+    try load();
+    const read_only = 0x01;
+    var handle: ?*Database = null;
+    const opened = sqlite.sqlite3_open_v2(path.ptr,&handle,read_only,null);
+    const db = handle orelse return error.IOError;
+    errdefer close(db);
+    if (opened != ok) return error.IOError;
+    return db;
+}
+
 pub fn open(path: [:0]const u8) !*Database {
     if (path.len == 0) return error.IOError;
-    if (!loaded) {
-        const system32 = 0x00000800;
-        const module = LoadLibraryExW(std.unicode.utf8ToUtf16LeStringLiteral("winsqlite3.dll"),null,system32) orelse return error.IOError;
-        errdefer _ = FreeLibrary(module);
-        inline for (@typeInfo(Sqlite).@"struct".field_names) |name| {
-            @field(sqlite,name) = @ptrCast(GetProcAddress(module,name) orelse return error.IOError);
-        }
-        loaded = true;
-    }
+    try load();
     var handle: ?*Database = null;
     const opened = sqlite.sqlite3_open(path.ptr,&handle);
     const db = handle orelse return error.IOError;

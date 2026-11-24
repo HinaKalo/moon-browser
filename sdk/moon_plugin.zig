@@ -26,6 +26,7 @@ pub const Permission = enum {
     @"tabs.manage",
     @"search.manage",
     @"siteData.write",
+    @"siteData.cookieDetails",
     @"tabs.session.manage",
     @"bookmarks.transfer",
     @"page.source",
@@ -191,10 +192,25 @@ pub const SiteDataClearStart = enum(c_int) { started, cancelled, unavailable };
 pub const SiteDataStatus = struct {
     state: SiteDataState, origin: []const u8, generation: u64,
     failure: ?SiteDataFailure = null, mutation: ?SiteDataMutation = null, writable: bool = false,
+    cookieDetails: bool = false,
 };
 pub const SiteDataEntry = struct { id: u32, name: []const u8, length: usize, shortened: bool };
 pub const SiteDataPage = struct { available: bool, entries: []const SiteDataEntry, more: bool, generation: u64 };
 pub const SiteDataItem = struct { group: SiteDataGroup, id: u32, generation: u64 };
+pub const SiteCookieEntry = struct {
+    id: u32,
+    name: []const u8,
+    domain: []const u8,
+    path: []const u8,
+    expiresAt: ?i64,
+    httpOnly: bool,
+    secure: bool,
+    length: usize,
+    shortened: bool,
+    metadataShortened: bool,
+};
+pub const SiteCookiePage = struct { available: bool, entries: []const SiteCookieEntry, more: bool, generation: u64 };
+pub const SiteCookieItem = struct { id: u32, generation: u64 };
 pub const SiteDatabase = struct { name: []const u8, version: ?u64, shortened: bool };
 pub const SiteCache = struct { name: []const u8, shortened: bool };
 pub const SiteCatalogGroup = enum { indexedDB, cacheStorage };
@@ -273,6 +289,8 @@ pub const Method = enum {
     @"siteData.list",
     @"siteData.catalog",
     @"siteData.value",
+    @"siteData.cookieDetails",
+    @"siteData.cookieValue",
     @"siteData.refresh",
     @"siteData.openInspector",
     @"siteData.update",

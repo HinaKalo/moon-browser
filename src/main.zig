@@ -1837,6 +1837,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"downloads.manage" => "允许管理下载",
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
+        .@"siteData.cookieDetails" => "允许查看 Cookie 属性和 HttpOnly Cookie",
         .@"page.source" => "允许查看当前网页源代码",
         .@"page.save" => "允许通过文件对话框保存当前网页",
         .@"tabs.groups" => "允许管理标签组",
@@ -1887,7 +1888,7 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     const result = plugins.toggle(index,permission);
     if (result != .saved) return result;
     if (permission == null or permission == .@"network.filter") network.select(plugins.networkSource());
-    if (permission == null or permission == .@"siteData.read") checkSiteDataGrant();
+    if (permission == null or permission == .@"siteData.read" or permission == .@"siteData.cookieDetails") checkSiteDataGrant();
     if (permission == null or permission == .@"page.source") checkPageSourceGrant();
     if (permission == null or permission == .@"page.reading") checkFindGrant();
     if (fullscreen_owner[0]!=0 and !plugins.hasGrant(slice(&fullscreen_owner),.@"window.fullscreen")) {
@@ -2200,7 +2201,8 @@ fn checkSiteDataGrant() void {
         site_data.reset();
         return;
     };
-    if (!grants.contains(.@"siteData.read")) site_data.reset();
+    if (!grants.contains(.@"siteData.read")) site_data.reset()
+    else if (!grants.contains(.@"siteData.cookieDetails")) site_data.dropCookies();
 }
 
 export fn moon_site_data_open(id: [*c]const u8, source: u64, expected: [*c]const u8) bool {
@@ -2240,20 +2242,27 @@ export fn moon_site_data_action(panel: u64, id: [*c]const u8, action: c_int) boo
     return native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.resources),false);
 }
 
-fn siteWriteView(panel: u64, owner: []const u8) ?*native.MoonView {
+fn sitePanelView(panel: u64, owner: []const u8, permission: sdk.Permission) ?*native.MoonView {
     if (stopped or count==0 or tabs[active].id!=panel or
-        !plugins.hasGrant(owner,.@"siteData.read") or !plugins.hasGrant(owner,.@"siteData.write")) return null;
+        !plugins.hasGrant(owner,.@"siteData.read") or !plugins.hasGrant(owner,permission)) return null;
     const source = site_data.selected(panel,owner) orelse return null;
     const tab = &tabs[tabIndex(source) orelse return null];
     if (!hasSite(tab) or tab.loading or !tab.loaded) return null;
     return tab.view;
 }
 
+export fn moon_site_data_cookie_url(panel: u64, id: [*c]const u8, url: [*c]u8, cap: usize) bool {
+    if (native.moon_shell_private()) return false;
+    const view = sitePanelView(panel,slice(id),.@"siteData.cookieDetails") orelse return false;
+    native.moon_engine_committed_url(view,url,cap);
+    return history.validURL(slice(url));
+}
+
 export fn moon_site_data_update(panel: u64, id: [*c]const u8, session: bool, entry: u32, generation: u64,
     value: [*c]const u8, length: usize) bool {
     if (site_clear_confirming) return false;
     const owner = slice(id);
-    const view = siteWriteView(panel,owner) orelse return false;
+    const view = sitePanelView(panel,owner,.@"siteData.write") orelse return false;
     const target: sdk.SiteDataItem = .{ .group=if (session) .session else .local, .id=entry, .generation=generation };
     return site_data.update(view,panel,owner,target,if (value!=null) value[0..length] else null);
 }
@@ -2262,7 +2271,7 @@ export fn moon_site_data_create(panel: u64, id: [*c]const u8, session: bool, gen
     key: [*c]const u8, key_length: usize, value: [*c]const u8, value_length: usize) bool {
     if (site_clear_confirming) return false;
     const owner = slice(id);
-    const view = siteWriteView(panel,owner) orelse return false;
+    const view = sitePanelView(panel,owner,.@"siteData.write") orelse return false;
     return site_data.create(view,panel,owner,.{
         .group=if (session) .session else .local,.generation=generation,
         .key=key[0..key_length],.value=value[0..value_length],
@@ -2275,17 +2284,17 @@ export fn moon_site_data_clear(panel: u64, id: [*c]const u8, session: bool, gene
 
 fn clearSiteStorage(panel: u64, owner: []const u8, session: bool, generation: u64) sdk.SiteDataClearStart {
     const group: sdk.SiteDataGroup = if (session) .session else .local;
-    if (site_clear_confirming or siteWriteView(panel,owner)==null or
+    if (site_clear_confirming or sitePanelView(panel,owner,.@"siteData.write")==null or
         !site_data.canMutate(panel,owner,group,generation)) return .unavailable;
     var body: [640]u8 = undefined;
     const message = std.fmt.bufPrintSentinel(&body,"清空 {s} 的{s}全部条目？\n此操作也会移除筛选结果之外的条目。",.{
-        site_data.status(panel,owner,true).origin,
+        site_data.status(panel,owner,true,false).origin,
         if (session) "当前标签 Session Storage " else " Local Storage ",
     },0) catch return .unavailable;
     site_clear_confirming = true;
     defer site_clear_confirming = false;
     if (!native.moon_shell_confirm("清空站点存储？",message.ptr)) return .cancelled;
-    const view = siteWriteView(panel,owner) orelse return .unavailable;
+    const view = sitePanelView(panel,owner,.@"siteData.write") orelse return .unavailable;
     return if (site_data.clear(view,panel,owner,group,generation)) .started else .unavailable;
 }
 
