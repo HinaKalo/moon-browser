@@ -11,8 +11,8 @@
     {
       "id": "moon.session",
       "name": "上次会话",
-      "description": "从上次正常退出恢复普通标签。支持启动恢复与后台按需加载。",
-      "permission": "保存和恢复上次浏览会话",
+      "description": "恢复上次会话，配置启动恢复，或打开 Windows 默认浏览器设置。",
+      "permission": "保存和恢复会话，打开系统默认应用设置",
       "url": "https://docs.browser.moonl.cloud/session.html"
     },
     {

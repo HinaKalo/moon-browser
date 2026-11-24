@@ -6,6 +6,12 @@
 
 会话只记录可安全重新打开的 HTTP(S) 网页标题和地址。表单值、前进后退记录和非 GET 会话不随浏览器重启恢复。隐私窗口独立运行。清除浏览数据时可选择「浏览历史」，一并忘记已保存的会话。
 
+## 默认浏览器
+
+从 0.1.0-preview.43 起，Installer 为当前用户向 Windows 注册 HTTP 和 HTTPS。选择「… → 标签与页面 → 设置为默认浏览器」，再在 Windows 的默认应用设置中选择 Moon Browser。Portable 会提示使用 Installer 注册。[Windows 默认应用设置](https://learn.microsoft.com/en-us/windows/apps/develop/launch/launch-default-apps-settings)
+
+外部网页链接可打开同一配置下已有的普通窗口，并使用空白标签或新标签。浏览器未运行时会先启动。隐私窗口使用自己的浏览会话。
+
 ## 插件 API
 
 以下方法需要 `tabs.session.manage`。恢复、保存选项和忘记会话可从用户命令或插件配置页调用。
@@ -16,3 +22,5 @@
 | `tabs.session.setPreferences` | 传入 `{ autoRestore }`，返回是否保存成功。 |
 | `tabs.session.restore` | 传入 `{}`，返回 `restored`、`empty`、`tabLimit` 或 `unavailable`。 |
 | `tabs.session.forget` | 传入 `{}`，返回是否清除成功。 |
+
+原生用户命令可凭 `browser.defaultApp` 权限调用 `browser.openDefaultApps({})`。返回 `opened`、`installRequired` 或 `unavailable`。`opened` 表示系统设置已打开，默认应用仍由用户在 Windows 中确认。

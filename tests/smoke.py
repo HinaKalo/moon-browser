@@ -311,7 +311,8 @@ class Fixture(BaseHTTPRequestHandler):
                 )
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
                         "pinned-first", "pinned-second", "session-first", "session-second", "session-pinned", "session-private",
-                        "session-external", "order-last", "order-edge", "group-first", "group-second", "group-outside"):
+                        "session-external", "order-last", "order-edge", "group-first", "group-second", "group-outside",
+                        "shell-cold", "shell-warm", "shell-plain"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "chrome-window":
                 demo = (
@@ -669,6 +670,8 @@ def run_win32(exe, base, root):
     commands = exe.parent / "plugins" / "ui-commands" / "MoonCommandExample.exe"
     search_plugin = exe.parent / "plugins" / "search" / "MoonSearch.exe"
     session_plugin = exe.parent / "plugins" / "session" / "MoonSession.exe"
+    has_default_browser = session_plugin.is_file() and "browser.defaultApp" in json.loads(
+        session_plugin.with_name("plugin.json").read_text(encoding="utf-8"))["permissions"]
     tab_tools = exe.parent / "plugins" / "tab-tools" / "MoonTabTools.exe"
     tab_groups = (tab_tools.parent / "groups.html").is_file()
     has_web_link_menu = tab_tools.exists() and '"linkMenu"' in tab_tools.with_name("plugin.json").read_text(encoding="utf-8")
@@ -2658,6 +2661,8 @@ def run_win32(exe, base, root):
                 expected["标签与页面"].add("管理搜索引擎")
             if session_plugin.exists():
                 expected["标签与页面"].update({"管理启动与会话","恢复上次会话"})
+            if has_default_browser:
+                expected["标签与页面"].add("设置为默认浏览器")
             if has_page_save:
                 expected["标签与页面"].add("网页另存为 HTML\tCtrl+S")
             if bookmark_transfer:
@@ -3250,6 +3255,50 @@ def run_win32(exe, base, root):
                      "The previous session was unavailable after explicit startup")
             print("last_session=ok safe_checkpoint=ok selected_restore=ok no_duplicate=ok lazy_load=ok "
                   "auto_startup=ok private_excluded=ok external_url_priority=ok forget_confirmation=ok",flush=True)
+        if has_default_browser:
+            # An unregistered build uses the plugin's installation hint. No settings or defaults change.
+            invoke("设置为默认浏览器")
+            notice = wait_for(lambda: owned_window("#32770", "上次会话"), "The installer hint did not appear")
+            if user.GetDlgItem(notice, 1):
+                raise RuntimeError("The default browser hint interrupted browsing with a dialog")
+            user.PostMessageW(frame,0x0010,0,0)
+            if proc.wait(8)!=0:
+                raise RuntimeError("Could not close the session-window fixture")
+
+            launch_env=preview_env(root / "windows-url")
+            def send_shell(*args):
+                sender=subprocess.Popen([str(exe),*args],env=launch_env)
+                try:
+                    return sender.wait(8)
+                except subprocess.TimeoutExpired as error:
+                    sender.kill()
+                    sender.wait()
+                    raise RuntimeError(f"The secondary launcher did not exit: {args}") from error
+
+            cold=base + "/page/shell-cold?source=windows&escaped=%23#part"
+            warm=base + "/page/shell-warm?source=windows"
+            plain=base + "/page/shell-plain"
+            proc=subprocess.Popen([str(exe),"--open-url",cold],env=launch_env)
+            frame=browser_frame(proc)
+            edit=user.GetDlgItem(frame,1001)
+            wait_for(lambda: read_address()==cold and Fixture.closed_loaded.get("shell-cold"),"Cold shell URL did not load")
+            before=palette_rows()
+            for args,name,url in ((["--open-url",warm],"shell-warm",warm),([plain],"shell-plain",plain)):
+                if send_shell(*args)!=0:
+                    raise RuntimeError(f"The {name} launcher did not hand off its URL")
+                wait_for(lambda: read_address()==url and Fixture.closed_loaded.get(name),f"Warm shell URL did not load: {name}")
+            if send_shell()!=0 or read_address()!=plain or palette_rows()!=before+2:
+                raise RuntimeError("Reopening Moon changed the active URL or duplicated its window state")
+            for args in (["--open-url","extension://moon.session/session.html"],
+                         ["--open-url","file:///C:/Windows/win.ini"],
+                         ["--open-url","javascript:1"],
+                         ["--open-url",warm,"--smoke-quick"],
+                         ["--open-url","https://user@example.invalid/"]):
+                if send_shell(*args)==0:
+                    raise RuntimeError(f"Invalid shell activation was accepted: {args}")
+            if read_address()!=plain or palette_rows()!=before+2:
+                raise RuntimeError("A rejected shell activation changed the existing window")
+            print("default_browser_plugin=ok installer_hint=ok external_cold=ok external_handoff=ok launcher_reuse=ok invalid_url_rejected=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

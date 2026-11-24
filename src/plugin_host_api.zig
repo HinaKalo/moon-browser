@@ -53,6 +53,7 @@ fn applyLink(link: *LinkInvocation) sdk.LinkResult {
 pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
     return switch (method) {
         .@"host.getInfo", .@"settings.read", .@"settings.write", .@"ui.openPage" => null,
+        .@"browser.openDefaultApps" => .@"browser.defaultApp",
         .@"tabs.getActive" => .@"tabs.read",
         .@"lua.scripts.list", .@"lua.scripts.install", .@"lua.scripts.setEnabled", .@"lua.scripts.remove" => .@"lua.scripts.manage",
         .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive" => .@"lua.scripts.manage",
@@ -208,7 +209,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     }
     const params = object.get("params");
     switch (method) {
-        .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
+        .@"host.getInfo", .@"browser.openDefaultApps", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find", .@"pageSource.open", .@"pageSource.status",
         .@"popups.open", .@"popups.status", .@"downloads.clearCompleted", .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink",
@@ -665,6 +666,11 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"privacy.openPrivateWindow" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
             return sdk.result(output,id,native.moon_shell_open_private());
+        },
+        .@"browser.openDefaultApps" => {
+            if (!context.user_command or native.moon_shell_private()) return sdk.failure(output,id,.PermissionDenied);
+            const outcome: sdk.DefaultAppsResult = @enumFromInt(native.moon_shell_open_default_apps());
+            return sdk.result(output,id,outcome);
         },
         .@"search.getConfig" => {
             var engines: [sdk.search_custom_limit]sdk.SearchEngine = undefined;

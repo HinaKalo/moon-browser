@@ -12,7 +12,7 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params!=.object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
-    const Action = enum { restore, preferences };
+    const Action = enum { restore, preferences, defaultBrowser };
     const message: ?[]const u8 = switch (std.meta.stringToEnum(Action,action) orelse return error.InvalidCommand) {
         .restore => restore: {
             const response = try client.call(.@"tabs.session.restore",.{});
@@ -29,6 +29,16 @@ pub fn main() !void {
             const response = try client.call(.@"ui.openPage",.{});
             const value = response.get("result") orelse std.json.Value.null;
             break :open if (value==.bool and value.bool) null else "无法打开会话设置。";
+        },
+        .defaultBrowser => open: {
+            const response = try client.call(.@"browser.openDefaultApps",.{});
+            const value = sdk.string(response.get("result")) orelse break :open "请在插件管理中授予打开默认应用设置的权限。";
+            const outcome = std.meta.stringToEnum(sdk.DefaultAppsResult,value) orelse .unavailable;
+            break :open switch (outcome) {
+                .opened => null,
+                .installRequired => "请先安装 Installer 版，再从 Windows 默认应用中选择 Moon Browser。",
+                .unavailable => "无法打开 Windows 默认应用设置。",
+            };
         },
     };
     try client.reply(id,sdk.CommandResult{ .message=message,.toast=true });

@@ -40,6 +40,7 @@ const Grant = struct {
     window_fullscreen: ?bool = null,
     page_save: ?bool = null,
     tabs_groups: ?bool = null,
+    browser_default_app: ?bool = null,
     menu_items: []const []const u8 = &.{},
     hidden_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
@@ -223,6 +224,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"tabs.groups");
             plugin.grants.insert(.@"tabs.groups");
         }
+        if (std.mem.eql(u8,id,"moon.session") and plugin.enabled and requests.contains(.@"browser.defaultApp")) {
+            plugin.default_grants.insert(.@"browser.defaultApp");
+            plugin.grants.insert(.@"browser.defaultApp");
+        }
         if (std.mem.eql(u8,id,"moon.site-data") and plugin.enabled and requests.contains(.@"siteData.write")) {
             plugin.default_grants.insert(.@"siteData.write");
             plugin.grants.insert(.@"siteData.write");
@@ -337,6 +342,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"page.save")) plugin.grants.insert(.@"page.save");
         if (grant.enabled and (grant.tabs_groups orelse plugin.default_grants.contains(.@"tabs.groups")) and
             plugin.requests.contains(.@"tabs.groups")) plugin.grants.insert(.@"tabs.groups");
+        if (grant.enabled and (grant.browser_default_app orelse plugin.default_grants.contains(.@"browser.defaultApp")) and
+            plugin.requests.contains(.@"browser.defaultApp")) plugin.grants.insert(.@"browser.defaultApp");
         if (canContribute(plugin)) {
             for (grant.hidden_menu_items) |id| {
                 if (findAction(plugin,id)) |index| {
@@ -413,6 +420,7 @@ fn persist() bool {
         .window_fullscreen = plugin.grants.contains(.@"window.fullscreen"),
         .page_save = plugin.grants.contains(.@"page.save"),
         .tabs_groups = plugin.grants.contains(.@"tabs.groups"),
+        .browser_default_app = plugin.grants.contains(.@"browser.defaultApp"),
         .menu_items = menus[index][0..used],
         .hidden_menu_items = hidden_menus[index][0..hidden],
         .hotkey = saved_key,
@@ -451,6 +459,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"page.source" => "你从网页触发此插件命令时，它的专属页面可读取该网页已经加载的主文档源代码。",
                 .@"page.save" => "此插件可在你触发命令时打开保存对话框，将已加载的网页写到你选中的 HTML 文件。",
                 .@"tabs.groups" => "此插件可管理组名称、颜色与标签成员。读取标签网址仍需要单独授权。",
+                .@"browser.defaultApp" => "此插件可在你执行命令时打开 Windows 默认应用设置。系统会由你决定是否更改默认应用。",
                 .@"popups.manage" => "此插件可管理网站弹窗权限，并为触发命令的网页打开最近拦截的链接。",
                 .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",

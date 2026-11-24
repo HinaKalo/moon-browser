@@ -1,7 +1,7 @@
 {
   "id": "moon.session",
   "name": "上次会话",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonSession.exe",
@@ -9,8 +9,9 @@
   "contributes": {
     "commands": [
       { "id": "restore", "label": "恢复上次会话", "menu": "page" },
-      { "id": "preferences", "label": "管理启动与会话", "menu": "page" }
+      { "id": "preferences", "label": "管理启动与会话", "menu": "page" },
+      { "id": "defaultBrowser", "label": "设置为默认浏览器", "menu": "page" }
     ]
   },
-  "permissions": ["tabs.session.manage"]
+  "permissions": ["tabs.session.manage", "browser.defaultApp"]
 }

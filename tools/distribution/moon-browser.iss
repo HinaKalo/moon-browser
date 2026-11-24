@@ -15,6 +15,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
+ChangesAssociations=yes
 Compression=lzma2
 SolidCompression=yes
 ArchiveExtraction=full
@@ -28,6 +29,21 @@ Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
 
 [Icons]
 Name: "{group}\Moon Browser"; Filename: "{app}\MoonBrowser.exe"; WorkingDir: "{app}"; IconFilename: "{app}\MoonBrowser.exe"
+
+[Registry]
+Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "Moon Browser"; ValueData: "Software\Clients\StartMenuInternet\MoonBrowser\Capabilities"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\MoonBrowser"; ValueType: string; ValueData: "Moon Browser"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\MoonBrowser\DefaultIcon"; ValueType: string; ValueData: """{app}\MoonBrowser.exe"",0"
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\MoonBrowser\shell\open\command"; ValueType: string; ValueData: """{app}\MoonBrowser.exe"""
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\MoonBrowser\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "Moon Browser"
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\MoonBrowser\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Moon Browser opens HTTP and HTTPS links."
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\MoonBrowser\Capabilities"; ValueType: string; ValueName: "ApplicationIcon"; ValueData: """{app}\MoonBrowser.exe"",0"
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\MoonBrowser\Capabilities\URLAssociations"; ValueType: string; ValueName: "http"; ValueData: "MoonBrowser.URL"
+Root: HKCU; Subkey: "Software\Clients\StartMenuInternet\MoonBrowser\Capabilities\URLAssociations"; ValueType: string; ValueName: "https"; ValueData: "MoonBrowser.URL"
+Root: HKCU; Subkey: "Software\Classes\MoonBrowser.URL"; ValueType: string; ValueData: "Moon Browser URL"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\MoonBrowser.URL"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\MoonBrowser.URL\DefaultIcon"; ValueType: string; ValueData: """{app}\MoonBrowser.exe"",0"
+Root: HKCU; Subkey: "Software\Classes\MoonBrowser.URL\shell\open\command"; ValueType: string; ValueData: """{app}\MoonBrowser.exe"" --open-url ""%1"""
 
 [Run]
 Filename: "{app}\MoonBrowser.exe"; Description: "Launch Moon Browser"; Flags: postinstall nowait skipifsilent

@@ -1353,6 +1353,10 @@ static void queue_presentation(HWND hwnd) {
 }
 static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     switch (msg) {
+        case WM_COPYDATA: return !quitting && moon_instance_accept(hwnd,(const COPYDATASTRUCT *)lp);
+        case WM_NCDESTROY:
+            moon_instance_remove(hwnd);
+            break;
         case WM_NCCALCSIZE: {
             if (!fullscreen && IsZoomed(hwnd)) {
                 MONITORINFO area={.cbSize=sizeof(area)};
@@ -1633,9 +1637,25 @@ static void init_graphics(void) {
 static int run_shell(int argc, wchar_t **argv) {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    const bool explicit_link=argc>1 && wcscmp(argv[1],L"--open-url")==0;
+    if (explicit_link && argc!=3) return 1;
+    const bool web_link=explicit_link || (argc==2 &&
+        (_wcsnicmp(argv[1],L"https://",8)==0 || _wcsnicmp(argv[1],L"http://",7)==0));
+    char external_url[4096];
+    if (web_link && (!moon_utf8(argv[explicit_link?2:1],external_url,sizeof(external_url)) ||
+        !moon_external_url_valid(external_url))) return 1;
     if (!init_paths()) {
         MessageBoxW(NULL,L"Cannot open the Moon Browser profile.",L"Moon Browser",MB_ICONERROR);
         return 1;
+    }
+    if (!private_window && (argc==1 || web_link)) {
+        const MoonInstance state=moon_instance_enter(profile_dir,web_link?external_url:NULL);
+        if (state==MOON_INSTANCE_DELIVERED) return 0;
+        if (state==MOON_INSTANCE_FAILED) return 1;
+    }
+    if (explicit_link) {
+        argv[1]=argv[2];
+        argc=2;
     }
     if (private_window) theme=&dark;
     char appearance[4096], preference[8];
@@ -1685,6 +1705,7 @@ static int run_shell(int argc, wchar_t **argv) {
     ShowWindow(frame,SW_SHOW);
     UpdateWindow(frame);
     bool ready = moon_start(argc,(const uint16_t *const *)argv);
+    if (ready && !quitting) ready=moon_instance_ready(frame);
     if (!ready && !quitting) moon_quit(1);
     if (!quitting) SetTimer(frame,MAINTENANCE_TIMER,100,NULL);
     MSG msg = {0};
@@ -1729,6 +1750,7 @@ int moon_shell_run(void) {
     if (!argv) return 1;
     private_window=argc>1 && wcscmp(argv[1],L"--private")==0;
     const int result=run_shell(argc,argv);
+    moon_instance_leave();
     LocalFree(argv);
     return result;
 }

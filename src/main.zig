@@ -192,6 +192,30 @@ fn normalize(input: []const u8, buffer: []u8) ?[:0]const u8 {
 
     return search.resolve(value,buffer,plugins.systemEnabled(.@"search.manage"));
 }
+
+fn externalUrl(input: []const u8, buffer: []u8) ?[:0]const u8 {
+    if (!safeURL(input) or !std.unicode.utf8ValidateSlice(input)) return null;
+    return normalize(input,buffer);
+}
+
+export fn moon_external_url_valid(text: [*c]const u8) bool {
+    var buffer: [4096]u8 = undefined;
+    return text!=null and externalUrl(slice(text),&buffer)!=null;
+}
+
+export fn moon_external_url_open(text: [*c]const u8) bool {
+    if (stopped or count==0 or native.moon_shell_private() or text==null) return false;
+    var buffer: [4096]u8 = undefined;
+    const url=externalUrl(slice(text),&buffer) orelse return false;
+    const tab=&tabs[active];
+    if (tab.phase==.blank and !tab.pinned and tab.opening==.none) {
+        navigate(tab,url);
+    } else {
+        if (count==tabs.len) return false;
+        addTab(url,true);
+    }
+    return true;
+}
 fn applySettings(profile: []const u8) void {
     var path: [4096]u8 = undefined;
     const file = std.fmt.bufPrintSentinel(&path, "{s}\\memory.json", .{profile}, 0) catch return;
@@ -1768,6 +1792,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"page.source" => "允许查看当前网页源代码",
         .@"page.save" => "允许通过文件对话框保存当前网页",
         .@"tabs.groups" => "允许管理标签组",
+        .@"browser.defaultApp" => "允许打开 Windows 默认应用设置",
         .@"popups.manage" => "允许管理网站弹窗",
         .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",

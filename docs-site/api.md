@@ -97,6 +97,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteData.create` | `siteData.read`、`siteData.write` | 已绑定的活动面板传入 `{ group, generation, key, value }`。现有同名条目会保留。 |
 | `siteData.clear` | `siteData.read`、`siteData.write` | 已绑定的活动面板传入 `{ group, generation }`。系统确认后清空该来源的 `local` 或 `session`，返回 `started`、`cancelled` 或 `unavailable`。 |
 | `tabs.session.status` / `tabs.session.setPreferences` / `tabs.session.restore` / `tabs.session.forget` | `tabs.session.manage` | 查看会话状态、设置启动恢复、恢复或忘记上次普通窗口。参见[上次会话](./session)。 |
+| `browser.openDefaultApps` | `browser.defaultApp` | 原生用户命令传入 `{}`。打开当前用户的 Windows 默认应用设置，返回 `opened`、`installRequired` 或 `unavailable`。参见[默认浏览器](./session#默认浏览器)。 |
 | `bookmarks.importHtml` / `bookmarks.exportHtml` | `bookmarks.manage`、`bookmarks.transfer` | 通过原生文件对话框迁移 Netscape Bookmark HTML 文件。参见[书签](./library)。 |
 | `privacy.openPrivateWindow` | `privacy.privateWindow` | 从用户命令传入 `{}`，打开独立隐私窗口，返回启动是否成功。参见[隐私浏览](./private-window)。 |
 

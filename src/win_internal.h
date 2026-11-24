@@ -9,6 +9,12 @@ HWND moon_shell_content(void);
 bool moon_utf16(const char *text, wchar_t *output, size_t capacity);
 bool moon_utf8(const wchar_t *text, char *output, size_t capacity);
 bool moon_path(wchar_t *output, size_t capacity, const wchar_t *directory, const wchar_t *name);
+typedef enum { MOON_INSTANCE_OWNER, MOON_INSTANCE_DELIVERED, MOON_INSTANCE_FAILED } MoonInstance;
+MoonInstance moon_instance_enter(const char *profile, const char *url);
+bool moon_instance_accept(HWND window, const COPYDATASTRUCT *message);
+bool moon_instance_ready(HWND window);
+void moon_instance_remove(HWND window);
+void moon_instance_leave(void);
 
 typedef struct MoonDialogTheme {
     COLORREF panel, field, border, text, muted, accent, on_accent, danger, hover;

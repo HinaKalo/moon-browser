@@ -33,6 +33,7 @@ pub const Permission = enum {
     @"window.fullscreen",
     @"page.save",
     @"tabs.groups",
+    @"browser.defaultApp",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -116,6 +117,7 @@ pub const TabReorder = enum(c_int) { moved, unavailable, saveFailed };
 pub const TabGroupColor = enum(c_uint) { indigo, teal, amber, rose, slate };
 pub const TabGroup = struct { id: u32, name: []const u8, color: TabGroupColor, collapsed: bool = false };
 pub const TabGroupResult = enum(c_int) { saved, unavailable, limitReached, invalidName };
+pub const DefaultAppsResult = enum(c_int) { opened, installRequired, unavailable };
 pub const search_custom_limit = 5;
 pub const SearchEngine = struct { alias: []const u8, name: []const u8, template: []const u8 };
 pub const SearchConfig = struct { preferred: []const u8 = "g", custom: []const SearchEngine = &.{} };
@@ -218,6 +220,7 @@ pub const CommandResult = struct {
 
 pub const Method = enum {
     @"host.getInfo",
+    @"browser.openDefaultApps",
     @"tabs.getActive",
     @"lua.scripts.list",
     @"lua.scripts.install",
