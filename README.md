@@ -39,7 +39,7 @@ build 生成本地开发目录，package 打包本地开发用的自包含 ZIP�
 
 把包含 plugin.json 和插件 EXE 的文件夹放进 EXE 旁的 plugins 目录，或放进 profile\plugins。重启后从工具栏菜单启用插件，并单独授权读取标签信息。预览包附带 Active Tab Example。插件是以当前用户身份运行的本地程序。
 
-[插件开发文档](https://docs.browser.moonl.cloud/) · [插件 API 草案](https://docs.browser.moonl.cloud/api.html)
+[插件开发文档](https://docs.browser.moonl.cloud/) · [插件 API 2](https://docs.browser.moonl.cloud/api.html) · [Zig SDK](sdk/README.md)
 
 Lua 用户脚本可从工具栏「… → Lua 用户脚本」安装。随包的 `welcome.user.lua` 可作为网页定制起点。[Lua 用户脚本指南](https://docs.browser.moonl.cloud/lua-userscripts.html)
 

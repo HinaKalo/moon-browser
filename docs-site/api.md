@@ -1,67 +1,55 @@
-# 插件 API 草案
+# 插件 API 2
 
-下一版浏览器 API 与公开 SDK 的设计稿。当前浏览器提供 [Lua 用户脚本 API](./lua-userscripts)与[原生 EXE 预览协议](./protocol-v1)。两种运行时共用能力设计，调用形式分别是 Lua 模块和 JSON-RPC。
+Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`。原生 Windows EXE 可通过 JSON-RPC 调用宿主。现有 API 1 插件继续使用[原生预览协议](./protocol-v1)。普通 Lua 浏览器插件的入口在后续适配阶段，当前 Lua 网页脚本使用[用户脚本 API](./lua-userscripts)。
 
-## 插件清单
-
-每个插件有独立包版本、固定 ID 和兼容的 API 主版本。命令在清单中声明，宿主把同一条命令放进菜单和命令面板。插件只需注册一次处理函数。
+## 清单和权限
 
 ~~~json
 {
-  "id": "example.active-tab",
-  "name": "Active Tab",
+  "id": "example.system-tools",
+  "name": "System Tools",
   "version": "1.0.0",
   "apiVersion": 2,
-  "entry": "ActiveTab.exe",
-  "permissions": ["tabs.read"],
+  "runtime": "native",
+  "entry": "SystemTools.exe",
   "contributes": {
     "commands": [
-      { "id": "inspect", "label": "查看活动标签" }
+      { "id": "inspect", "label": "查看活动标签" },
+      { "id": "manage", "label": "管理 Lua 脚本" }
     ]
   },
+  "permissions": ["tabs.read", "lua.scripts.manage"],
   "events": ["tabs.changed"]
 }
 ~~~
 
-`entry` 是包内文件名。`id` 由发布者和插件名构成，安装时由宿主校验。命令 ID 在插件内唯一，宿主用插件 ID 与命令 ID 的组合寻址。包版本用于发布、升级和回滚，API 主版本用于宿主兼容性判断。
+将 `plugin.json` 和同目录 EXE 放进浏览器程序或配置目录下的 `plugins/<目录>`，重启后从工具栏菜单启用。命令在插件菜单与命令面板中使用同一 ID。每个插件可声明一到八条命令，ID 在插件内唯一。
 
-内置默认启用插件与可选插件使用同一份清单、API 和权限模型。宿主或市场目录决定来源和默认启用策略。隐私权限由用户授予，插件清单只能申请。新增权限需重新授权。
+插件启用与权限授权分别由用户确认。`tabs.read` 允许访问触发时的活动标签，`lua.scripts.manage` 允许管理已安装用户脚本。撤销权限后，后续调用失效。EXE 自身按当前 Windows 用户权限运行。
 
-## SDK 接口
+## 可调用方法
 
-以下用 TypeScript 表达语言无关的数据模型。Lua SDK 和 EXE 插件使用同一方法名、输入和结果，调用边界见[插件开发体系](./plugin-system)。
-
-| SDK 接口 | 权限 | 行为 |
+| 方法 | 权限 | 参数和结果 |
 | --- | --- | --- |
-| `moon.commands.handle(id, handler)` | 命令已声明 | 注册处理函数。返回 `{ message?: string }`，宿主负责展示。 |
-| `moon.tabs.getActive()` | `tabs.read` | 返回当前窗口活动标签的 `Tab \| null`。 |
-| `moon.tabs.onChanged(handler)` | `tabs.read` 且已声明事件 | 活动标签切换时调用，传入 `{ previousTabId, tabId }`。两者可为 `null`。 |
-| `moon.storage.get(key)` | 当前插件 | 返回 `{ found: false }` 或 `{ found: true, value }`。 |
-| `moon.storage.set(key, value)` | 当前插件 | 原子写入一个 JSON 值，成功返回 `null`。 |
-| `moon.storage.remove(key)` | 当前插件 | 删除一个键，重复删除可得到相同结果，成功返回 `null`。 |
+| `host.getInfo` | 无 | 可省略参数或使用 `{}`。返回 `{ apiVersion, browserVersion, luaVersion }`。 |
+| `tabs.getActive` | `tabs.read` | 返回触发该次调用的活动标签快照 `{ id, title, url }`，没有活动标签时为 `null`。 |
+| `lua.scripts.list` | `lua.scripts.manage` | 返回 `{ id, name, enabled }[]`。结果包含状态和名称。 |
+| `lua.scripts.install` | `lua.scripts.manage` | 传入 `{ sourceBase64 }`，内容为 UTF-8 源码的标准 Base64，返回保存后的脚本记录。新导入的脚本默认停用。 |
+| `lua.scripts.setEnabled` | `lua.scripts.manage` | 传入 `{ id, enabled }`，成功返回 `null`。首次启用时由浏览器展示网站范围并等待用户确认。 |
+| `lua.scripts.remove` | `lua.scripts.manage` | 传入 `{ id }`，成功返回 `null`。删除不存在的脚本返回 `NOT_FOUND`。 |
 
-~~~ts
-type Tab = { id: string; title: string; url: string };
+脚本 ID 是 64 位小写十六进制字符组成的不透明标识。同一份源码重复导入返回 `ALREADY_EXISTS`。脚本内容或匹配范围改动后要重新导入，首次启用重新确认。管理接口负责导入和状态，网页导航触发运行，宿主 Lua VM 执行代码。
 
-moon.commands.handle('inspect', async () => {
-  const tab = await moon.tabs.getActive();
-  return { message: tab?.title || '没有活动标签' };
-});
-~~~
+## 消息与生命周期
 
-标签 ID 是当前浏览器会话内的不透明字符串。热标签被回收后保留 ID，关闭标签或重启浏览器后原 ID 失效。`getActive()` 查询调用发生时的活动标签。事件 ID 对应该次切换，无需等查询返回才处理事件。
+每行一个 UTF-8 JSON-RPC 2.0 对象，输出后立即刷新 stdout。宿主每次触发启动一个独立进程，同一插件最多并行处理一次。宿主先发送 `plugin.initialize`，包含插件 ID、API 版本和已授予权限。插件用 `result: null` 确认，然后等待命令请求或事件通知。
 
-存储由宿主按浏览器配置和插件 ID 隔离，包含有界的键和值。授权检查统一在宿主执行。撤销权限后停止敏感事件，后续读取请求返回 `PERMISSION_DENIED`。这份权限表描述浏览器 API，进程的文件与网络权限由运行环境控制。
-
-## 进程和协议
-
-- 使用 UTF-8 NDJSON 传输 JSON-RPC 2.0。请求用命名参数对象和字符串 ID。一个连接内双方各自生成唯一 ID，预留 `h:` 和 `p:` 前缀。事件是无 ID 的通知，可以合并。
-- 宿主按需启动插件，先发送 `plugin.initialize`，提供 API 主版本与当前已授予权限。插件注册处理函数后确认。宿主为命令请求设置时限，空闲进程可回收。插件将长期状态存进 `storage`。
-- `commands.run` 由宿主请求执行，`tabs.changed` 由宿主通知。插件对宿主调用 `tabs.getActive`、`storage.get`、`storage.set` 或 `storage.remove`。不接受的协议版本在执行命令前结束握手。
-- 命令失败和超时由宿主显示。权限拒绝统一用 JSON-RPC 错误码 `-32001`，在 `error.data.reason` 中返回稳定的 `PERMISSION_DENIED`。参数非法和方法未知分别使用标准的 `-32602` 与 `-32601`。
+- 菜单与命令面板发送 `commands.run`。`params.id` 是清单中的命令。插件用同一请求 ID 回复 `{ message?: string }`，再以退出码 0 退出。
+- `tabs.changed` 是无 ID 通知，`params.tabId` 是标签 ID 或 `null`。只有声明该事件并获得 `tabs.read` 的插件会收到通知。插件处理后直接退出，繁忙时标签切换可合并。
+- 插件以 `p:1`、`p:2` 递增发送请求并逐条收取回复。宿主请求使用 `h:` 前缀。一行须小于 32 KiB，每次调用最多 24 个请求。初始化与通知有约 2 秒处理窗口，命令为处理本地交互保留最多 120 秒。
 
 ~~~json
-{"jsonrpc":"2.0","id":"h:1","method":"plugin.initialize","params":{"apiVersion":2,"permissions":["tabs.read"]}}
+{"jsonrpc":"2.0","id":"h:1","method":"plugin.initialize","params":{"apiVersion":2,"pluginId":"example.system-tools","permissions":["tabs.read"]}}
 {"jsonrpc":"2.0","id":"h:1","result":null}
 {"jsonrpc":"2.0","id":"h:2","method":"commands.run","params":{"id":"inspect"}}
 {"jsonrpc":"2.0","id":"p:1","method":"tabs.getActive","params":{}}
@@ -69,8 +57,24 @@ moon.commands.handle('inspect', async () => {
 {"jsonrpc":"2.0","id":"h:2","result":{"message":"Moon Browser"}}
 ~~~
 
-## 实现顺序
+## 稳定错误
 
-1. 从当前示例抽出可重复的协议测试，覆盖握手、命令、权限撤销、超时与崩溃。
-2. 先实现清单、命令与标签 API，再增加有配额的插件存储。宿主的协议检查和 SDK 一同验证。
-3. 公开版本化规范、清单 Schema、Zig SDK、可编译示例和兼容性测试。市场复用同一插件包格式，负责来源验证、版本分发与更新。
+客户端使用 `error.code` 与 `error.data.reason` 判断结果。
+
+| 错误码 | 原因 |
+| --- | --- |
+| `-32601` | `METHOD_NOT_FOUND` |
+| `-32602` | `INVALID_PARAMS` |
+| `-32603` | `INTERNAL_ERROR` |
+| `-32001` | `PERMISSION_DENIED` |
+| `-32002` | `CANCELLED` |
+| `-32003` | `LIMIT_EXCEEDED` |
+| `-32004` | `NOT_FOUND` |
+| `-32005` | `ALREADY_EXISTS` |
+| `-32006` | `INVALID_SCRIPT` |
+
+## SDK 和自举验收
+
+Zig SDK 包含协议类型、握手、命令返回和用户脚本导入方法。开发者可以使用这些类型，或按本页协议用其他语言通过 stdio 接入。仓库中的独立契约测试程序使用 SDK 验证宿主 API，开发包冒烟测试会启动该程序。
+
+[Zig SDK 和清单 Schema](https://github.com/HinaKalo/moon-browser/tree/main/sdk) · [独立契约测试源码](https://github.com/HinaKalo/moon-browser/blob/main/tests/plugin_contract_client.zig) · [插件开发体系](./plugin-system)

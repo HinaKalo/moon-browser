@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Moon Browser native plugin manifest, API 2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "version", "apiVersion", "runtime", "entry", "contributes"],
+  "properties": {
+    "id": { "type": "string", "maxLength": 95, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.[A-Za-z0-9_.-]*[A-Za-z0-9_-]$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$" },
+    "apiVersion": { "const": 2 },
+    "runtime": { "const": "native" },
+    "entry": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.[eE][xX][eE]$" },
+    "permissions": {
+      "type": "array",
+      "items": { "enum": ["tabs.read", "lua.scripts.manage"] }
+    },
+    "events": {
+      "type": "array",
+      "items": { "enum": ["tabs.changed"] }
+    },
+    "contributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands"],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "label"],
+            "properties": {
+              "id": { "type": "string", "maxLength": 63, "pattern": "^[A-Za-z0-9_-](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?$" },
+              "label": { "type": "string", "minLength": 1, "maxLength": 255 }
+            }
+          }
+        }
+      }
+    }
+  },
+  "if": {
+    "required": ["events"],
+    "properties": { "events": { "contains": { "const": "tabs.changed" } } }
+  },
+  "then": {
+    "required": ["permissions"],
+    "properties": { "permissions": { "contains": { "const": "tabs.read" } } }
+  }
+}

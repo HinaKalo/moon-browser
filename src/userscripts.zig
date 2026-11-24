@@ -1,10 +1,16 @@
 const std = @import("std");
 const native = @import("native");
+const sdk = @import("moon_plugin");
 
 const allocator = std.heap.page_allocator;
-const max_source = 16 * 1024;
-const max_scripts = 16;
-const Stored = struct { source: []const u8, enabled: bool };
+const max_source = sdk.lua_source_limit;
+pub const max_scripts = 16;
+const Stored = struct { source: []const u8, enabled: bool, approved: bool = true };
+pub const ServiceError = error{ InvalidScript, AlreadyExists, LimitExceeded, NotFound, Cancelled, InternalError };
+pub const Consent = struct {
+    context: *const anyopaque,
+    valid: *const fn (?*const anyopaque) callconv(.c) bool,
+};
 
 const Rule = struct {
     origin: []const u8,
@@ -15,10 +21,12 @@ const Rule = struct {
 
 const Script = struct {
     source: [:0]u8,
+    id: [64]u8 = undefined,
     name: [96:0]u8 = @splat(0),
     rules: [8]Rule = undefined,
     rule_count: usize = 0,
     enabled: bool,
+    approved: bool = false,
     last_error: [160:0]u8 = @splat(0),
 };
 
@@ -55,6 +63,9 @@ fn parse(raw: []const u8, enabled: bool) !Script {
         return error.InvalidScript;
     var script: Script = .{ .source = try allocator.dupeSentinel(u8, source, 0), .enabled = enabled };
     errdefer allocator.free(script.source);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(source, &hash, .{});
+    script.id = std.fmt.bytesToHex(hash, .lower);
     var lines = std.mem.splitScalar(u8, script.source, '\n');
     const first = lines.next() orelse return error.InvalidMetadata;
     if (!std.mem.eql(u8, std.mem.trim(u8, first, " \t\r"), "-- ==MoonUserScript==")) return error.InvalidMetadata;
@@ -93,7 +104,8 @@ pub fn init(profile: []const u8) void {
     const entries = std.json.parseFromSlice([]Stored, allocator, text(buffer), .{}) catch return;
     defer entries.deinit();
     for (entries.value[0..@min(entries.value.len, max_scripts)]) |entry| {
-        scripts[count] = parse(entry.source, entry.enabled) catch continue;
+        scripts[count] = parse(entry.source, entry.enabled and entry.approved) catch continue;
+        scripts[count].approved = entry.approved;
         count += 1;
     }
 }
@@ -103,7 +115,7 @@ fn save(excluded: ?usize) bool {
     var size: usize = 0;
     for (scripts[0..count], 0..) |*script, index| {
         if (excluded == index) continue;
-        items[size] = .{ .source = script.source, .enabled = script.enabled };
+        items[size] = .{ .source = script.source, .enabled = script.enabled, .approved = script.approved };
         size += 1;
     }
     const json = std.json.Stringify.valueAlloc(allocator, items[0..size], .{}) catch return false;
@@ -113,11 +125,98 @@ fn save(excluded: ?usize) bool {
     return native.moon_write_text(&store, terminated.ptr);
 }
 
-pub fn install(path: []const u8) void {
-    if (count == scripts.len) {
-        native.moon_shell_info("Lua 用户脚本", "已达到 16 个脚本上限。");
+fn find(id: []const u8) ?usize {
+    for (scripts[0..count], 0..) |*script, index| if (std.mem.eql(u8, &script.id, id)) return index;
+    return null;
+}
+
+fn describe(script: *const Script) sdk.Script {
+    return .{ .id = &script.id, .name = text(&script.name), .enabled = script.enabled };
+}
+
+pub fn list(output: *[max_scripts]sdk.Script) []const sdk.Script {
+    for (scripts[0..count], output[0..count]) |*script, *entry| entry.* = describe(script);
+    return output[0..count];
+}
+
+fn confirmScope(entry: *const Script) bool {
+    var message: [1800:0]u8 = @splat(0);
+    var writer: std.Io.Writer = .fixed(&message);
+    writer.print("“{s}”可修改以下匹配网页的内容。允许启用？\n\n", .{text(&entry.name)}) catch return false;
+    for (entry.rules[0..entry.rule_count]) |rule| {
+        writer.print("{s} {s}{s}{s}\n", .{ if (rule.excluded) "排除" else "允许", rule.origin, rule.path, if (rule.prefix) "*" else "" }) catch return false;
+    }
+    if (writer.end >= message.len) return false;
+    message[writer.end] = 0;
+    return native.moon_shell_confirm("启用 Lua 用户脚本", &message);
+}
+
+pub fn register(source: []const u8, enable_now: bool) ServiceError!sdk.Script {
+    if (count == scripts.len) return error.LimitExceeded;
+    var entry = parse(source, enable_now) catch |err| switch (err) {
+        error.OutOfMemory => return error.InternalError,
+        else => return error.InvalidScript,
+    };
+    errdefer allocator.free(entry.source);
+    if (find(&entry.id) != null) return error.AlreadyExists;
+    var message: [160]u8 = undefined;
+    if (!native.moon_lua_check(entry.source.ptr, &message, message.len)) return error.InvalidScript;
+    if (enable_now and !confirmScope(&entry)) return error.Cancelled;
+    if (count == scripts.len) return error.LimitExceeded;
+    if (find(&entry.id) != null) return error.AlreadyExists;
+    entry.approved = enable_now;
+    scripts[count] = entry;
+    count += 1;
+    if (!save(null)) {
+        count -= 1;
+        return error.InternalError;
+    }
+    return describe(&scripts[count - 1]);
+}
+
+pub fn setEnabled(id: []const u8, enabled: bool, consent: ?Consent) ServiceError!void {
+    const initial = find(id) orelse return error.NotFound;
+    if (scripts[initial].enabled == enabled) return;
+    if (enabled and !scripts[initial].approved) {
+        if (!confirmScope(&scripts[initial])) return error.Cancelled;
+        if (consent) |check| if (!check.valid(check.context)) return error.Cancelled;
+    }
+    const index = find(id) orelse return error.NotFound;
+    const script = &scripts[index];
+    const old_enabled = script.enabled;
+    const old_approved = script.approved;
+    script.enabled = enabled;
+    script.approved = script.approved or enabled;
+    if (save(null)) {
+        script.last_error[0] = 0;
         return;
     }
+    script.enabled = old_enabled;
+    script.approved = old_approved;
+    return error.InternalError;
+}
+
+pub fn unregister(id: []const u8) ServiceError!void {
+    const index = find(id) orelse return error.NotFound;
+    if (!save(index)) return error.InternalError;
+    allocator.free(scripts[index].source);
+    for (index..count - 1) |i| scripts[i] = scripts[i + 1];
+    count -= 1;
+}
+
+fn showError(err: ServiceError) void {
+    if (err == error.Cancelled) return;
+    native.moon_shell_info("Lua 用户脚本", switch (err) {
+        error.InvalidScript => "脚本格式或语法无效。请检查 @name、@api 1 和 @match。",
+        error.AlreadyExists => "此脚本已安装。",
+        error.LimitExceeded => "已达到 16 个脚本上限。",
+        error.NotFound => "找不到此脚本。",
+        error.InternalError => "无法保存到浏览器配置。",
+        error.Cancelled => unreachable,
+    });
+}
+
+pub fn install(path: []const u8) void {
     const file = allocator.dupeSentinel(u8, path, 0) catch return;
     defer allocator.free(file);
     var buffer: [max_source + 4]u8 = undefined;
@@ -125,63 +224,20 @@ pub fn install(path: []const u8) void {
         native.moon_shell_info("Lua 用户脚本", "无法读取脚本。请选择不超过 16 KiB 的 UTF-8 Lua 文件。");
         return;
     }
-    const entry = parse(text(&buffer), true) catch {
-        native.moon_shell_info("Lua 用户脚本", "脚本格式无效。请检查 @name、@api 1 和 @match。");
-        return;
-    };
-    var installed = false;
-    defer if (!installed) allocator.free(entry.source);
-    for (scripts[0..count]) |*existing| {
-        if (std.mem.eql(u8, existing.source, entry.source)) {
-            native.moon_shell_info("Lua 用户脚本", "此脚本已安装。");
-            return;
-        }
-    }
-    var message: [1800:0]u8 = @splat(0);
-    if (!native.moon_lua_check(entry.source.ptr, &message, message.len)) {
-        native.moon_shell_info("Lua 用户脚本语法错误", &message);
-        return;
-    }
-    var writer: std.Io.Writer = .fixed(&message);
-    writer.print("“{s}”可修改以下匹配网页的内容。安装并启用？\n\n", .{text(&entry.name)}) catch return;
-    for (entry.rules[0..entry.rule_count]) |rule| {
-        writer.print("{s} {s}{s}{s}\n", .{ if (rule.excluded) "排除" else "允许", rule.origin, rule.path, if (rule.prefix) "*" else "" }) catch return;
-    }
-    if (writer.end >= message.len) return;
-    message[writer.end] = 0;
-    if (!native.moon_shell_confirm("安装 Lua 用户脚本", &message)) return;
-    if (count == scripts.len) return;
-    scripts[count] = entry;
-    count += 1;
-    if (!save(null)) {
-        count -= 1;
-        native.moon_shell_info("Lua 用户脚本", "无法保存到浏览器配置。");
-        return;
-    }
-    installed = true;
+    _ = register(text(&buffer), true) catch |err| return showError(err);
 }
 
 pub fn toggle(index: usize) void {
     if (index >= count) return;
-    const script = &scripts[index];
-    script.enabled = !script.enabled;
-    if (save(null)) {
-        script.last_error[0] = 0;
-        return;
-    }
-    script.enabled = !script.enabled;
-    native.moon_shell_info("Lua 用户脚本", "无法保存到浏览器配置。");
+    const id = scripts[index].id;
+    setEnabled(&id, !scripts[index].enabled, null) catch |err| showError(err);
 }
 
 pub fn remove(index: usize) void {
-    if (index >= count or !native.moon_shell_confirm("移除 Lua 用户脚本？", &scripts[index].name)) return;
-    if (!save(index)) {
-        native.moon_shell_info("Lua 用户脚本", "无法保存到浏览器配置。");
-        return;
-    }
-    allocator.free(scripts[index].source);
-    for (index..count - 1) |i| scripts[i] = scripts[i + 1];
-    count -= 1;
+    if (index >= count) return;
+    const id = scripts[index].id;
+    if (!native.moon_shell_confirm("移除 Lua 用户脚本？", &scripts[index].name)) return;
+    unregister(&id) catch |err| showError(err);
 }
 
 fn matches(script: *const Script, origin: []const u8, path: []const u8) bool {

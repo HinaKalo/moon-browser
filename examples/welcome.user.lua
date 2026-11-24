@@ -1,8 +1,9 @@
 -- ==MoonUserScript==
--- @name Example 页面定制
+-- @name Moon Lua 演示
 -- @api 1
--- @match https://example.com/*
+-- @match https://docs.browser.moonl.cloud/lua-demo.html
 -- ==/MoonUserScript==
 
-moon.dom.setText("h1", "你好，Moon Browser")
-moon.dom.addClass("h1", "moon-custom-heading")
+moon.dom.setText("#lua-status", "Lua 脚本已运行")
+moon.dom.hide("#demo-banner")
+moon.dom.addClass("#lua-status", "success")

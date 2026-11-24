@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moon Browser · Lua 用户脚本演示</title>
+<style>
+  body { margin: 0; color: #19213c; background: #f4f6fb; font: 16px/1.6 system-ui, sans-serif; }
+  main { max-width: 40rem; margin: clamp(2rem, 10vw, 6rem) auto; padding: 0 1.5rem; }
+  h1 { line-height: 1.2; font-size: clamp(2rem, 6vw, 3rem); }
+  #lua-status { border-left: .3rem solid #626c87; padding: .8rem 1rem; background: white; font-weight: 650; }
+  #lua-status.success { border-color: #178157; color: #11623f; }
+  #demo-banner { margin: 1.5rem 0; padding: 1rem; border: 1px solid #e2c782; background: #fff5d9; }
+  a { color: #344db3; }
+</style>
+<main>
+  <h1>Lua 用户脚本演示</h1>
+  <p id="lua-status" role="status">Lua 脚本尚未运行</p>
+  <aside id="demo-banner">示例横幅。脚本运行后，这一栏会隐藏。</aside>
+  <p><a href="/welcome.user.lua" download>下载演示脚本</a>，从 Moon Browser 的「… → Lua 用户脚本」安装并授权，然后刷新本页。</p>
+  <p><a href="/lua-userscripts.html">查看脚本接口与匹配规则</a></p>
+</main>
+</html>

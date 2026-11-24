@@ -9,7 +9,7 @@ enum MoonCommand {
     MOON_ADDRESS, MOON_TICK, MOON_INPUT, MOON_DIAGNOSTICS, MOON_PLUGIN_COMMAND,
     MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
     MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES,
-    MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE
+    MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_GRANT_LUA
 };
 enum MoonEngineEvent {
     MOON_STARTED = 1, MOON_COMMITTED, MOON_FINISHED, MOON_FAILED, MOON_CHANGED,
@@ -79,7 +79,12 @@ void moon_engine_test_fallback(bool enabled);
 MoonPipe *moon_pipe_open(const char *executable, uint32_t *error);
 bool moon_pipe_send(MoonPipe *pipe, const char *line);
 int moon_pipe_read(MoonPipe *pipe, char *data, size_t capacity);
+typedef bool (*MoonPipeActive)(const void *context);
+int moon_pipe_read_active(MoonPipe *pipe, char *data, size_t capacity, MoonPipeActive active, const void *context);
 bool moon_pipe_close(MoonPipe *pipe);
+void moon_pipe_set_budget(MoonPipe *pipe, unsigned millis);
+void moon_plugin_wait(void);
+const char *moon_lua_version(void);
 bool moon_lua_check(const char *source, char *error, size_t cap);
 int moon_lua_userscript(const char *source, const char *url, MoonDomOp *ops, char *error, size_t cap);
 size_t moon_userscript_count(void);
@@ -97,7 +102,8 @@ unsigned moon_tab_flags(size_t index);
 unsigned moon_controls(void);
 size_t moon_plugin_count(void);
 const char *moon_plugin_label(size_t index);
-const char *moon_plugin_action(size_t index);
+size_t moon_plugin_action_count(size_t index);
+const char *moon_plugin_action(size_t index, size_t command);
 unsigned moon_plugin_flags(size_t index);
 size_t moon_action_count(bool home);
 const char *moon_action_label(size_t index, bool home);

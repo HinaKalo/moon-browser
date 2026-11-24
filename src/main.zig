@@ -614,8 +614,9 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_DIAGNOSTICS => diagnostics(),
         native.MOON_TICK => maintenance(),
         native.MOON_PLUGIN_ENABLE => plugins.enable(index),
-        native.MOON_PLUGIN_GRANT => plugins.toggleGrant(index),
-        native.MOON_PLUGIN_COMMAND => plugins.command(index, tabSnapshot()),
+        native.MOON_PLUGIN_GRANT => plugins.toggleGrant(index, .@"tabs.read"),
+        native.MOON_PLUGIN_GRANT_LUA => plugins.toggleGrant(index, .@"lua.scripts.manage"),
+        native.MOON_PLUGIN_COMMAND => plugins.command(index >> 32, index & 0xffffffff, tabSnapshot()),
         native.MOON_FOCUS_ADDRESS => native.moon_shell_focus_address(),
         native.MOON_TOGGLE_SIDEBAR => native.moon_shell_toggle_sidebar(),
         native.MOON_TOGGLE_THEME => native.moon_shell_toggle_theme(),
@@ -734,14 +735,17 @@ export fn moon_plugin_count() usize {
 export fn moon_plugin_label(index: usize) [*:0]const u8 {
     return plugins.label(index);
 }
-export fn moon_plugin_action(index: usize) [*:0]const u8 {
-    return plugins.action(index);
+export fn moon_plugin_action_count(index: usize) usize {
+    return plugins.actionCount(index);
+}
+export fn moon_plugin_action(index: usize, command: usize) [*:0]const u8 {
+    return plugins.action(index, command);
 }
 export fn moon_plugin_flags(index: usize) c_uint {
     return plugins.flags(index);
 }
 
-const Action = union(enum) { built_in: ShellAction, plugin: usize };
+const Action = union(enum) { built_in: ShellAction, plugin: struct { index: usize, command: usize } };
 
 fn actionAt(index: usize, home: bool) ?Action {
     var remaining = index;
@@ -752,8 +756,9 @@ fn actionAt(index: usize, home: bool) ?Action {
     }
     for (0..plugins.count()) |plugin| {
         if (plugins.flags(plugin) & 1 == 0) continue;
-        if (remaining == 0) return .{ .plugin = plugin };
-        remaining -= 1;
+        const commands = plugins.actionCount(plugin);
+        if (remaining < commands) return .{ .plugin = .{ .index = plugin, .command = remaining } };
+        remaining -= commands;
     }
     return null;
 }
@@ -761,21 +766,23 @@ fn actionAt(index: usize, home: bool) ?Action {
 export fn moon_action_count(home: bool) usize {
     var actions: usize = 0;
     for (shell_actions) |action| actions += @intFromBool(!home or action.home);
-    for (0..plugins.count()) |plugin| actions += @intFromBool(plugins.flags(plugin) & 1 != 0);
+    for (0..plugins.count()) |plugin| {
+        if (plugins.flags(plugin) & 1 != 0) actions += plugins.actionCount(plugin);
+    }
     return actions;
 }
 
 export fn moon_action_label(index: usize, home: bool) [*:0]const u8 {
     return switch (actionAt(index, home) orelse return "") {
         .built_in => |action| action.label,
-        .plugin => |plugin| plugins.action(plugin),
+        .plugin => |plugin| plugins.action(plugin.index, plugin.command),
     };
 }
 
 export fn moon_action_run(index: usize, home: bool) void {
     switch (actionAt(index, home) orelse return) {
         .built_in => |action| moon_command(action.command, 0, null),
-        .plugin => |plugin| plugins.command(plugin, tabSnapshot()),
+        .plugin => |plugin| plugins.command(plugin.index, plugin.command, tabSnapshot()),
     }
 }
 export fn moon_plugin_worker(task: ?*anyopaque) void {
@@ -913,6 +920,12 @@ fn smokeTick(now: u64) void {
                 if (!plugins.smokeStart(0, plugin_step, tabSnapshot())) return failSmoke("sample plugin launch");
                 return;
             }
+            const api_fixture = plugins.smokeHasContract();
+            if (api_fixture and plugin_step <= 8) {
+                if (!plugins.smokeContract(plugin_step, tabSnapshot())) return failSmoke("V2 contract client launch");
+                return;
+            }
+            if (api_fixture) log("plugin_api_v2=ok", .{});
             smoke = .download;
             _ = native.moon_engine_test_download(null, &smoke_download);
             var url: [4096]u8 = undefined;

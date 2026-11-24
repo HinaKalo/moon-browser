@@ -1,6 +1,6 @@
 # 原生 EXE 插件快速开始
 
-网页定制从 [Lua 用户脚本](./lua-userscripts)开始。此页说明需要独立原生进程的系统级插件。
+网页定制从 [Lua 用户脚本](./lua-userscripts)开始。新系统级插件使用 [API 2 和 SDK](./api)。下面说明随附 API 1 原生示例的用法。
 
 Moon Browser 的预览版插件由一个 Windows 可执行文件和同目录的 `plugin.json` 组成。宿主在命令执行或标签切换时启动插件，用标准输入和标准输出交换 JSON-RPC 消息。
 

@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 from threading import Event, Thread
@@ -37,20 +38,35 @@ CHECKS = (
 
 class Fixture(BaseHTTPRequestHandler):
     seen_unicode = Event()
+    seen_lua_demo = Event()
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
         if path == "/download":
             data, content_type = PAYLOAD, "application/octet-stream"
+        elif path == "/lua-demo-verified":
+            self.seen_lua_demo.set()
+            data, content_type = b"ok", "text/plain"
         elif path.startswith("/page/"):
             name = path.removeprefix("/page/")
             if name == "中文":
                 self.seen_unicode.set()
+            demo = ""
+            if name == "initial":
+                demo = (
+                    '<p id="lua-status">Lua 脚本尚未运行</p><aside id="demo-banner">示例横幅</aside>'
+                    '<script>new MutationObserver((_, observer) => {'
+                    'const status = document.getElementById("lua-status");'
+                    'if (status.textContent === "Lua 脚本已运行" && status.classList.contains("success")'
+                    ' && document.getElementById("demo-banner").hidden) {'
+                    'observer.disconnect(); fetch("/lua-demo-verified"); }'
+                    '}).observe(document.body, {childList:true,subtree:true,attributes:true});</script>'
+                )
             data = (
                 "<!doctype html><meta charset=utf-8>"
                 f"<title>Moon fixture {name}</title>"
                 '<main style="font:32px Segoe UI;background:#375aaf;color:white;padding:45px">'
-                "Moon Browser · 本地渲染验证</main><input id=entry placeholder='输入'>"
+                "Moon Browser · 本地渲染验证</main><input id=entry placeholder='输入'>" + demo
             ).encode()
             content_type = "text/html; charset=utf-8"
         else:
@@ -76,6 +92,33 @@ def preview_env(root):
         **os.environ,
         "MOON_BROWSER_PROFILE_DIR": str(root / "profile"),
     }
+
+
+def answer_contract_prompts(proc):
+    """Respond only to this test browser's Lua approval dialogs."""
+    import ctypes
+    from ctypes import wintypes as wt
+
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    user.FindWindowExW.argtypes = [wt.HWND, wt.HWND, wt.LPCWSTR, wt.LPCWSTR]
+    user.FindWindowExW.restype = wt.HWND
+    user.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+    user.IsWindowVisible.argtypes = [wt.HWND]
+    user.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+    for answer in (7, 6):  # IDNO, then IDYES
+        while proc.poll() is None:
+            dialog = None
+            while dialog := user.FindWindowExW(None, dialog, "#32770", "启用 Lua 用户脚本"):
+                owner = wt.DWORD()
+                user.GetWindowThreadProcessId(dialog, ctypes.byref(owner))
+                if owner.value == proc.pid and user.IsWindowVisible(dialog):
+                    break
+            if dialog is not None:
+                user.PostMessageW(dialog, 0x0111, answer, 0)  # WM_COMMAND
+                while proc.poll() is None and user.IsWindowVisible(dialog):
+                    sleep(0.02)
+                break
+            sleep(0.05)
 
 
 def run_browser(exe, base, root, force_pressure, fallback, quick):
@@ -104,7 +147,28 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
         userscript("Moon Lua smoke disabled", second, change_second, enabled=False),
         userscript("Moon Lua smoke wrong origin", second.replace("127.0.0.1", "localhost"), change_second),
     ]
+    bundled_demo = Path(__file__).resolve().parent.parent / "examples" / "welcome.user.lua"
+    demo_source = bundled_demo.read_text(encoding="utf-8").replace(
+        "https://docs.browser.moonl.cloud/lua-demo.html", initial, 1
+    )
+    scripts.append({"enabled": True, "source": demo_source})
+    Fixture.seen_lua_demo.clear()
     (profile / "lua-userscripts.json").write_text(json.dumps(scripts), encoding="utf-8")
+    contract_client = exe.parent / "tests" / "MoonPluginContractClient.exe"
+    if contract_client.exists():
+        target = profile / "plugins" / "api-contract"
+        target.mkdir(parents=True)
+        shutil.copyfile(contract_client, target / contract_client.name)
+        manifest = {
+            "id": "moon.api-contract", "name": "Plugin API contract",
+            "version": "1.0.0", "apiVersion": 2, "runtime": "native",
+            "entry": contract_client.name,
+            "contributes": {"commands": [{"id": "deny", "label": "Test denied API"},
+                                         {"id": "exercise", "label": "Test granted API"}]},
+            "permissions": ["tabs.read", "lua.scripts.manage"],
+            "events": ["tabs.changed"],
+        }
+        (target / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
     if force_pressure:
         (profile / "memory.json").write_text(
             json.dumps({"pressure_mib": 128, "target_mib": 96}), encoding="utf-8"
@@ -115,15 +179,30 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
         args += ["--gdi"]
     if quick:
         args += ["--smoke-quick"]
+    browser = subprocess.Popen(args, env=env)
+    if contract_client.exists():
+        Thread(target=answer_contract_prompts, args=(browser,), daemon=True).start()
     try:
-        result = subprocess.run(args, env=env, timeout=320, check=False)
+        status = browser.wait(timeout=320)
+    except subprocess.TimeoutExpired:
+        browser.kill()
+        browser.wait()
+        raise
     finally:
         log = report.read_text(encoding="utf-8") if report.exists() else ""
         print(log, end="", flush=True)
     skipped = ("tab_stress", "warm_switch") if quick else ()
     missing = [check for check in CHECKS if check not in log and not check.startswith(skipped)]
-    if result.returncode or missing:
-        raise RuntimeError(f"Browser exit {result.returncode}; missing checks: {missing}")
+    if contract_client.exists() and "plugin_api_v2=ok" not in log:
+        missing.append("plugin_api_v2=ok")
+    if status or missing:
+        contract_error = profile / "plugins" / "api-contract" / "contract-error.txt"
+        if contract_error.exists():
+            print("Plugin contract client:", contract_error.read_text(encoding="utf-8"))
+        raise RuntimeError(f"Browser exit {status}; missing checks: {missing}")
+    if not Fixture.seen_lua_demo.is_set():
+        raise RuntimeError("The downloadable Lua demo did not visibly change its three targets")
+    print("lua_public_demo=ok", flush=True)
     if force_pressure and "pressure=1" not in log:
         raise RuntimeError("Configured pressure path did not run")
     if not quick:

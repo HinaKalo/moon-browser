@@ -5,6 +5,7 @@ Push-Location -LiteralPath $PSScriptRoot
 try {
     pnpm install --frozen-lockfile
     pnpm build
+    Copy-Item -LiteralPath '..\examples\welcome.user.lua' -Destination '.vitepress\dist\welcome.user.lua'
     $archive = [IO.Path]::GetTempFileName()
     try {
         tar -czf $archive -C .vitepress/dist .

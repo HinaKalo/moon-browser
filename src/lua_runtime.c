@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+const char *moon_lua_version(void) {
+    return LUA_VERSION_MAJOR "." LUA_VERSION_MINOR "." LUA_VERSION_RELEASE;
+}
+
 typedef struct LuaBudget {
     size_t memory;
     unsigned checks;

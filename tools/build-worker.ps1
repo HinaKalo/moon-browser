@@ -98,6 +98,7 @@ $prefix = Join-Path $work 'zig-out'
 Invoke-Native 'zig' @('build','-Doptimize=ReleaseSafe','--prefix',$prefix)
 $exe = Join-Path $prefix 'bin\MoonBrowser.exe'
 $sample = Join-Path $prefix 'bin\MoonExamplePlugin.exe'
+$contractClient = Join-Path $prefix 'bin\MoonPluginContractClient.exe'
 $docs = @(
     $EngineLock
     (Join-Path $repo 'README.md')
@@ -109,7 +110,7 @@ if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $sample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $sample + $contractClient + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -129,6 +130,8 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $example = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\example')).FullName
     Copy-Item -LiteralPath $sample -Destination $example
     Copy-Item -LiteralPath (Join-Path $repo 'examples\plugin.json') -Destination $example
+    $fixtures = [IO.Directory]::CreateDirectory((Join-Path $stage 'tests')).FullName
+    Copy-Item -LiteralPath $contractClient -Destination $fixtures
     $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $artifact))
     [IO.Directory]::Move($stage, $artifact)
 }

@@ -3,7 +3,7 @@
 #include <string.h>
 #include <wchar.h>
 
-enum { PIPE_CAPACITY = 65536, FRAME_LIMIT = 16384 };
+enum { PIPE_CAPACITY = 65536, FRAME_LIMIT = 32768 };
 struct MoonPipe {
     HANDLE process, job, input, output;
     uint64_t deadline;
@@ -21,6 +21,8 @@ bool moon_plugin_thread(void *task) {
     CloseHandle(thread);
     return true;
 }
+void moon_plugin_wait(void) { Sleep(8); }
+void moon_pipe_set_budget(MoonPipe *pipe, unsigned millis) { pipe->deadline = GetTickCount64() + millis; }
 MoonPipe *moon_pipe_open(const char *executable, uint32_t *error) {
     *error = ERROR_INVALID_PARAMETER;
     wchar_t path[2048], cwd[2048];
@@ -84,10 +86,11 @@ bool moon_pipe_send(MoonPipe *pipe, const char *line) {
     return length > 0 && length < FRAME_LIMIT && GetTickCount64() < pipe->deadline &&
         WriteFile(pipe->input,line,(DWORD)length,&sent,NULL) && sent == length;
 }
-int moon_pipe_read(MoonPipe *pipe, char *data, size_t capacity) {
+int moon_pipe_read_active(MoonPipe *pipe, char *data, size_t capacity, MoonPipeActive active, const void *context) {
     size_t received = 0;
     while (GetTickCount64() < pipe->deadline) {
         if (pipe->consumed == pipe->buffered) {
+            if (active && !active(context)) return -2;
             DWORD available = 0, got = 0;
             if (!PeekNamedPipe(pipe->output,NULL,0,NULL,&available,NULL))
                 return WaitForSingleObject(pipe->process,10) == WAIT_OBJECT_0 ? -3 : -1;
@@ -112,6 +115,9 @@ int moon_pipe_read(MoonPipe *pipe, char *data, size_t capacity) {
         data[received++] = ch;
     }
     return -2;
+}
+int moon_pipe_read(MoonPipe *pipe, char *data, size_t capacity) {
+    return moon_pipe_read_active(pipe,data,capacity,NULL,NULL);
 }
 bool moon_pipe_close(MoonPipe *pipe) {
     dispose(&pipe->input); dispose(&pipe->output);

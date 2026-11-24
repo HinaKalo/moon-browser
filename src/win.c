@@ -48,7 +48,7 @@ static const Theme dark = {
 static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
-enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_PLUGIN_BASE = 100,
+enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_PLUGIN_BASE = 100, MENU_PLUGIN_STRIDE = 11,
        MENU_SCRIPTS_PICK = 300, MENU_SCRIPTS_BASE = 310 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        PALETTE_TAB_OFFSET = 1000 };
@@ -653,14 +653,17 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     if (count) AppendMenuW(popup,MF_SEPARATOR,0,NULL);
     for(size_t i=0;i<count;++i) {
         wchar_t name[256],action[256];
-        if (!moon_utf16(moon_plugin_label(i),name,ARRAYSIZE(name)) ||
-            !moon_utf16(moon_plugin_action(i),action,ARRAYSIZE(action))) continue;
+        if (!moon_utf16(moon_plugin_label(i),name,ARRAYSIZE(name))) continue;
         HMENU sub=CreatePopupMenu();
         if (!sub) continue;
-        unsigned flags=moon_plugin_flags(i), id=MENU_PLUGIN_BASE+(unsigned)i*3;
+        unsigned flags=moon_plugin_flags(i), id=MENU_PLUGIN_BASE+(unsigned)i*MENU_PLUGIN_STRIDE;
         AppendMenuW(sub,MF_STRING|(flags&1?MF_CHECKED:0),id,L"\u542f\u7528\u672c\u5730\u63d2\u4ef6");
         AppendMenuW(sub,MF_STRING|(flags&2?MF_CHECKED:0),id+1,L"\u5141\u8bb8\u8bfb\u53d6\u6807\u9898\u548c\u7f51\u5740");
-        AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+2,action);
+        if (flags&8) AppendMenuW(sub,MF_STRING|(flags&4?MF_CHECKED:0),id+2,L"允许管理 Lua 用户脚本");
+        for(size_t j=0;j<moon_plugin_action_count(i);++j) {
+            if (moon_utf16(moon_plugin_action(i,j),action,ARRAYSIZE(action)))
+                AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+3+j,action);
+        }
         AppendMenuW(popup,MF_POPUP,(UINT_PTR)sub,name);
     }
     MapWindowPoints(hwnd,NULL,(POINT *)&button,2);
@@ -684,8 +687,10 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     }
     else if (command>=MENU_PLUGIN_BASE) {
         unsigned value=command-MENU_PLUGIN_BASE;
-        const int actions[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_COMMAND};
-        moon_command(actions[value%3],value/3,NULL);
+        const unsigned offset=value%MENU_PLUGIN_STRIDE, plugin=value/MENU_PLUGIN_STRIDE;
+        const int grants[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_GRANT_LUA};
+        if (offset<ARRAYSIZE(grants)) moon_command(grants[offset],plugin,NULL);
+        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-3),NULL);
         moon_shell_refresh();
     }
 }

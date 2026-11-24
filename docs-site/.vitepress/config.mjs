@@ -9,17 +9,17 @@ export default defineConfig({
     nav: [
       { text: '快速开始', link: '/guide' },
       { text: 'Lua 用户脚本', link: '/lua-userscripts' },
-      { text: 'API 草案', link: '/api' }
+      { text: '插件 API', link: '/api' }
     ],
     sidebar: [
       { text: '当前预览版', items: [
         { text: '快速开始', link: '/guide' },
         { text: 'Lua 用户脚本', link: '/lua-userscripts' },
-        { text: '原生插件协议', link: '/protocol-v1' }
+        { text: '插件 API 2', link: '/api' },
+        { text: '原生插件协议 1', link: '/protocol-v1' }
       ] },
       { text: '下一版设计', items: [
-        { text: '插件体系与开发规范', link: '/plugin-system' },
-        { text: '统一 API 草案', link: '/api' }
+        { text: '插件体系与开发规范', link: '/plugin-system' }
       ] }
     ],
     search: { provider: 'local' },

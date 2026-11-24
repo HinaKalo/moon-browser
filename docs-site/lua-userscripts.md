@@ -5,19 +5,20 @@ Moon Browser 0.1.0-preview.4 内置 Lua 5.4.9。用户脚本扩展可以按网�
 ## 安装第一个脚本
 
 1. 打开工具栏「… → Lua 用户脚本 → 安装 Lua 脚本」。
-2. 选择随浏览器提供的 `welcome.user.lua`，或选择符合下方格式的文件。
-3. 核对要访问的网站范围，确认安装后访问 `https://example.com/`。已打开的页面可刷新。
+2. [下载演示脚本](https://docs.browser.moonl.cloud/welcome.user.lua)并选择这个文件。安装过旧版演示时，可在菜单里移除旧条目。
+3. 核对网址范围并确认安装，访问或刷新[演示页](https://docs.browser.moonl.cloud/lua-demo.html)。状态应变成「Lua 脚本已运行」，示例横幅应消失。
 4. 从同一菜单启用、停用或移除脚本。状态和已授权的脚本副本保存在当前浏览器配置中。
 
 ~~~lua
 -- ==MoonUserScript==
--- @name Example 页面定制
+-- @name Moon Lua 演示
 -- @api 1
--- @match https://example.com/*
+-- @match https://docs.browser.moonl.cloud/lua-demo.html
 -- ==/MoonUserScript==
 
-moon.dom.setText("h1", "你好，Moon Browser")
-moon.dom.addClass("h1", "moon-custom-heading")
+moon.dom.setText("#lua-status", "Lua 脚本已运行")
+moon.dom.hide("#demo-banner")
+moon.dom.addClass("#lua-status", "success")
 ~~~
 
 ## 匹配规则

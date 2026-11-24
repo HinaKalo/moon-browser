@@ -19,6 +19,10 @@ var announced: u64 = 0;
 var requested = false;
 var probe_log: [4096:0]u8 = @splat(0);
 
+pub fn versionName() []const u8 {
+    return std.mem.sliceTo(&version, 0);
+}
+
 pub fn configure(app_dir: []const u8, now: u64) void {
     var memory: [1024]u8 = undefined;
     var allocator = std.heap.FixedBufferAllocator.init(&memory);
