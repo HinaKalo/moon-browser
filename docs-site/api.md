@@ -76,6 +76,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `tabs.togglePinned` / `tabs.toggleMuted` | `tabs.organize` | 在用户命令中传入 `{}`，切换触发该命令的标签的固定或静音状态。参见[固定与静音标签](./tab-tools)。 |
 | `tabs.duplicate` / `tabs.copyAddress` / `tabs.closeGroup` | `tabs.manage` | 从用户命令复制标签、复制网址或选择范围批量关闭标签。参见[标签管理](./tab-tools)。 |
 | `search.getConfig` / `search.setConfig` | `search.manage` | 读取和保存默认搜索引擎与自定义关键词。参见[搜索引擎](./search)。 |
+| `siteData.update` | `siteData.read`、`siteData.write` | 从已绑定的站点面板编辑或删除 Local Storage／Session Storage 条目，提交后查看新快照中的操作结果。参见[站点数据](./site-data)。 |
 | `privacy.openPrivateWindow` | `privacy.privateWindow` | 从用户命令传入 `{}`，打开独立隐私窗口，返回启动是否成功。参见[隐私浏览](./private-window)。 |
 
 脚本 ID 是 64 位小写十六进制字符组成的不透明标识。同一份源码重复导入返回 `ALREADY_EXISTS`。脚本内容或匹配范围改动后要重新导入，首次启用重新确认。管理接口负责导入和状态，网页导航触发运行，宿主 Lua VM 执行代码。

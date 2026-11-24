@@ -32,6 +32,7 @@ const Grant = struct {
     private_window: bool = false,
     tabs_manage: ?bool = null,
     search_manage: bool = false,
+    site_data_write: ?bool = null,
     menu_items: []const []const u8 = &.{},
     hidden_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
@@ -183,6 +184,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"tabs.manage");
             plugin.grants.insert(.@"tabs.manage");
         }
+        if (std.mem.eql(u8,id,"moon.site-data") and plugin.enabled and requests.contains(.@"siteData.write")) {
+            plugin.default_grants.insert(.@"siteData.write");
+            plugin.grants.insert(.@"siteData.write");
+        }
         if (std.mem.eql(u8,id,"moon.blocker") and requests.contains(.@"network.filter"))
             plugin.default_grants.insert(.@"network.filter");
     }
@@ -265,6 +270,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and (grant.tabs_manage orelse plugin.default_grants.contains(.@"tabs.manage")) and
             plugin.requests.contains(.@"tabs.manage")) plugin.grants.insert(.@"tabs.manage");
         if (grant.enabled and grant.search_manage and plugin.requests.contains(.@"search.manage")) plugin.grants.insert(.@"search.manage");
+        if (grant.enabled and (grant.site_data_write orelse plugin.default_grants.contains(.@"siteData.write")) and
+            plugin.requests.contains(.@"siteData.write")) plugin.grants.insert(.@"siteData.write");
         if (canContribute(plugin)) {
             for (grant.hidden_menu_items) |id| {
                 if (findAction(plugin,id)) |index| {
@@ -331,6 +338,7 @@ fn persist() bool {
         .private_window = plugin.grants.contains(.@"privacy.privateWindow"),
         .tabs_manage = plugin.grants.contains(.@"tabs.manage"),
         .search_manage = plugin.grants.contains(.@"search.manage"),
+        .site_data_write = plugin.grants.contains(.@"siteData.write"),
         .menu_items = menus[index][0..used],
         .hidden_menu_items = hidden_menus[index][0..hidden],
         .hotkey = saved_key,
@@ -368,6 +376,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",
                 .@"downloads.manage" => "此插件可读取本机下载记录、取消传输，并在文件夹中显示已保存的文件。",
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
+                .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
                 .@"page.reading" => "此插件可在当前页打开查找栏，并调整页面缩放。",
                 .@"tabs.closed.manage" => "此插件可查看最近关闭标签的标题和站点，并恢复或清空这些标签。",
                 .@"privacy.clear" => "此插件可以请求清除所选浏览数据。浏览器会在删除前单独确认。",

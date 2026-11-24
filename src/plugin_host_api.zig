@@ -38,6 +38,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => .@"downloads.manage",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
+        .@"siteData.update" => .@"siteData.write",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"tabs.togglePinned", .@"tabs.toggleMuted" => .@"tabs.organize",
@@ -154,7 +155,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"history.list", .@"history.remove", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => {},
-        .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector" => {},
+        .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         .@"privacy.clear", .@"privacy.status" => {},
         .@"search.getConfig", .@"search.setConfig" => {},
@@ -348,7 +349,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         },
         .@"siteData.status" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
-            return sdk.result(output,id,site_data.status(context.target_tab_id,context.plugin_id));
+            return sdk.result(output,id,site_data.status(context.target_tab_id,context.plugin_id,context.grants.contains(.@"siteData.write")));
         },
         .@"siteData.list" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
@@ -363,6 +364,18 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const options = decode(sdk.SiteDataItem,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             const result = site_data.value(context.target_tab_id,context.plugin_id,options) orelse return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,result);
+        },
+        .@"siteData.update" => {
+            if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(sdk.SiteDataUpdate,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (options.group==.cookies) return sdk.failure(output,id,.InvalidParams);
+            if (options.value) |raw| if (raw.len>sdk.site_data_value_limit) return sdk.failure(output,id,.LimitExceeded);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const value = options.value orelse "";
+            const ok = native.moon_site_data_update(context.target_tab_id,owner.ptr,options.group==.session,
+                options.id,options.generation,if (options.value!=null) value.ptr else null,value.len);
+            if (!ok) return sdk.failure(output,id,.NotFound);
+            return sdk.result(output,id,true);
         },
         .@"siteData.refresh", .@"siteData.openInspector" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);

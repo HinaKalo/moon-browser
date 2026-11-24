@@ -1306,6 +1306,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"bookmarks.manage" => "允许管理书签",
         .@"downloads.manage" => "允许管理下载",
         .@"siteData.read" => "允许查看站点数据",
+        .@"siteData.write" => "允许编辑和删除站点存储",
         .@"page.reading" => "允许打开页内查找和调整缩放",
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
         .@"privacy.clear" => "允许在确认后清除浏览数据",
@@ -1404,6 +1405,19 @@ export fn moon_site_data_action(panel: u64, id: [*c]const u8, inspector: bool) b
     if (!plugins.systemEnabled(.@"page.inspect")) return false;
     chooseTab(index,true);
     return native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.resources));
+}
+
+export fn moon_site_data_update(panel: u64, id: [*c]const u8, session: bool, entry: u32, generation: u64,
+    value: [*c]const u8, length: usize) bool
+{
+    if (stopped or count==0 or tabs[active].id!=panel) return false;
+    const owner = slice(id);
+    const source = site_data.selected(panel,owner) orelse return false;
+    const tab = &tabs[tabIndex(source) orelse return false];
+    const view = tab.view orelse return false;
+    if (tab.extension or tab.loading or !tab.loaded) return false;
+    const target: sdk.SiteDataItem = .{ .group=if (session) .session else .local, .id=entry, .generation=generation };
+    return site_data.update(view,panel,owner,target,if (value!=null) value[0..length] else null);
 }
 
 export fn moon_site_data_result(source: u64, request: u64, snapshot: [*c]const u8) void {

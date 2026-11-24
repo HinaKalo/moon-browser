@@ -4,6 +4,8 @@
 
 当前面板每类最多预览 32 条。长条目会标记截断。要查看 HttpOnly Cookie、Cookie 属性或完整值，可用面板中的「打开开发者工具」回到原网页的 WebKit Inspector，再选择 Storage。
 
+Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。Cookie 在此面板为只读，Inspector 可查看完整属性。
+
 刷新会重新读取绑定网页。网页导航、崩溃或关闭后，旧快照随即失效。快照仅在内存中保留，五分钟后过期。可通过插件菜单停用系统插件或撤销「允许查看站点数据」。
 
 ## 插件 API
@@ -11,5 +13,7 @@
 原生插件声明 `siteData.read`，并在用户触发的命令中调用 `siteData.open`。插件清单需要提供 `settingsPage`。宿主把授权绑定到实际打开的这个面板和触发命令的网页。
 
 面板通过 `moonHost` 请求 `siteData.status`、`siteData.list` 和 `siteData.value`。列表只返回名称和长度。读取值需要同时传入类别、条目 ID 和列表返回的快照代数 `generation`。EXE 负责发起查看命令，查看结果由绑定面板读取。
+
+编辑还需要独立的 `siteData.write` 权限，并从当前显示且已绑定的面板调用 `siteData.update`。参数为 `{ group, id, generation, value }`。字符串表示替换值，`null` 表示删除。提交后通过 `siteData.status` 等待新一代快照，`mutation` 会返回 `saved`、`removed`、`conflict` 或 `failed`。浏览到其他文档、旧快照或截断条目均不能继续提交修改。
 
 [插件 API](./api) · [网页开发者工具](./devtools)

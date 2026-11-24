@@ -4,7 +4,7 @@ const native = @import("native");
 
 const Entry = struct { name: []const u8, value: []const u8, shortened: bool };
 const Group = struct { entries: []Entry, more: bool };
-const Snapshot = struct { cookies: ?Group, local: ?Group, session: ?Group };
+const Snapshot = struct { cookies: ?Group, local: ?Group, session: ?Group, mutation: ?sdk.SiteDataMutation = null };
 const allocator = std.heap.page_allocator;
 var captured: ?std.json.Parsed(Snapshot) = null;
 var source: u64 = 0;
@@ -12,6 +12,7 @@ var panel: u64 = 0;
 var sequence: u64 = 0;
 var received: sdk.SiteDataState = .idle;
 var failure: ?sdk.SiteDataFailure = null;
+var mutation: ?sdk.SiteDataMutation = null;
 var deadline: u64 = 0;
 var owner: [96]u8 = undefined;
 var owner_len: usize = 0;
@@ -31,6 +32,7 @@ pub fn reset() void {
     origin_len=0;
     received=.idle;
     failure=null;
+    mutation=null;
 }
 
 pub fn invalidate(tab: u64) void {
@@ -39,6 +41,7 @@ pub fn invalidate(tab: u64) void {
     source=0;
     received=.stale;
     failure=null;
+    mutation=null;
 }
 
 pub fn closed(tab: u64) void {
@@ -75,17 +78,46 @@ pub fn bindPanel(tab: u64) void {
     panel=tab;
 }
 
-pub fn request(view: *native.MoonView) bool {
+fn startRequest() void {
     dropValues();
     sequence+=1;
     deadline=native.moon_clock()+5000;
     received=.pending;
     failure=null;
-    if (!native.moon_engine_inspect_site(view,sequence)) {
-        received=.unavailable;
-        failure=.engineUnavailable;
-    }
+    mutation=null;
+}
+
+fn failedRequest() void {
+    received=.unavailable;
+    failure=.engineUnavailable;
+}
+
+pub fn request(view: *native.MoonView) bool {
+    startRequest();
+    if (!native.moon_engine_inspect_site(view,sequence)) failedRequest();
     return received == .pending;
+}
+
+pub fn update(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteDataItem, replacement: ?[]const u8) bool {
+    if (!owns(tab,id) or received!=.ready or target.generation!=sequence or target.group==.cookies) return false;
+    if (replacement) |bytes| {
+        if (bytes.len>sdk.site_data_value_limit or !std.unicode.utf8ValidateSlice(bytes)) return false;
+    }
+    const group = resolve(target.group) orelse return false;
+    if (target.id>=group.entries.len) return false;
+    const entry = group.entries[target.id];
+    if (entry.shortened) return false;
+    var number: [24]u8 = undefined;
+    const bytes = std.json.Stringify.valueAlloc(allocator,.{
+        .revision=std.fmt.bufPrint(&number,"{d}",.{sequence}) catch unreachable,
+        .group=target.group, .key=entry.name, .previous=entry.value, .replacement=replacement,
+    },.{}) catch return false;
+    defer allocator.free(bytes);
+    const payload = allocator.dupeSentinel(u8,bytes,0) catch return false;
+    defer allocator.free(payload);
+    startRequest();
+    if (!native.moon_engine_update_site(view,sequence,payload.ptr)) failedRequest();
+    return received==.pending;
 }
 
 pub fn complete(tab: u64, token: u64, json: []const u8) void {
@@ -114,6 +146,7 @@ pub fn complete(tab: u64, token: u64, json: []const u8) void {
     captured=result;
     received=.ready;
     failure=null;
+    mutation=result.value.mutation;
     deadline=native.moon_clock()+5*60*1000;
 }
 
@@ -136,9 +169,10 @@ fn resolve(kind: sdk.SiteDataGroup) ?Group {
     };
 }
 
-pub fn status(tab: u64, id: []const u8) sdk.SiteDataStatus {
+pub fn status(tab: u64, id: []const u8, writable: bool) sdk.SiteDataStatus {
     if (!owns(tab,id)) return .{ .state=.idle,.origin="",.generation=0 };
-    return .{ .state=received,.origin=origin[0..origin_len],.generation=sequence,.failure=failure };
+    return .{ .state=received,.origin=origin[0..origin_len],.generation=sequence,.failure=failure,
+        .mutation=mutation,.writable=writable };
 }
 
 pub fn list(tab: u64, id: []const u8, kind: sdk.SiteDataGroup, buffer: *[32]sdk.SiteDataEntry) ?sdk.SiteDataPage {

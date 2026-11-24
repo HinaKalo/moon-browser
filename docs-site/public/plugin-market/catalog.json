@@ -60,8 +60,8 @@
     {
       "id": "moon.site-data",
       "name": "站点数据",
-      "description": "筛选当前网页可读的 Cookie、Local Storage 和 Session Storage。",
-      "permission": "查看当前站点数据",
+      "description": "查看网页可读的 Cookie，并在当前站点面板编辑或删除 Local Storage 和 Session Storage。",
+      "permission": "查看站点数据和编辑站点存储",
       "url": "https://docs.browser.moonl.cloud/site-data.html"
     },
     {

@@ -52,6 +52,8 @@ class Fixture(BaseHTTPRequestHandler):
     filter_probe = False
     slow_download_release = Event()
     change_site_data_source = Event()
+    change_site_data_entry = Event()
+    site_data_entry_changed = Event()
     reading_layout = {}
     closed_loaded = {}
     privacy_reports = {}
@@ -129,7 +131,11 @@ class Fixture(BaseHTTPRequestHandler):
             self.seen_filter_proof.set()
             data, content_type = b"ok", "text/plain"
         elif path == "/site-data-navigation":
-            data, content_type = (b"change" if self.change_site_data_source.is_set() else b"keep"), "text/plain"
+            action = b"change" if self.change_site_data_source.is_set() else b"overwrite" if self.change_site_data_entry.is_set() else b"keep"
+            data, content_type = action, "text/plain"
+        elif path == "/site-data-entry-changed":
+            self.site_data_entry_changed.set()
+            data, content_type = b"ok", "text/plain"
         elif path.startswith("/reading-layout/"):
             _, _, page, width, scroll = path.split("/")
             self.reading_layout[page] = (int(width), int(scroll))
@@ -206,8 +212,10 @@ class Fixture(BaseHTTPRequestHandler):
                     'sessionStorage.setItem("moon-session","session-value");'
                     'Object.defineProperty(document,"cookie",{get:()=>"forged=other"});'
                     'Storage.prototype.getItem=()=>"forged";'
-                    'setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
-                    'if(await r.text()==="change")location.replace("/page/site-data-changed");},400);</script>'
+                    'let changed=false;setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
+                    'const action=await r.text();if(action==="change")location.replace("/page/site-data-changed");'
+                    'if(action==="overwrite"&&!changed){changed=true;localStorage.setItem("moon-local","page-change");'
+                    'fetch("/site-data-entry-changed",{cache:"no-store"});}},400);</script>'
                 )
             if name in ("reading-contract", "reading-other-origin", "reading-restart"):
                 demo = (
@@ -533,7 +541,7 @@ def run_win32(exe, base, root):
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
-            {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True},
+            {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True, "site_data_write": True},
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.privacy-data-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
@@ -714,6 +722,42 @@ def run_win32(exe, base, root):
             'row.querySelector("button").click();'
             '}const cookies=await host("siteData.list",{group:"cookies"});'
             'if(cookies.entries.some(row=>row.name==="moon-http-only"||row.name==="forged"))throw Error("cookie scope");'
+            'let cookieRejected=false;try{await host("siteData.update",{group:"cookies",id:0,generation:cookies.generation,value:"forbidden"});}'
+            'catch(error){cookieRejected=error.message==="INVALID_PARAMS";}if(!cookieRejected)throw Error("cookie mutation");'
+            'const rowFor=key=>[...document.querySelectorAll("#results li")].find(r=>r.querySelector("code").textContent===key);'
+            'const button=(row,text)=>[...row.querySelectorAll("button")].find(b=>b.textContent===text);'
+            'const changed=async(kind,after)=>wait(async()=>{const state=await host("siteData.status");'
+            'return state.state==="ready"&&state.generation>after&&state.mutation===kind&&state;},"mutation "+kind);'
+            'document.querySelector("[data-group=local]").click();'
+            'button(await wait(()=>rowFor("moon-local"),"local row"),"编辑").click();'
+            'await wait(()=>!el("editor").hidden&&el("new-value").value==="local-value","editor value");'
+            'el("editor").requestSubmit();'
+            'await wait(()=>el("editor").hidden&&el("feedback").textContent==="没有修改。","unchanged editor");'
+            'if((await host("siteData.status")).generation!==result.generation)throw Error("unchanged editor submitted a write");'
+            'button(await wait(()=>rowFor("moon-local"),"local row"),"编辑").click();'
+            'await wait(()=>!el("editor").hidden,"reopened editor");'
+            'const replacement=["月亮",String.fromCharCode(92,34,10),"next"].join(" ");'
+            'el("new-value").value=replacement;el("new-value").dispatchEvent(new Event("input"));'
+            'el("editor").requestSubmit();const saved=await changed("saved",result.generation);'
+            'const local=await host("siteData.list",{group:"local"});'
+            'const item={group:"local",id:local.entries.find(row=>row.name==="moon-local").id,generation:local.generation};'
+            'if(await host("siteData.value",item)!==replacement)throw Error("edited local value");'
+            'document.querySelector("[data-group=session]").click();'
+            'button(await wait(()=>rowFor("moon-session"),"session row"),"删除").click();'
+            'await wait(()=>!el("editor").hidden&&el("commit").textContent==="确认删除","delete confirmation");'
+            'el("editor").requestSubmit();const removed=await changed("removed",saved.generation);'
+            'const session=await host("siteData.list",{group:"session"});'
+            'if(session.entries.some(row=>row.name==="moon-session"))throw Error("session item was not deleted");'
+            'let oldRejected=false;try{await host("siteData.update",{...item,value:"stale-write"});}'
+            'catch(error){oldRejected=error.message==="NOT_FOUND";}if(!oldRejected)throw Error("stale mutation");'
+            'const current=await host("siteData.list",{group:"local"});'
+            'const target={group:"local",id:current.entries.find(row=>row.name==="moon-local").id,generation:current.generation};'
+            'await emit({waitingForConflict:true});'
+            'await wait(async()=>JSON.parse(await api.postMessage(JSON.stringify({op:"read"}))).value?.conflictReady,"source mutation signal");'
+            'if(!await host("siteData.update",{...target,value:"should-not-win"}))throw Error("conflict request");'
+            'await changed("conflict",removed.generation);'
+            'const final=await host("siteData.list",{group:"local"});'
+            'if(await host("siteData.value",{...target,generation:final.generation})!=="page-change")throw Error("conflict wrote value");'
             'if(!await host("siteData.refresh"))throw Error("refresh request");'
             'await wait(async()=>{const data=await host("siteData.status");'
             'return data.state==="ready"&&data.generation>result.generation;},"new generation");'
@@ -722,6 +766,8 @@ def run_win32(exe, base, root):
             'await wait(()=>!document.querySelector("#results li"),"clear rows");'
             'let rejected=false;try{await host("siteData.value",{group:"cookies",id:0,generation:result.generation});}'
             'catch(error){rejected=error.message==="NOT_FOUND";}if(!rejected)throw Error("stale credential read");'
+            'let writeRejected=false;try{await host("siteData.update",{...target,value:"after-navigation"});}'
+            'catch(error){writeRejected=error.message==="NOT_FOUND";}if(!writeRejected)throw Error("mutation after navigation");'
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "site-data.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
@@ -1086,9 +1132,14 @@ def run_win32(exe, base, root):
                 raise RuntimeError("The extension page crossed its settings or network boundary")
             print("extension_settings=ok", flush=True)
 
-            set_control(edit, base + "/page/editor")
-            user.PostMessageW(edit, 0x0100, 0x0D, 1)
-            if not Fixture.seen_editor_ready.wait(15):
+            for attempt in range(2):
+                set_control(edit, base + "/page/editor")
+                user.PostMessageW(edit, 0x0100, 0x0D, 1)
+                if Fixture.seen_editor_ready.wait(8 if attempt == 0 else 15):
+                    break
+                if attempt == 0:
+                    print("Retrying the editor fixture navigation after its readiness signal was absent.",flush=True)
+            else:
                 raise RuntimeError("The editor fixture did not finish loading its original Lua script")
             invoke("打开 Lua 脚本编辑器")
             tool = wait_for(lambda: owned_window("MoonLuaEditor"), "Lua editor plugin did not open", 12)
@@ -1286,6 +1337,17 @@ def run_win32(exe, base, root):
                      "The site data contract did not bind its page")
             config = profile / f'extension-{sha256(b"moon.site-data-fixture").hexdigest()}.json'
             phase = wait_for(lambda: config.exists() and json.loads(config.read_text(encoding="utf-8")),
+                             "The site data contract did not start the conflict test",15)
+            if not phase.get("waitingForConflict"):
+                raise RuntimeError(f"Site data edits: {phase}")
+            Fixture.change_site_data_entry.set()
+            if not Fixture.site_data_entry_changed.wait(8):
+                raise RuntimeError("The source page did not change its own stored value")
+            signal = config.with_suffix(".signal")
+            signal.write_text('{"conflictReady":true}',encoding="utf-8")
+            signal.replace(config)
+            phase = wait_for(lambda: (current := json.loads(config.read_text(encoding="utf-8"))) and
+                             (current.get("ready") or current.get("error")) and current,
                              "The site data contract reported no initial result",15)
             if not phase.get("ready"):
                 raise RuntimeError(f"Site data fixture: {phase}")
@@ -1294,7 +1356,7 @@ def run_win32(exe, base, root):
                               "The site data contract reported no navigation result",15)
             if not result.get("passed"):
                 raise RuntimeError(f"Site data invalidation: {result}")
-            print("site_data_system_plugin=ok isolated_storage=ok site_data_navigation_cleanup=ok",flush=True)
+            print("site_data_system_plugin=ok isolated_storage=ok storage_edit=ok storage_remove=ok stale_write_rejected=ok conflict_preserved=ok site_data_navigation_cleanup=ok",flush=True)
         if reading.exists():
             def navigate_reading(url):
                 set_control(edit,url)

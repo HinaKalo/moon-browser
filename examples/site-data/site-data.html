@@ -13,7 +13,7 @@
   .heading,.toolbar { display:flex; align-items:center; flex-wrap:wrap; justify-content:space-between; gap:10px; }
   #origin { margin:3px 0 20px; color:var(--muted); overflow-wrap:anywhere; }
   .groups { display:flex; flex-wrap:wrap; gap:6px; }
-  input,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
+  input,button,textarea { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
   button { cursor:pointer; }
   button:hover:not(:disabled),button[aria-pressed=true] { background:var(--soft); }
   button[aria-pressed=true] { color:var(--accent); border-color:var(--accent); }
@@ -29,6 +29,12 @@
   .entry code { font-size:14px; overflow-wrap:anywhere; }
   .caption { color:var(--muted); display:block; margin-top:3px; }
   pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:10px 0 0; background:var(--page); border-radius:6px; padding:9px 11px; }
+  .actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  #editor { margin-top:16px; padding:14px; background:var(--surface); border:1px solid var(--line); border-radius:9px; }
+  #editor-title { margin:0 0 8px; font-size:16px; overflow-wrap:anywhere; }
+  #editor textarea { display:block; width:100%; resize:vertical; min-height:90px; font-family:Consolas,monospace; }
+  #editor-actions { display:flex; gap:8px; margin-top:10px; }
+  #feedback:empty { display:none; }
 </style>
 <main>
   <div class="heading">
@@ -45,6 +51,19 @@
     <input class="search" id="search" type="search" aria-label="按名称筛选" placeholder="按名称筛选">
   </div>
   <p id="status" role="status">正在连接浏览器…</p>
+  <p id="feedback" role="status"></p>
+  <form id="editor" aria-labelledby="editor-title" hidden>
+    <h2 id="editor-title"></h2>
+    <div id="editor-value">
+      <label for="new-value" class="caption">存储值</label>
+      <textarea id="new-value" spellcheck="false"></textarea>
+      <span id="bytes" class="caption"></span>
+    </div>
+    <div id="editor-actions">
+      <button type="submit" id="commit">保存</button>
+      <button type="button" id="cancel">取消</button>
+    </div>
+  </form>
   <ul id="results" aria-label="站点数据条目" hidden></ul>
   <p id="details"></p>
 </main>
@@ -52,14 +71,67 @@
   const el = id => document.getElementById(id);
   const status = el('status'), details = el('details'), rows = el('results'), search = el('search');
   const buttons = [...document.querySelectorAll('[data-group]')];
-  let seq=0, group='cookies', selected, page, request=0, latest, refreshing=false;
+  const editor=el('editor'), feedback=el('feedback'), newValue=el('new-value'), commit=el('commit');
+  let seq=0, group='cookies', selected, page, request=0, latest, refreshing=false, writable=false, draft;
   async function host(method,params={}) {
     const id='sites:' + ++seq;
     const reply=JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0',id,method,params})));
     if (reply.id !== id || reply.error) throw Error(reply.error?.message || 'INVALID_RESPONSE');
     return reply.result;
   }
-  function clear() { rows.replaceChildren(); rows.hidden=true; page=undefined; }
+  function closeEditor(refocus=false) {
+    const previous=draft;
+    draft=undefined;
+    newValue.value='';
+    editor.hidden=true;
+    if (refocus && previous?.button.isConnected) previous.button.focus();
+  }
+  function clear() { rows.replaceChildren(); rows.hidden=true; page=undefined; closeEditor(); }
+  function lengthHint() {
+    const length=new TextEncoder().encode(newValue.value).length;
+    el('bytes').textContent=length + ' / 1024 字节';
+    commit.disabled=length>1024;
+  }
+  async function openEditor(item, button, remove) {
+    const current=page;
+    const target={group,id:item.id,generation:current.generation};
+    let value='';
+    if (!remove) {
+      try { value=await host('siteData.value',target); }
+      catch { feedback.textContent='该条目已过期，请刷新。'; return; }
+    }
+    if (current!==page || document.hidden || !button.isConnected) return;
+    feedback.textContent='';
+    el('editor-title').textContent=(remove?'删除条目「':'编辑条目「') + (item.name || '空名称') + '」';
+    el('editor-value').hidden=remove;
+    commit.textContent=remove?'确认删除':'保存';
+    newValue.value=value;
+    draft={target,remove,button,initial:newValue.value};
+    lengthHint();
+    editor.hidden=false;
+    (remove ? el('cancel') : newValue).focus();
+  }
+  newValue.oninput=lengthHint;
+  el('cancel').onclick=() => closeEditor(true);
+  editor.onsubmit=async event => {
+    event.preventDefault();
+    if (!draft || commit.disabled) return;
+    const {target,remove,initial}=draft;
+    if (!remove && newValue.value===initial) {
+      closeEditor(true);
+      feedback.textContent='没有修改。';
+      return;
+    }
+    commit.disabled=true;
+    try {
+      await host('siteData.update',{...target,value:remove ? null : newValue.value});
+      closeEditor();
+      await update();
+    } catch {
+      closeEditor();
+      feedback.textContent='操作未提交，请刷新后重试。';
+    }
+  };
   function render() {
     rows.replaceChildren();
     if (!page?.available) {
@@ -78,6 +150,7 @@
       caption.textContent=item.length + ' 字节' + (item.shortened ? ' · 已截断' : '');
       content.append(name,caption);
       const show=document.createElement('button');
+      show.dataset.reveal='';
       show.textContent='显示值';
       show.setAttribute('aria-label','显示 ' + (item.name || '空名称') + ' 的值');
       value.hidden=true;
@@ -94,7 +167,19 @@
         } catch { status.textContent='该条目已过期。请刷新。'; }
         finally { show.disabled=false; }
       };
-      entry.append(content,show);
+      const actions=document.createElement('div');
+      actions.className='actions';
+      actions.append(show);
+      if (writable && group!=='cookies' && !item.shortened) {
+        for (const remove of [false,true]) {
+          const button=document.createElement('button');
+          button.textContent=remove?'删除':'编辑';
+          button.setAttribute('aria-label',button.textContent + ' ' + (item.name || '空名称'));
+          button.onclick=() => openEditor(item,button,remove);
+          actions.append(button);
+        }
+      }
+      entry.append(content,actions);
       row.append(entry,value);
       rows.append(row);
     }
@@ -119,19 +204,26 @@
     expired:'预览已过期，可以刷新获取当前数据。',
     unavailable:'WebKit 暂时无法读取此网页的数据。'
   };
+  const messages={
+    saved:'已保存。', removed:'已删除。', conflict:'网页已修改此条目，已刷新为当前值。',
+    failed:'此网页的存储不可写，修改未保存。'
+  };
   async function update() {
     if (refreshing) return;
     refreshing=true;
     try {
       const current=await host('siteData.status');
+      writable=current.writable;
       el('origin').textContent=current.origin;
       const unavailable=['idle','stale','pending'].includes(current.state);
       el('refresh').disabled=el('inspector').disabled=unavailable;
-      const identity=current.state + ':' + current.generation;
+      const identity=current.state + ':' + current.generation + ':' + writable;
       if (identity===latest) return;
       latest=identity;
       selected=current.state;
       request++;
+      closeEditor();
+      feedback.textContent=messages[current.mutation] || '';
       if (selected==='ready') await load();
       else { clear(); details.textContent=''; status.textContent=states[selected] || ''; }
     } catch {
@@ -146,6 +238,7 @@
     for (const other of buttons) other.setAttribute('aria-pressed',String(other===button));
     clear();
     details.textContent='';
+    feedback.textContent='';
     if (selected==='ready') load();
   };
   search.oninput=() => { if (page) render(); };
@@ -159,8 +252,9 @@
   };
   document.addEventListener('visibilitychange',() => {
     if (document.hidden) {
+      closeEditor();
       for (const value of rows.querySelectorAll('pre')) { value.textContent=''; value.hidden=true; }
-      for (const button of rows.querySelectorAll('button')) button.textContent='显示值';
+      for (const button of rows.querySelectorAll('[data-reveal]')) button.textContent='显示值';
     } else { update(); }
   });
   setInterval(() => { if (!document.hidden) update(); },600);

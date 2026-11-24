@@ -95,6 +95,7 @@ bool moon_engine_load_extension(MoonView *view, const char *html);
 void moon_engine_refresh_extension_theme(void);
 bool moon_engine_inspect(MoonView *view, int panel);
 bool moon_engine_inspect_site(MoonView *view, uint64_t request);
+bool moon_engine_update_site(MoonView *view, uint64_t request, const char *update);
 void moon_engine_find(MoonView *view, const char *query, bool backwards);
 void moon_engine_hide_find(MoonView *view);
 void moon_engine_set_zoom(MoonView *view, unsigned percent);
@@ -171,6 +172,8 @@ bool moon_extension_settings(const char *id, const char *request, char *result, 
 bool moon_extension_request(uint64_t page, const char *id, const char *request, char *result, size_t cap);
 bool moon_site_data_open(const char *id, uint64_t source, const char *expected);
 bool moon_site_data_action(uint64_t panel, const char *id, bool inspector);
+bool moon_site_data_update(uint64_t panel, const char *id, bool session, uint32_t entry, uint64_t generation,
+    const char *value, size_t length);
 void moon_site_data_result(uint64_t source, uint64_t request, const char *snapshot);
 bool moon_plugin_open_page(const char *id);
 enum MoonPluginMenu {
