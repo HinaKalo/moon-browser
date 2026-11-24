@@ -2,6 +2,20 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.bookmarks",
+      "name": "书签",
+      "description": "保存常用网页，按标题、网址或文件夹搜索。",
+      "permission": "管理书签",
+      "url": "https://docs.browser.moonl.cloud/library.html"
+    },
+    {
+      "id": "moon.downloads",
+      "name": "下载",
+      "description": "查看 WebKit 下载进度、取消传输、在文件夹中显示文件。",
+      "permission": "管理下载",
+      "url": "https://docs.browser.moonl.cloud/library.html"
+    },
+    {
       "id": "moon.blocker",
       "name": "严格去广告",
       "description": "在 WebKit 网页资源加载时匹配广告和跟踪规则，支持站点例外。",

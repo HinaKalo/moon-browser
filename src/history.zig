@@ -2,61 +2,26 @@ const std = @import("std");
 const native = @import("native");
 const sdk = @import("moon_plugin");
 
-const Database = opaque {};
-const Statement = opaque {};
-const Sqlite = struct {
-    sqlite3_open: *const fn ([*:0]const u8,*?*Database) callconv(.c) c_int,
-    sqlite3_close: *const fn (*Database) callconv(.c) c_int,
-    sqlite3_busy_timeout: *const fn (*Database,c_int) callconv(.c) c_int,
-    sqlite3_exec: *const fn (*Database,[*:0]const u8,?*anyopaque,?*anyopaque,?*anyopaque) callconv(.c) c_int,
-    sqlite3_prepare_v2: *const fn (*Database,[*:0]const u8,c_int,*?*Statement,?*anyopaque) callconv(.c) c_int,
-    sqlite3_finalize: *const fn (*Statement) callconv(.c) c_int,
-    sqlite3_bind_int64: *const fn (*Statement,c_int,i64) callconv(.c) c_int,
-    sqlite3_bind_text: *const fn (*Statement,c_int,[*]const u8,c_int,?*anyopaque) callconv(.c) c_int,
-    sqlite3_step: *const fn (*Statement) callconv(.c) c_int,
-    sqlite3_column_int64: *const fn (*Statement,c_int) callconv(.c) i64,
-    sqlite3_column_text: *const fn (*Statement,c_int) callconv(.c) ?[*:0]const u8,
-    sqlite3_column_bytes: *const fn (*Statement,c_int) callconv(.c) c_int,
-    sqlite3_changes: *const fn (*Database) callconv(.c) c_int,
-    sqlite3_last_insert_rowid: *const fn (*Database) callconv(.c) i64,
-};
-
-extern "kernel32" fn LoadLibraryExW([*:0]const u16,?*anyopaque,u32) callconv(.winapi) ?*anyopaque;
-extern "kernel32" fn GetProcAddress(*anyopaque,[*:0]const u8) callconv(.winapi) ?*anyopaque;
-extern "kernel32" fn FreeLibrary(*anyopaque) callconv(.winapi) c_int;
-
-const ok = 0;
-const row = 100;
-const done = 101;
-var sqlite: Sqlite = undefined;
-var library: ?*anyopaque = null;
-var database: ?*Database = null;
+const db_api = @import("profile_db.zig");
+const sqlite = &db_api.sqlite;
+const prepare = db_api.prepare;
+const bindText = db_api.bindText;
+const columnText = db_api.columnText;
+const ok = db_api.ok;
+const row = db_api.row;
+const done = db_api.done;
+var database: ?*db_api.Database = null;
 var path: [4096:0]u8 = @splat(0);
 
 pub fn init(profile: []const u8) void {
     _ = std.fmt.bufPrintSentinel(&path,"{s}\\history.sqlite3",.{profile},0) catch return;
 }
 
-fn connection() !*Database {
+fn connection() !*db_api.Database {
     if (database) |db| return db;
-    if (path[0] == 0) return error.IOError;
-    if (library == null) {
-        const system32 = 0x00000800;
-        const module = LoadLibraryExW(std.unicode.utf8ToUtf16LeStringLiteral("winsqlite3.dll"),null,system32) orelse return error.IOError;
-        errdefer _ = FreeLibrary(module);
-        inline for (@typeInfo(Sqlite).@"struct".field_names) |name| {
-            @field(sqlite,name) = @ptrCast(GetProcAddress(module,name) orelse return error.IOError);
-        }
-        library = module;
-    }
-    var handle: ?*Database = null;
-    const opened = sqlite.sqlite3_open(&path,&handle);
-    const db = handle orelse return error.IOError;
-    errdefer _ = sqlite.sqlite3_close(db);
-    if (opened != ok or sqlite.sqlite3_busy_timeout(db,25) != ok) return error.IOError;
+    const db = try db_api.open(std.mem.sliceTo(&path,0));
+    errdefer db_api.close(db);
     const schema =
-        \\PRAGMA secure_delete=ON;
-        \\PRAGMA cache_size=-256;
         \\CREATE TABLE IF NOT EXISTS visits (
         \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
         \\  title TEXT NOT NULL,
@@ -73,24 +38,11 @@ fn connection() !*Database {
 }
 
 pub fn close() void {
-    if (database) |db| _ = sqlite.sqlite3_close(db);
-    if (library) |module| _ = FreeLibrary(module);
+    if (database) |db| db_api.close(db);
     database = null;
-    library = null;
 }
 
-fn prepare(db: *Database, sql: [:0]const u8) !*Statement {
-    var statement: ?*Statement = null;
-    if (sqlite.sqlite3_prepare_v2(db,sql.ptr,-1,&statement,null) != ok) return error.IOError;
-    return statement orelse error.IOError;
-}
-
-fn bindText(statement: *Statement, index: c_int, value: []const u8) !void {
-    const address = if (value.len == 0) "".ptr else value.ptr;
-    if (sqlite.sqlite3_bind_text(statement,index,address,@intCast(value.len),null) != ok) return error.IOError;
-}
-
-fn validURL(url: []const u8) bool {
+pub fn validURL(url: []const u8) bool {
     if (url.len > 4095 or !std.unicode.utf8ValidateSlice(url)) return false;
     const start: usize = if (std.ascii.startsWithIgnoreCase(url,"https://")) 8
         else if (std.ascii.startsWithIgnoreCase(url,"http://")) 7 else return false;
@@ -121,12 +73,6 @@ pub fn updateTitle(id: u32, url: []const u8, title: []const u8) void {
     if (sqlite.sqlite3_bind_int64(statement,2,id) != ok) return;
     bindText(statement,3,url) catch return;
     _ = sqlite.sqlite3_step(statement);
-}
-
-fn columnText(statement: *Statement, index: c_int) ![]const u8 {
-    const value = sqlite.sqlite3_column_text(statement,index) orelse return error.IOError;
-    const length = sqlite.sqlite3_column_bytes(statement,index);
-    return value[0..@intCast(length)];
 }
 
 pub fn list(allocator: std.mem.Allocator, options: sdk.HistoryQuery, buffer: *[30]sdk.HistoryVisit) !sdk.HistoryPage {

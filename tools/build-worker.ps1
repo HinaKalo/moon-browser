@@ -104,6 +104,8 @@ $luaManager = Join-Path $prefix 'bin\MoonLuaManager.exe'
 $devTools = Join-Path $prefix 'bin\MoonDevTools.exe'
 $history = Join-Path $prefix 'bin\MoonHistory.exe'
 $blocker = Join-Path $prefix 'bin\MoonBlocker.exe'
+$bookmarks = Join-Path $prefix 'bin\MoonBookmarks.exe'
+$downloads = Join-Path $prefix 'bin\MoonDownloads.exe'
 $docs = @(
     $EngineLock
     (Join-Path $repo 'README.md')
@@ -118,12 +120,17 @@ $docs = @(
     (Join-Path $repo 'examples\blocker\plugin.json')
     (Join-Path $repo 'examples\blocker\filter.html')
     (Join-Path $repo 'examples\blocker\strict.rules')
+    (Join-Path $repo 'examples\bookmarks\plugin.json')
+    (Join-Path $repo 'examples\bookmarks\bookmarks.html')
+    (Join-Path $repo 'examples\downloads\plugin.json')
+    (Join-Path $repo 'examples\downloads\downloads.html')
+    (Join-Path $repo 'assets\moon-browser.ico')
 )
 if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -155,6 +162,10 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $blockerPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\blocker')).FullName
     Copy-Item -LiteralPath $blocker -Destination $blockerPackage
     Copy-Item -LiteralPath (Join-Path $repo 'examples\blocker\plugin.json'),(Join-Path $repo 'examples\blocker\filter.html'),(Join-Path $repo 'examples\blocker\strict.rules') -Destination $blockerPackage
+    $bookmarkPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\bookmarks')).FullName
+    Copy-Item -LiteralPath $bookmarks,(Join-Path $repo 'examples\bookmarks\plugin.json'),(Join-Path $repo 'examples\bookmarks\bookmarks.html') -Destination $bookmarkPackage
+    $downloadPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\downloads')).FullName
+    Copy-Item -LiteralPath $downloads,(Join-Path $repo 'examples\downloads\plugin.json'),(Join-Path $repo 'examples\downloads\downloads.html') -Destination $downloadPackage
     $fixtures = [IO.Directory]::CreateDirectory((Join-Path $stage 'tests')).FullName
     Copy-Item -LiteralPath $contractClient -Destination $fixtures
     $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $artifact))

@@ -6,9 +6,11 @@ const userscripts = @import("userscripts.zig");
 const settings = @import("extension_settings.zig");
 const history = @import("history.zig");
 const network = @import("network_policy.zig");
+const bookmarks = @import("bookmarks.zig");
+const downloads = @import("downloads.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
-pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8 };
+pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false };
 pub const Context = struct {
     grants: Permissions,
     plugin_id: []const u8,
@@ -28,6 +30,17 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"devtools.open" => .@"page.inspect",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
+        .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.update", .@"bookmarks.remove" => .@"bookmarks.manage",
+        .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => .@"downloads.manage",
+    };
+}
+
+fn libraryReason(err: anyerror) sdk.Reason {
+    return switch (err) {
+        error.InvalidParams => .InvalidParams,
+        error.AlreadyExists => .AlreadyExists,
+        error.NotFound => .NotFound,
+        else => .InternalError,
     };
 }
 
@@ -80,6 +93,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     const method = std.meta.stringToEnum(sdk.Method, method_name) orelse return sdk.failure(output, id, .MethodNotFound);
     if (context.from_page) switch (method) {
         .@"history.list", .@"history.remove", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
+        .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
+        .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
     };
     if (!context.consent.valid(context.consent.context)) return sdk.failure(output, id, .Cancelled);
@@ -88,7 +103,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     }
     const params = object.get("params");
     switch (method) {
-        .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear", .@"network.filter.status" => {
+        .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
+        .@"network.filter.status", .@"bookmarks.saveActive" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -208,6 +224,53 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                 });
             };
             break :site sdk.result(output,id,null);
+        },
+        .@"bookmarks.list" => list: {
+            const options = decode(sdk.HistoryQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            var rows: [24]sdk.Bookmark = undefined;
+            const page = bookmarks.list(allocator,options,&rows) catch |err| return sdk.failure(output,id,libraryReason(err));
+            break :list sdk.result(output,id,page);
+        },
+        .@"bookmarks.saveActive" => save: {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const tab = context.tab orelse break :save sdk.result(output,id,sdk.BookmarkSave.noPage);
+            const url = std.mem.sliceTo(&tab.url,0);
+            if (!tab.bookmarkable or !history.validURL(url)) break :save sdk.result(output,id,sdk.BookmarkSave.noPage);
+            const outcome = bookmarks.save(.{ .title=std.mem.sliceTo(&tab.title,0),.url=url }) catch |err|
+                return sdk.failure(output,id,libraryReason(err));
+            break :save sdk.result(output,id,outcome);
+        },
+        .@"bookmarks.save" => save: {
+            const value = decode(sdk.BookmarkInput,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const outcome = bookmarks.save(value) catch |err| return sdk.failure(output,id,libraryReason(err));
+            break :save sdk.result(output,id,outcome);
+        },
+        .@"bookmarks.update" => update: {
+            const value = decode(sdk.BookmarkEdit,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            bookmarks.update(value) catch |err| return sdk.failure(output,id,libraryReason(err));
+            break :update sdk.result(output,id,null);
+        },
+        .@"bookmarks.remove" => remove: {
+            const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            bookmarks.remove(value.id) catch |err| return sdk.failure(output,id,libraryReason(err));
+            break :remove sdk.result(output,id,null);
+        },
+        .@"downloads.list" => list: {
+            const options = decode(sdk.HistoryQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            var rows: [24]sdk.Download = undefined;
+            const page = downloads.list(allocator,options,&rows) catch |err| return sdk.failure(output,id,libraryReason(err));
+            break :list sdk.result(output,id,page);
+        },
+        .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => change: {
+            const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const action = switch (method) {
+                .@"downloads.cancel" => downloads.cancel(value.id),
+                .@"downloads.remove" => downloads.remove(value.id),
+                .@"downloads.reveal" => downloads.reveal(allocator,value.id),
+                else => unreachable,
+            };
+            action catch |err| return sdk.failure(output,id,libraryReason(err));
+            break :change sdk.result(output,id,null);
         },
     };
 }

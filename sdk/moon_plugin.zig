@@ -13,9 +13,11 @@ pub const Permission = enum {
     @"page.inspect",
     @"history.manage",
     @"network.filter",
+    @"bookmarks.manage",
+    @"downloads.manage",
 };
 pub const Event = enum { @"tabs.changed" };
-pub const Shortcut = enum { @"Ctrl+H", F12, @"Ctrl+Shift+J" };
+pub const Shortcut = enum { @"Ctrl+H", F12, @"Ctrl+Shift+J", @"Ctrl+D", @"Ctrl+Shift+O", @"Ctrl+J" };
 pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false, shortcut: ?Shortcut = null };
 pub const Manifest = struct {
     id: []const u8,
@@ -51,9 +53,36 @@ pub const InspectorPanel = enum { inspector, console, resources };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
 pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
 pub const HistoryPage = struct { visits: []const HistoryVisit, next: ?u32 };
+pub const BookmarkInput = struct { title: []const u8, url: []const u8, folder: []const u8 = "" };
+pub const BookmarkEdit = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 = "" };
+pub const Bookmark = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 };
+pub const BookmarkPage = struct { bookmarks: []const Bookmark, next: ?u32 };
+pub const BookmarkSave = enum { saved, alreadySaved, noPage };
+pub const DownloadState = enum { choosing, transferring, complete, failed, cancelled, interrupted };
+pub const Download = struct {
+    id: u32,
+    name: []const u8,
+    state: DownloadState,
+    received: u64,
+    total: ?u64,
+    cancellable: bool,
+    startedAt: u64,
+};
+pub const DownloadPage = struct { downloads: []const Download, next: ?u32 };
 pub const NetworkFilterStatus = struct { preferred: bool, active: bool, exceptions: []const []const u8 };
 pub const NetworkFilterSite = struct { host: []const u8, enabled: bool };
-pub const CommandResult = struct { message: ?[]const u8 = null };
+pub const CommandResult = struct {
+    message: ?[]const u8 = null,
+    toast: bool = false,
+
+    pub fn jsonStringify(self: CommandResult, writer: anytype) !void {
+        if (self.toast) {
+            try writer.write(.{ .message=self.message,.toast=true });
+        } else {
+            try writer.write(.{ .message=self.message });
+        }
+    }
+};
 
 pub const Method = enum {
     @"host.getInfo",
@@ -74,6 +103,15 @@ pub const Method = enum {
     @"history.clear",
     @"network.filter.status",
     @"network.filter.setSite",
+    @"bookmarks.list",
+    @"bookmarks.save",
+    @"bookmarks.saveActive",
+    @"bookmarks.update",
+    @"bookmarks.remove",
+    @"downloads.list",
+    @"downloads.cancel",
+    @"downloads.remove",
+    @"downloads.reveal",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

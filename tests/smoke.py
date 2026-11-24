@@ -50,9 +50,25 @@ class Fixture(BaseHTTPRequestHandler):
     seen_filter_proof = Event()
     seen_allowed_request = Event()
     filter_probe = False
+    slow_download_release = Event()
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
+        if path == "/slow-download":
+            chunk = b"x" * (64 * 1024)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Disposition", 'attachment; filename="slow-test.bin"')
+            self.send_header("Content-Length", str(len(chunk) * 8))
+            self.end_headers()
+            try:
+                self.wfile.write(chunk)
+                self.wfile.flush()
+                if self.slow_download_release.wait(25):
+                    self.wfile.write(chunk * 7)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            return
         if path == "/download":
             data, content_type = PAYLOAD, "application/octet-stream"
         elif path == "/lua-demo-verified":
@@ -289,6 +305,12 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
             raise RuntimeError(f"50-tab private commit grew unexpectedly: baseline={baseline}, peak={peak}")
     if (profile / "smoke-download.txt").read_bytes() != PAYLOAD:
         raise RuntimeError("Downloaded content was corrupted")
+    if (exe.parent / "plugins" / "downloads" / "MoonDownloads.exe").is_file():
+        with closing(sqlite3.connect(profile / "downloads.sqlite3")) as db:
+            row = db.execute("SELECT state,received,path FROM downloads ORDER BY id DESC LIMIT 1").fetchone()
+        if not row or row[0] != 2 or row[1] != len(PAYLOAD) or Path(row[2]).name != "smoke-download.txt":
+            raise RuntimeError(f"The download manager did not persist the completed WebKit download: {row}")
+        print("download_completion_record=ok", flush=True)
 
 
 def run_win32(exe, base, root):
@@ -308,6 +330,8 @@ def run_win32(exe, base, root):
     user.GetDpiForWindow.restype = wt.UINT
     user.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
     user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user.GetClassLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
+    user.GetClassLongPtrW.restype = ctypes.c_size_t
     user.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
     user.ClientToScreen.argtypes = [wt.HWND, ctypes.POINTER(wt.POINT)]
     user.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
@@ -325,6 +349,8 @@ def run_win32(exe, base, root):
     devtools = exe.parent / "plugins" / "devtools" / "MoonDevTools.exe"
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
+    bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
+    downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     if manager.exists():
         fixture = profile / "plugins" / "settings"
         fixture.mkdir(parents=True)
@@ -334,6 +360,8 @@ def run_win32(exe, base, root):
             {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
             {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True},
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
+            {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True},
+            {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
@@ -421,6 +449,46 @@ def run_win32(exe, base, root):
             '})();</script>'
         )
         (fixture / "filter.html").write_text(html.replace("</html>",contract + "</html>"), encoding="utf-8")
+    if bookmarks.exists():
+        fixture = profile / "plugins" / "bookmark-contract"
+        fixture.mkdir(parents=True)
+        manifest = json.loads((bookmarks.parent / "plugin.json").read_text(encoding="utf-8"))
+        manifest["id"] = "moon.bookmark-fixture"
+        (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+        page = (bookmarks.parent / "bookmarks.html").read_text(encoding="utf-8")
+        contract = (
+            '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
+            'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
+            'const wait=async(fn)=>{for(let i=0;i<70;i++){if(fn())return;await new Promise(r=>setTimeout(r,50));}'
+            'throw Error("bookmarks UI timeout");};'
+            'try{await wait(()=>document.querySelector("#results li"));'
+            'document.querySelector("#results li button").click();'
+            'document.getElementById("title").value="编辑后的书签";document.getElementById("folder").value="测试文件夹";'
+            'document.getElementById("save").click();'
+            'await wait(()=>!document.getElementById("editor").open);'
+            'const input=document.getElementById("search");input.value="测试文件夹";input.dispatchEvent(new Event("input"));'
+            'await wait(()=>document.querySelector("#results").textContent.includes("编辑后的书签"));'
+            'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
+        )
+        (fixture / "bookmarks.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
+    if downloads.exists():
+        fixture = profile / "plugins" / "download-contract"
+        fixture.mkdir(parents=True)
+        manifest = json.loads((downloads.parent / "plugin.json").read_text(encoding="utf-8"))
+        manifest["id"] = "moon.download-fixture"
+        (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+        page = (downloads.parent / "downloads.html").read_text(encoding="utf-8")
+        contract = (
+            '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
+            'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
+            'const wait=async(fn)=>{for(let i=0;i<90;i++){const v=fn();if(v)return v;'
+            'await new Promise(r=>setTimeout(r,50));}throw Error("downloads UI timeout");};'
+            'try{await wait(()=>document.querySelector("progress")?.value>0);'
+            'const cancel=await wait(()=>document.querySelector(\'button[data-control$=":cancel"]\'));cancel.click();'
+            'await wait(()=>document.querySelector("#results").textContent.includes("已取消"));'
+            'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
+        )
+        (fixture / "downloads.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
     proc = subprocess.Popen([str(exe), "--gdi"], env=preview_env(root))
     frame = None
     try:
@@ -449,6 +517,10 @@ def run_win32(exe, base, root):
                 or origin.y != outer.top):
             raise RuntimeError('Native non-client area added a second row above the toolbar')
         print('single_titlebar=ok', flush=True)
+        if bookmarks.exists():
+            if not user.GetClassLongPtrW(frame,-14) or not user.GetClassLongPtrW(frame,-34):
+                raise RuntimeError("Moon Browser did not register the bundled large and small window icons")
+            print("application_window_icon=ok",flush=True)
         edit = user.GetDlgItem(frame, 1001)
         home = user.GetDlgItem(frame, 1002)
         content = user.FindWindowExW(frame, None, "MoonContent", None)
@@ -562,6 +634,13 @@ def run_win32(exe, base, root):
             query_edit = user.GetDlgItem(palette_window, 1003)
             set_control(query_edit, query)
             user.PostMessageW(query_edit, 0x0100, 0x0D, 1)
+
+        def library_result(plugin):
+            config = profile / f'extension-{sha256(plugin.encode()).hexdigest()}.json'
+            result = wait_for(lambda: config.exists() and json.loads(config.read_text(encoding="utf-8")),
+                              f"No contract result from {plugin}",15)
+            if not result.get("passed"):
+                raise RuntimeError(f"{plugin}: {result.get('error')}")
 
         def read_address():
             address = ctypes.create_unicode_buffer(4096)
@@ -686,7 +765,54 @@ def run_win32(exe, base, root):
             if not Fixture.seen_allowed_request.wait(12):
                 raise RuntimeError("The new site exception did not resume requests")
             print("filter_site_exception=ok", flush=True)
+        if bookmarks.exists():
+            if blocker.exists():
+                wait_for(lambda: history_rows("SELECT title FROM visits WHERE url=?",(base + "/page/filter-allowed",)),
+                         "The allowed-site fixture had not finished navigating")
+            target = base + "/page/bookmark-contract"
+            set_control(edit,target)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            try:
+                wait_for(lambda: ("Moon fixture bookmark-contract",) in history_rows("SELECT title FROM visits WHERE url=?",(target,)),
+                         "Bookmark fixture never finished loading")
+            except RuntimeError as error:
+                raise RuntimeError(f"{error}. Address: {read_address()}. "
+                                   f"Recent visits: {history_rows('SELECT title,url FROM visits ORDER BY id DESC LIMIT 3')}") from error
+            invoke("将当前页加入书签")
+            notice = wait_for(lambda: owned_window("#32770","书签"),"Bookmark save feedback did not open")
+            wait_for(lambda: not user.IsWindow(notice),"Bookmark feedback did not dismiss itself")
+            invoke("管理书签")
+            wait_for(lambda: read_address() == "extension://moon.bookmarks/bookmarks.html",
+                     "The bookmark system executable did not open its page")
+            set_control(edit,"extension://moon.bookmark-fixture/bookmarks.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            library_result("moon.bookmark-fixture")
+            with closing(sqlite3.connect(profile / "bookmarks.sqlite3")) as db:
+                row = db.execute("SELECT title,url,folder FROM bookmarks").fetchall()
+            if row != [("编辑后的书签",target,"测试文件夹")]:
+                raise RuntimeError(f"Bookmark save or edit was not persisted: {row}")
+            print("bookmark_system_plugin=ok native_bookmark_toast=ok bookmark_edit=ok",flush=True)
+        if downloads.exists():
+            set_control(edit,base + "/slow-download")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            dialog = wait_for(lambda: owned_window("#32770","保存下载"),"The real save dialog did not open")
+            filename = ctypes.create_unicode_buffer(str(profile / "slow-test.bin"))
+            user.SendMessageW(dialog,0x0468,0x0480,ctypes.addressof(filename))  # CDM_SETCONTROLTEXT / edt1
+            user.PostMessageW(dialog,0x0111,1,0)  # IDOK
+            wait_for(lambda: not user.IsWindow(dialog),"Saving the download did not close the dialog")
+            invoke("查看下载")
+            wait_for(lambda: read_address() == "extension://moon.downloads/downloads.html",
+                     "The download system executable did not open its page")
+            set_control(edit,"extension://moon.download-fixture/downloads.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            library_result("moon.download-fixture")
+            with closing(sqlite3.connect(profile / "downloads.sqlite3")) as db:
+                row = db.execute("SELECT state,received FROM downloads ORDER BY id DESC LIMIT 1").fetchone()
+            if not row or row[0] != 4 or not 0 < row[1] < 8 * 64 * 1024:
+                raise RuntimeError(f"Download cancellation and progress were not recorded: {row}")
+            print("download_system_plugin=ok download_live_progress=ok download_cancel=ok",flush=True)
     finally:
+        Fixture.slow_download_release.set()
         if frame:
             user.PostMessageW(frame, 0x0010, 0, 0)
         try:

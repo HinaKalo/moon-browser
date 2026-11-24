@@ -40,7 +40,7 @@
     X(WKRelease) X(WKGetTypeID) X(WKSessionStateGetTypeID) X(WKSessionStateCopyData) X(WKDataGetSize) \
     X(WKStringCreateWithUTF8CString) X(WKStringGetUTF8CString) X(WKStringIsEqualToUTF8CString) \
     X(WKURLCreateWithUTF8CString) X(WKURLCopyString) X(WKURLCopyScheme) X(WKURLRequestCopyURL) \
-    X(WKURLRequestCopyHTTPMethod) X(WKURLResponseIsAttachment) \
+    X(WKURLRequestCopyHTTPMethod) X(WKURLResponseIsAttachment) X(WKURLResponseGetExpectedContentLength) \
     X(WKContextConfigurationCreate) X(WKContextConfigurationSetPrewarmsProcessesAutomatically) \
     X(WKContextConfigurationSetUsesWebProcessCache) X(WKContextConfigurationSetAlwaysKeepAndReuseSwappedProcesses) \
     X(WKContextCreateWithConfiguration) X(WKContextSetCacheModel) X(WKContextSetDownloadClient) \
@@ -71,7 +71,7 @@
     X(WKNavigationActionGetNavigationType) X(WKNavigationActionHasUnconsumedUserGesture) \
     X(WKNavigationResponseCopyResponse) X(WKNavigationResponseCanShowMIMEType) \
     X(WKFramePolicyListenerUse) X(WKFramePolicyListenerIgnore) X(WKFramePolicyListenerDownload) \
-    X(WKErrorCopyLocalizedDescription) X(WKDownloadGetOriginatingPage) \
+    X(WKErrorCopyLocalizedDescription) X(WKDownloadGetOriginatingPage) X(WKDownloadCancel) \
     X(WKPageListenForLayoutMilestones) X(WKPageCallAfterNextPresentationUpdate)
 
 static struct {
@@ -105,7 +105,12 @@ struct MoonView {
 };
 static MoonView *views;
 static uintptr_t extension_sequence;
-static struct { WKDownloadRef download; uint64_t token; } downloads[64];
+typedef struct {
+    WKDownloadRef download;
+    uint64_t token;
+    uint32_t id;
+} DownloadSlot;
+static DownloadSlot downloads[64];
 
 static void release(WKTypeRef ref) { if (ref) wk.WKRelease(ref); }
 static void copy_string(WKStringRef string, char *buffer, size_t cap) {
@@ -216,32 +221,49 @@ static WKPageRef popup_requested(WKPageRef page, WKURLRequestRef request, WKDict
         emit(client, MOON_POPUP, url);
     return NULL;
 }
-static uint64_t download_token(WKDownloadRef download, bool clear) {
+static DownloadSlot *download_slot(WKDownloadRef download) {
     for (size_t i=0;i<ARRAYSIZE(downloads);++i) {
-        if (downloads[i].download != download) continue;
-        uint64_t token = downloads[i].token;
-        if (clear) downloads[i].download = NULL;
-        return token;
+        if (downloads[i].download == download) return &downloads[i];
     }
-    return 0;
+    return NULL;
 }
 static void download_started(WKContextRef unused, WKDownloadRef download, const void *client) {
+    DownloadSlot *slot=download_slot(NULL);
+    if (!slot) return;
+    *slot=(DownloadSlot){ .download=download,.id=moon_download_begin() };
     WKPageRef page = wk.WKDownloadGetOriginatingPage(download);
     for (MoonView *view=views;view;view=view->next) {
         if (view->page != page) continue;
-        for (size_t i=0;i<ARRAYSIZE(downloads);++i) if (!downloads[i].download) {
-            downloads[i].download = download;
-            downloads[i].token = view->token;
-            emit(view, MOON_DOWNLOAD_START, NULL);
-            break;
-        }
+        slot->token=view->token;
+        emit(view, MOON_DOWNLOAD_START, NULL);
         return;
     }
+}
+static void download_response(WKContextRef unused, WKDownloadRef download, WKURLResponseRef response, const void *client) {
+    DownloadSlot *slot=download_slot(download);
+    if (!slot || !slot->id || !response) return;
+    const uint32_t length=wk.WKURLResponseGetExpectedContentLength(response);
+    if (length!=UINT32_MAX) moon_download_progress(slot->id,0,length);
+}
+static void download_data(WKContextRef unused, WKDownloadRef download, uint64_t chunk, const void *client) {
+    DownloadSlot *slot=download_slot(download);
+    if (slot && slot->id) moon_download_progress(slot->id,chunk,0);
+}
+static void finish_download(WKDownloadRef download, int state, const char *detail) {
+    DownloadSlot *slot=download_slot(download);
+    if (!slot) return;
+    const DownloadSlot result=*slot;
+    *slot=(DownloadSlot){0};
+    if (result.id) moon_download_finish(result.id,state);
+    if (*test_download_path) test_download_result = state==MOON_DL_COMPLETE ? 1 : -1;
+    if (result.token) moon_engine_event(MOON_DOWNLOAD_END,result.token,detail);
 }
 static WKStringRef download_destination(WKContextRef unused, WKDownloadRef download, WKStringRef suggested,
                                          bool *overwrite, const void *client) {
     if (*test_download_path) {
         *overwrite = false;
+        DownloadSlot *slot=download_slot(download);
+        if (slot && slot->id) moon_download_destination(slot->id,test_download_path);
         return wk.WKStringCreateWithUTF8CString(test_download_path);
     }
     char suggested_utf8[1024] = {0}, path_utf8[8192];
@@ -251,25 +273,45 @@ static WKStringRef download_destination(WKContextRef unused, WKDownloadRef downl
     if (!*path || wcspbrk(path, L"\\/:*?\"<>|") || !wcscmp(path,L".") || !wcscmp(path,L".."))
         wcscpy(path,L"download");
     OPENFILENAMEW dialog = { .lStructSize = sizeof(dialog), .hwndOwner = moon_shell_window(),
-        .lpstrFile = path, .nMaxFile = ARRAYSIZE(path), .lpstrTitle = L"Save download",
+        .lpstrFile = path, .nMaxFile = ARRAYSIZE(path), .lpstrTitle = L"保存下载",
         .Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER };
-    if (!GetSaveFileNameW(&dialog) || !moon_utf8(path,path_utf8,sizeof(path_utf8))) return NULL;
+    if (!GetSaveFileNameW(&dialog) || !moon_utf8(path,path_utf8,sizeof(path_utf8))) {
+        finish_download(download,MOON_DL_CANCELLED,NULL);
+        return NULL;
+    }
     *overwrite = true;
+    DownloadSlot *slot=download_slot(download);
+    if (slot && slot->id) moon_download_destination(slot->id,path_utf8);
     return wk.WKStringCreateWithUTF8CString(path_utf8);
 }
-static void finish_download(WKDownloadRef download, bool success, const char *detail) {
-    uint64_t token = download_token(download,true);
-    if (*test_download_path) test_download_result = success ? 1 : -1;
-    if (token) moon_engine_event(MOON_DOWNLOAD_END,token,detail);
-}
 static void download_finished(WKContextRef unused, WKDownloadRef download, const void *client) {
-    finish_download(download,true,"Download complete");
+    finish_download(download,MOON_DL_COMPLETE,"下载完成");
 }
 static void download_failed(WKContextRef unused, WKDownloadRef download, WKErrorRef error, const void *client) {
-    finish_download(download,false,"Download failed");
+    finish_download(download,MOON_DL_FAILED,"下载失败");
 }
 static void download_cancelled(WKContextRef unused, WKDownloadRef download, const void *client) {
-    finish_download(download,false,"Download cancelled");
+    finish_download(download,MOON_DL_CANCELLED,"已取消下载");
+}
+static void download_crashed(WKContextRef unused, WKDownloadRef download, const void *client) {
+    finish_download(download,MOON_DL_INTERRUPTED,"下载已中断");
+}
+static void download_cancel_complete(WKDataRef resume, const void *cookie) {
+    const uint32_t id=(uint32_t)(uintptr_t)cookie;
+    for (size_t i=0;i<ARRAYSIZE(downloads);++i) {
+        if (!downloads[i].download || downloads[i].id!=id) continue;
+        finish_download(downloads[i].download,MOON_DL_CANCELLED,"已取消下载");
+        return;
+    }
+}
+bool moon_engine_cancel_download(uint32_t id) {
+    if (!id) return false;
+    for (size_t i=0;i<ARRAYSIZE(downloads);++i) {
+        if (!downloads[i].download || downloads[i].id!=id) continue;
+        wk.WKDownloadCancel(downloads[i].download,(const void *)(uintptr_t)id,download_cancel_complete);
+        return true;
+    }
+    return false;
 }
 static void set_profile_path(WKWebsiteDataStoreConfigurationRef configuration,
     void (*setter)(WKWebsiteDataStoreConfigurationRef, WKStringRef), const char *name) {
@@ -368,8 +410,9 @@ const char *moon_engine_init(void) {
     release(config);
     if (!store) return "Could not open website data.";
     WKContextDownloadClientV0 client = { .base={0,NULL}, .didStart=download_started,
+        .didReceiveResponse=download_response,.didReceiveData=download_data,
         .decideDestinationWithSuggestedFilename=download_destination,.didFinish=download_finished,
-        .didFail=download_failed,.didCancel=download_cancelled,.processDidCrash=download_cancelled };
+        .didFail=download_failed,.didCancel=download_cancelled,.processDidCrash=download_crashed };
     wk.WKContextSetDownloadClient(context,&client.base);
     return NULL;
 }

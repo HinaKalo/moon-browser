@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>书签</title>
+<style>
+  :root { color-scheme: light; font: 14px/1.55 "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif; --page:#f6f7fa; --surface:#fff; --text:#171b26; --muted:#535e74; --line:#dbe0ed; --accent:#4158bf; --soft:#edf0fc; background:var(--page); color:var(--text); }
+  :root[data-moon-theme=dark] { color-scheme:dark; --page:#171a22; --surface:#222635; --text:#edf0f7; --muted:#b6c0d5; --line:#3a435b; --accent:#acbbff; --soft:#303852; }
+  * { box-sizing:border-box; }
+  body { margin:0; }
+  main { max-width:900px; margin:auto; padding:42px clamp(20px,5vw,48px); }
+  h1 { margin:0 0 20px; font-size:30px; }
+  h2 { margin:0 0 12px; font-size:19px; }
+  .toolbar,.actions,li { display:flex; align-items:center; gap:8px; }
+  input,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
+  input { min-width:0; flex:1; }
+  button { cursor:pointer; }
+  button:hover { background:var(--soft); }
+  button:disabled { opacity:.5; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  #status,#edit-error,small { color:var(--muted); }
+  #status:empty,#edit-error:empty { display:none; }
+  ul { padding:0; margin:18px 0 0; list-style:none; border:1px solid var(--line); border-radius:12px; background:var(--surface); }
+  li { padding:0 10px 0 2px; }
+  li + li { border-top:1px solid var(--line); }
+  a { flex:1; min-width:0; text-decoration:none; color:inherit; padding:10px 12px; border-radius:8px; }
+  a:hover { background:var(--soft); }
+  a strong,a small { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .folder { display:inline-block; color:var(--muted); background:var(--soft); border-radius:6px; padding:1px 6px; margin-left:7px; font-weight:400; }
+  li button { border-color:transparent; }
+  #more { margin-top:14px; }
+  dialog { width:min(450px,calc(100% - 32px)); color:var(--text); background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:22px; }
+  dialog::backdrop { background:#161a3360; }
+  label { display:grid; gap:4px; margin:10px 0; }
+  .actions { justify-content:flex-end; margin-top:15px; flex-wrap:wrap; }
+</style>
+<main>
+  <h1>书签</h1>
+  <div class="toolbar">
+    <input type="search" id="search" placeholder="搜索标题、网址或文件夹" aria-label="搜索书签" maxlength="64">
+    <button id="add">新建书签</button>
+  </div>
+  <p id="status" role="status">正在读取书签…</p>
+  <ul id="results" aria-label="书签列表" hidden></ul>
+  <button id="more" hidden>加载更多</button>
+  <dialog id="editor" aria-labelledby="editor-title">
+    <h2 id="editor-title">编辑书签</h2>
+    <form id="fields">
+      <label>标题<input id="title" maxlength="127" autocomplete="off"></label>
+      <label>网址<input id="url" type="url" required maxlength="4095" placeholder="https://example.com"></label>
+      <label>文件夹<input id="folder" maxlength="40" placeholder="可选" autocomplete="off"></label>
+      <p id="edit-error" role="alert"></p>
+      <div class="actions"><button type="button" id="dismiss">取消</button><button id="save">保存</button></div>
+    </form>
+  </dialog>
+</main>
+<script>
+  const el = id => document.getElementById(id);
+  const search = el('search'), results = el('results'), status = el('status'), more = el('more'), editor = el('editor');
+  let sequence = 0, revision = 0, timer, cursor, editing;
+  async function host(method, params) {
+    const id = 'bookmark:' + ++sequence;
+    const reply = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({ jsonrpc:'2.0', id, method, params })));
+    if (reply.id !== id || reply.error) throw Error(reply.error?.message || 'INVALID_RESPONSE');
+    return reply.result;
+  }
+  function edit(item) {
+    editing = item;
+    el('editor-title').textContent = item ? '编辑书签' : '新建书签';
+    el('title').value = item?.title ?? '';
+    el('url').value = item?.url ?? '';
+    el('folder').value = item?.folder ?? '';
+    el('edit-error').textContent = '';
+    editor.showModal();
+  }
+  function append(item) {
+    const row = document.createElement('li');
+    const link = document.createElement('a');
+    link.href = item.url;
+    const heading = document.createElement('strong');
+    heading.textContent = item.title || item.url;
+    if (item.folder) {
+      const folder = document.createElement('span');
+      folder.className = 'folder';
+      folder.textContent = item.folder;
+      heading.append(folder);
+    }
+    const address = document.createElement('small');
+    address.textContent = item.url;
+    link.append(heading,address);
+    const change = document.createElement('button');
+    change.textContent = '编辑';
+    change.setAttribute('aria-label','编辑 ' + (item.title || item.url));
+    change.onclick = () => edit(item);
+    const remove = document.createElement('button');
+    remove.textContent = '删除';
+    remove.setAttribute('aria-label','删除 ' + (item.title || item.url));
+    remove.onclick = async () => {
+      remove.disabled = true;
+      try {
+        await host('bookmarks.remove',{ id:item.id });
+        await load();
+        status.textContent = '已删除书签。';
+        search.focus();
+      } catch { remove.disabled = false; status.textContent = '无法删除书签。'; }
+    };
+    row.append(link,change,remove);
+    results.append(row);
+  }
+  async function load(appendMore = false) {
+    const request = ++revision;
+    more.disabled = true;
+    try {
+      const query = search.value.trim();
+      const page = await host('bookmarks.list',{ query,before:appendMore ? cursor : null });
+      if (request !== revision) return;
+      if (!appendMore) results.replaceChildren();
+      page.bookmarks.forEach(append);
+      results.hidden = !results.children.length;
+      cursor = page.next;
+      more.hidden = cursor === null;
+      status.textContent = results.hidden ? (query ? '没有匹配的书签。' : '用 Ctrl+D 保存网页，或新建书签。') : '';
+      el('add').disabled = false;
+    } catch (error) {
+      if (request !== revision) return;
+      results.replaceChildren();
+      results.hidden = more.hidden = true;
+      el('add').disabled = true;
+      status.textContent = error.message === 'PERMISSION_DENIED' ? '请在插件菜单允许管理书签。' : '无法读取书签。';
+    } finally { if (request === revision) more.disabled = false; }
+  }
+  el('add').onclick = () => edit(null);
+  el('dismiss').onclick = () => editor.close();
+  el('fields').onsubmit = async event => {
+    event.preventDefault();
+    el('save').disabled = true;
+    const entry = { title:el('title').value.trim(), url:el('url').value.trim(), folder:el('folder').value.trim() };
+    try {
+      if (editing) await host('bookmarks.update',{ ...entry,id:editing.id });
+      else if (await host('bookmarks.save',entry) === 'alreadySaved') throw Error('ALREADY_EXISTS');
+      editor.close();
+      await load();
+      search.focus();
+    } catch (error) {
+      el('edit-error').textContent = error.message === 'ALREADY_EXISTS' ? '这个网址已在书签中。'
+        : error.message === 'INVALID_PARAMS' ? '请输入有效的 HTTP 或 HTTPS 网址。' : '无法保存书签。';
+    } finally { el('save').disabled = false; }
+  };
+  search.oninput = () => { clearTimeout(timer); timer = setTimeout(load,120); };
+  more.onclick = () => load(true);
+  document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });
+  load();
+</script>
+</html>

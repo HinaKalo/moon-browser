@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
     const plugin_sdk = b.createModule(.{ .root_source_file = b.path("sdk/moon_plugin.zig") });
     app.root_module.addImport("native", bridge.createModule());
     app.root_module.addImport("moon_plugin", plugin_sdk);
+    app.root_module.addWin32ResourceFile(.{ .file=b.path("src/moon-browser.rc") });
     app.root_module.addIncludePath(b.path("third_party"));
     app.root_module.addCSourceFiles(.{ .files = &.{ "src/win.c", "src/win_dialog.c", "src/webkit.c", "src/plugin_io.c", "src/update_win.c", "src/lua_runtime.c" }, .flags = &.{ "-std=c17", "-DUNICODE", "-D_UNICODE" } });
     app.root_module.addCSourceFiles(.{ .root = b.path("third_party/Lua"), .files = &.{
@@ -51,7 +52,7 @@ pub fn build(b: *std.Build) void {
     });
     devtools.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(devtools);
-    for ([_][]const u8{ "MoonHistory", "MoonBlocker" }) |name| {
+    for ([_][]const u8{ "MoonHistory", "MoonBlocker", "MoonDownloads" }) |name| {
         const opener = b.addExecutable(.{
             .name = name,
             .root_module = b.createModule(.{ .root_source_file=b.path("examples/open_plugin_page.zig"), .target=target, .optimize=optimize, .link_libc=true }),
@@ -59,6 +60,12 @@ pub fn build(b: *std.Build) void {
         opener.root_module.addImport("moon_plugin",plugin_sdk);
         b.installArtifact(opener);
     }
+    const bookmarks = b.addExecutable(.{
+        .name = "MoonBookmarks",
+        .root_module = b.createModule(.{ .root_source_file=b.path("examples/bookmarks/main.zig"),.target=target,.optimize=optimize,.link_libc=true }),
+    });
+    bookmarks.root_module.addImport("moon_plugin",plugin_sdk);
+    b.installArtifact(bookmarks);
     const fixture = b.addExecutable(.{
         .name = "MoonPluginContractClient",
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/plugin_contract_client.zig"), .target = target, .optimize = optimize, .link_libc = true }),

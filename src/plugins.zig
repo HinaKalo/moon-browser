@@ -18,7 +18,11 @@ const LegacyManifest = struct {
     permissions: []const []const u8 = &.{},
     events: []const []const u8 = &.{},
 };
-const Grant = struct { id: []const u8, enabled: bool, tabs_read: bool, lua_scripts_manage: bool = false, page_inspect: bool = false, history_manage: bool = false, network_filter: bool = false };
+const Grant = struct {
+    id: []const u8, enabled: bool, tabs_read: bool,
+    lua_scripts_manage: bool = false, page_inspect: bool = false, history_manage: bool = false, network_filter: bool = false,
+    bookmarks_manage: bool = false, downloads_manage: bool = false,
+};
 const Outcome = enum { ok, failed, timed_out, crashed };
 const Trigger = enum { command, changed, timeout_test, crash_test };
 const CallState = enum(u8) { idle, queued, serving, ready };
@@ -46,6 +50,7 @@ const Task = struct {
     rpc: ?*Rpc = null,
     outcome: Outcome = .failed,
     message: [512:0]u8 = @splat(0),
+    toast: bool = false,
 };
 const Command = struct { id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false, shortcut: ?sdk.Shortcut = null };
 const Plugin = struct {
@@ -126,7 +131,9 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     }
     if (bundled) {
         const default_permission: ?sdk.Permission = if (std.mem.eql(u8,id,"moon.history")) .@"history.manage"
-            else if (std.mem.eql(u8,id,"moon.devtools")) .@"page.inspect" else null;
+            else if (std.mem.eql(u8,id,"moon.devtools")) .@"page.inspect"
+            else if (std.mem.eql(u8,id,"moon.bookmarks")) .@"bookmarks.manage"
+            else if (std.mem.eql(u8,id,"moon.downloads")) .@"downloads.manage" else null;
         if (default_permission) |scope| {
             if (requests.contains(scope)) {
                 plugin.enabled = true;
@@ -193,6 +200,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.page_inspect and plugin.requests.contains(.@"page.inspect")) plugin.grants.insert(.@"page.inspect");
         if (grant.enabled and grant.history_manage and plugin.requests.contains(.@"history.manage")) plugin.grants.insert(.@"history.manage");
         if (grant.enabled and grant.network_filter and plugin.requests.contains(.@"network.filter")) plugin.grants.insert(.@"network.filter");
+        if (grant.enabled and grant.bookmarks_manage and plugin.requests.contains(.@"bookmarks.manage")) plugin.grants.insert(.@"bookmarks.manage");
+        if (grant.enabled and grant.downloads_manage and plugin.requests.contains(.@"downloads.manage")) plugin.grants.insert(.@"downloads.manage");
         break;
     };
 }
@@ -207,6 +216,8 @@ fn persist() bool {
         .page_inspect = plugin.grants.contains(.@"page.inspect"),
         .history_manage = plugin.grants.contains(.@"history.manage"),
         .network_filter = plugin.grants.contains(.@"network.filter"),
+        .bookmarks_manage = plugin.grants.contains(.@"bookmarks.manage"),
+        .downloads_manage = plugin.grants.contains(.@"downloads.manage"),
     };
     const bytes = std.json.Stringify.valueAlloc(allocator, items[0..len], .{}) catch return false;
     defer allocator.free(bytes);
@@ -233,6 +244,8 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"page.inspect" => "此插件可为触发命令时的网页打开开发者工具。控制台和站点存储可在工具中查看。",
                 .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",
+                .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",
+                .@"downloads.manage" => "此插件可读取本机下载记录、取消传输，并在文件夹中显示已保存的文件。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
             plugin.grants.insert(scope);
@@ -278,18 +291,14 @@ pub fn action(index: usize, command_index: usize) [*:0]const u8 {
 pub fn actionShortcut(index: usize, command_index: usize) ?sdk.Shortcut {
     return all[index].actions[command_index].shortcut;
 }
-pub fn flags(index: usize) c_uint {
+pub fn isEnabled(index: usize) bool {
+    return all[index].enabled;
+}
+
+pub fn permissionFlags(index: usize, permission: sdk.Permission) c_uint {
     const plugin = &all[index];
-    return @as(c_uint, @intFromBool(plugin.enabled)) |
-        (@as(c_uint, @intFromBool(plugin.grants.contains(.@"tabs.read"))) << 1) |
-        (@as(c_uint, @intFromBool(plugin.grants.contains(.@"lua.scripts.manage"))) << 2) |
-        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"lua.scripts.manage"))) << 3) |
-        (@as(c_uint, @intFromBool(plugin.grants.contains(.@"page.inspect"))) << 4) |
-        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"page.inspect"))) << 5) |
-        (@as(c_uint, @intFromBool(plugin.grants.contains(.@"history.manage"))) << 6) |
-        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"history.manage"))) << 7) |
-        (@as(c_uint, @intFromBool(plugin.grants.contains(.@"network.filter"))) << 8) |
-        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"network.filter"))) << 9);
+    return @as(c_uint,@intFromBool(plugin.requests.contains(permission))) |
+        (@as(c_uint,@intFromBool(plugin.grants.contains(permission))) << 1);
 }
 
 pub fn hasSettings(index: usize) bool {
@@ -309,9 +318,9 @@ pub fn pageGrants(id: []const u8) ?Permissions {
     return null;
 }
 
-pub fn historyEnabled() bool {
+pub fn systemEnabled(permission: sdk.Permission) bool {
     for (all[0..len]) |*plugin| {
-        if (plugin.default_grants.contains(.@"history.manage")) return plugin.enabled and plugin.grants.contains(.@"history.manage");
+        if (plugin.default_grants.contains(permission)) return plugin.enabled and plugin.grants.contains(permission);
     }
     return false;
 }
@@ -365,7 +374,7 @@ fn launch(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snaps
         .executable = &plugin.executable,
         .epoch = &plugin.epoch,
         .expected_epoch = plugin.epoch.load(.acquire),
-        .snapshot = if (plugin.grants.contains(.@"tabs.read")) snapshot else null,
+        .snapshot = if (plugin.grants.contains(.@"tabs.read") or plugin.grants.contains(.@"bookmarks.manage")) snapshot else null,
         .target_tab_id = if (snapshot) |tab| tab.id else 0,
         .trigger = trigger,
         .plugin_id = &plugin.id,
@@ -449,6 +458,8 @@ pub fn tick(snapshot: ?Snapshot, smoking: bool) void {
         if (smoking) {
             smoke_outcome = task.outcome;
             smoke_message = task.message;
+        } else if (task.trigger == .command and task.outcome == .ok and task.toast and task.message[0] != 0) {
+            native.moon_shell_toast(&plugin.label,&task.message);
         } else if (task.trigger == .command and (task.rpc == null or task.outcome != .ok or task.message[0] != 0)) {
             native.moon_shell_info(&plugin.label, switch (task.outcome) {
                 .ok => &task.message,
@@ -594,6 +605,7 @@ fn exchangeV2(task: *Task, pipe: *native.MoonPipe, rpc: *Rpc) Outcome {
             const reply = std.json.parseFromValue(sdk.CommandResult, allocator, message.get("result") orelse return .failed, .{}) catch return .failed;
             defer reply.deinit();
             if (!copy(&task.message, reply.value.message orelse "")) return .failed;
+            task.toast = reply.value.toast;
             return .ok;
         }
         if (!std.mem.startsWith(u8, id, "p:") or id.len > 11) return .failed;

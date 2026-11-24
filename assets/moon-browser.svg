@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Moon Browser</title>
+  <defs>
+    <linearGradient id="blue" x2="1" y2="1">
+      <stop stop-color="#6174df"/>
+      <stop offset=".53" stop-color="#4359c5"/>
+      <stop offset="1" stop-color="#303f9c"/>
+    </linearGradient>
+    <mask id="crescent">
+      <rect width="256" height="256" fill="#fff"/>
+      <circle cx="151" cy="104" r="58" fill="#000"/>
+    </mask>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="url(#blue)"/>
+  <rect x="10" y="10" width="236" height="236" rx="56" fill="none" stroke="#fff" stroke-opacity=".20" stroke-width="2"/>
+  <circle cx="119" cy="132" r="66" fill="#fff" mask="url(#crescent)"/>
+  <circle cx="183" cy="94" r="10" fill="#d7dfff"/>
+</svg>

@@ -3,7 +3,7 @@
 #include <string.h>
 
 enum { BODY_ID = 101, COPY_ID };
-typedef enum { INFO, CONFIRM, ERROR_DIALOG } Kind;
+typedef enum { INFO, CONFIRM, ERROR_DIALOG, TOAST } Kind;
 
 typedef struct Popup {
     Kind kind;
@@ -18,6 +18,7 @@ typedef struct Popup {
 } Popup;
 
 static Popup notice;
+static Popup toast = { .kind=TOAST };
 static HWND modal;
 static _Alignas(DWORD) const struct {
     DLGTEMPLATE dialog;
@@ -69,6 +70,16 @@ static void layout_popup(Popup *popup, const RECT *suggested) {
     const int pad = scale(popup,22), gap = scale(popup,8);
     const int work_w = monitor.rcWork.right - monitor.rcWork.left;
     const int work_h = monitor.rcWork.bottom - monitor.rcWork.top;
+    if (popup->kind==TOAST) {
+        const int width=minimum(scale(popup,330),work_w-2*gap), height=scale(popup,78), inset=scale(popup,20);
+        const int left=clamp(owner.right-width-inset,monitor.rcWork.left+gap,monitor.rcWork.right-width-gap);
+        const int top=clamp(owner.bottom-height-inset,monitor.rcWork.top+gap,monitor.rcWork.bottom-height-gap);
+        SetWindowPos(window,NULL,left,top,width,height,SWP_NOZORDER | SWP_NOACTIVATE);
+        HRGN region=CreateRoundRectRgn(0,0,width+1,height+1,scale(popup,16),scale(popup,16));
+        if (region && !SetWindowRgn(window,region,TRUE)) DeleteObject(region);
+        InvalidateRect(window,NULL,TRUE);
+        return;
+    }
     const int width = minimum(scale(popup,wcslen(popup->body) > 300 ? 550 : 426),work_w - 2*gap);
     const int body_y = scale(popup,55), row_h = scale(popup,34);
     const int body_cap = minimum(scale(popup,225),work_h - body_y - row_h - 4*pad);
@@ -166,7 +177,7 @@ static void copy_details(Popup *popup) {
 }
 
 static void close_popup(Popup *popup, int result) {
-    if (popup->kind == INFO) DestroyWindow(popup->window);
+    if (popup->kind == INFO || popup->kind == TOAST) DestroyWindow(popup->window);
     else EndDialog(popup->window,result);
 }
 
@@ -176,10 +187,17 @@ static INT_PTR CALLBACK popup_message(HWND window, UINT msg, WPARAM wp, LPARAM l
         popup = (Popup *)lp;
         SetWindowLongPtrW(window,DWLP_USER,(LONG_PTR)popup);
         popup->window = window;
-        if (popup->kind != INFO) modal = window;
+        if (popup->kind == CONFIRM || popup->kind == ERROR_DIALOG) modal = window;
         popup->dpi = GetDpiForWindow(GetWindow(window,GW_OWNER));
         if (!popup->dpi) popup->dpi = 96;
         SetWindowTextW(window,popup->title);
+        if (popup->kind==TOAST) {
+            SetWindowLongPtrW(window,GWL_EXSTYLE,GetWindowLongPtrW(window,GWL_EXSTYLE)|WS_EX_NOACTIVATE);
+            reset_fonts(popup);
+            apply_colors(popup);
+            layout_popup(popup,NULL);
+            return FALSE;
+        }
         popup->edit = CreateWindowExW(0,L"EDIT",popup->body,
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
             0,0,0,0,window,(HMENU)BODY_ID,GetModuleHandleW(NULL),NULL);
@@ -216,6 +234,12 @@ static INT_PTR CALLBACK popup_message(HWND window, UINT msg, WPARAM wp, LPARAM l
             SetTextColor(dc,popup->kind == ERROR_DIALOG ? popup->colors.danger : popup->colors.text);
             SetBkMode(dc,TRANSPARENT);
             DrawTextW(dc,popup->title,-1,&title,DT_END_ELLIPSIS | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            if (popup->kind==TOAST) {
+                SelectObject(dc,popup->normal);
+                SetTextColor(dc,popup->colors.muted);
+                RECT text={scale(popup,22),scale(popup,39),rect.right-scale(popup,22),scale(popup,64)};
+                DrawTextW(dc,popup->body,-1,&text,DT_END_ELLIPSIS|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+            }
             SelectObject(dc,font);
             EndPaint(window,&paint);
             return TRUE;
@@ -241,6 +265,12 @@ static INT_PTR CALLBACK popup_message(HWND window, UINT msg, WPARAM wp, LPARAM l
             }
             break;
         case WM_CLOSE: close_popup(popup,IDCANCEL); return TRUE;
+        case WM_TIMER:
+            if (popup->kind==TOAST && wp==1) {
+                DestroyWindow(window);
+                return TRUE;
+            }
+            break;
         case WM_DPICHANGED:
             popup->dpi = LOWORD(wp);
             reset_fonts(popup);
@@ -267,6 +297,17 @@ bool moon_dialog_message(MSG *message) {
 
 void moon_dialog_refresh(void) {
     if (notice.window) apply_colors(&notice);
+    if (toast.window) apply_colors(&toast);
+}
+
+void moon_shell_toast(const char *title,const char *body) {
+    HWND owner=moon_shell_window();
+    if (!owner || !set_text(&toast,title,body)) return;
+    if (!toast.window) CreateDialogIndirectParamW(GetModuleHandleW(NULL),&popup_template.dialog,owner,popup_message,(LPARAM)&toast);
+    if (!toast.window) return;
+    layout_popup(&toast,NULL);
+    ShowWindow(toast.window,SW_SHOWNOACTIVATE);
+    if (!SetTimer(toast.window,1,2500,NULL)) DestroyWindow(toast.window);
 }
 
 void moon_shell_info(const char *title, const char *body) {

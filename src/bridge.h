@@ -9,14 +9,14 @@ enum MoonCommand {
     MOON_ADDRESS, MOON_TICK, MOON_INPUT, MOON_DIAGNOSTICS, MOON_PLUGIN_COMMAND,
     MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
     MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES,
-    MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_GRANT_LUA, MOON_PLUGIN_SETTINGS, MOON_PLUGIN_GRANT_INSPECT, MOON_MARKET,
-    MOON_PLUGIN_GRANT_HISTORY, MOON_PLUGIN_GRANT_FILTER
+    MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_SETTINGS, MOON_MARKET
 };
 enum MoonEngineEvent {
     MOON_STARTED = 1, MOON_COMMITTED, MOON_FINISHED, MOON_FAILED, MOON_CHANGED,
     MOON_TERMINATED, MOON_UNSAFE, MOON_DOWNLOAD_START, MOON_DOWNLOAD_END, MOON_POPUP,
     MOON_PAINTED, MOON_SAME_DOCUMENT
 };
+enum MoonDownloadResult { MOON_DL_COMPLETE, MOON_DL_FAILED, MOON_DL_CANCELLED, MOON_DL_INTERRUPTED };
 
 typedef struct MoonView MoonView;
 typedef struct MoonPipe MoonPipe;
@@ -38,12 +38,16 @@ void moon_shell_toggle_sidebar(void);
 void moon_shell_toggle_theme(void);
 void moon_shell_open_plugins(void);
 void moon_shell_info(const char *title, const char *body);
+void moon_shell_toast(const char *title, const char *body);
 void moon_shell_error(const char *body);
 bool moon_shell_confirm(const char *title, const char *body);
 const char *moon_profile_dir(void);
 const char *moon_app_dir(void);
 uint64_t moon_clock(void);
 uint64_t moon_wall_ms(void);
+uint32_t moon_current_pid(void);
+uint64_t moon_process_birth(uint32_t pid);
+bool moon_shell_reveal_file(const char *path);
 uint64_t moon_perf_us(void);
 bool moon_low_memory(void);
 size_t moon_memory_samples(MoonSample *samples, size_t cap);
@@ -84,6 +88,11 @@ void moon_engine_apply_dom(MoonView *view, const char *javascript);
 void moon_engine_trim(void);
 bool moon_engine_test_crash(MoonView *view);
 int moon_engine_test_download(MoonView *view, const char *path);
+bool moon_engine_cancel_download(uint32_t id);
+uint32_t moon_download_begin(void);
+void moon_download_destination(uint32_t id, const char *path);
+void moon_download_progress(uint32_t id, uint64_t chunk, uint64_t total);
+void moon_download_finish(uint32_t id, int result);
 void moon_engine_probe(MoonView *view);
 void moon_engine_test_fallback(bool enabled);
 
@@ -116,7 +125,9 @@ const char *moon_plugin_label(size_t index);
 size_t moon_plugin_action_count(size_t index);
 const char *moon_plugin_action(size_t index, size_t command);
 const char *moon_plugin_action_shortcut(size_t index, size_t command);
-unsigned moon_plugin_flags(size_t index);
+bool moon_plugin_enabled(size_t index);
+const char *moon_plugin_permission_label(size_t permission);
+unsigned moon_plugin_permission_flags(size_t index, size_t permission);
 bool moon_plugin_has_settings(size_t index);
 int moon_userscript_reload_active(const char *id);
 bool moon_devtools_open(int panel, uint64_t tab_id);

@@ -8,6 +8,8 @@ const api = @import("plugin_host_api.zig");
 const sdk = @import("moon_plugin");
 const history = @import("history.zig");
 const network = @import("network_policy.zig");
+const bookmarks = @import("bookmarks.zig");
+const downloads = @import("downloads.zig");
 const market = @import("market.zig");
 const updater = @import("updater.zig");
 
@@ -197,7 +199,10 @@ fn jsonSetting(field: ?std.json.Value, default: u64, min: u64, max: u64) u64 {
 fn tabSnapshot() ?plugins.Snapshot {
     if (count == 0) return null;
     const tab = &tabs[active];
-    return .{ .id = tab.id, .title = tab.title, .url = tab.url };
+    return .{
+        .id = tab.id, .title = tab.title, .url = tab.url,
+        .bookmarkable = tab.has_document and !tab.extension and !tab.loading,
+    };
 }
 fn tabIndex(id: u64) ?usize {
     for (tabs[0..count], 0..) |tab, index| if (tab.id == id) return index;
@@ -462,7 +467,7 @@ fn sync(tab: *Tab) void {
     if (title[0] != 0 and !equals(slice(&tab.title),slice(&title))) {
         tab.title = title;
         if (tab.history_visit) |visit| {
-            if (plugins.historyEnabled()) history.updateTitle(visit,slice(&tab.url),slice(&title));
+            if (plugins.systemEnabled(.@"history.manage")) history.updateTitle(visit,slice(&tab.url),slice(&title));
         }
     }
 }
@@ -548,6 +553,7 @@ fn maintenance() void {
     const now = native.moon_clock();
     if (smoke == .off) updater.tick(now);
     if (stopped) return;
+    downloads.flush();
     if (market.changed()) {
         const allocator = std.heap.page_allocator;
         if (market.document(allocator)) |html| {
@@ -615,6 +621,8 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     applySettings(profile);
     plugins.init(app, profile);
     history.init(profile);
+    bookmarks.init(profile);
+    downloads.init(profile);
     userscripts.init(profile);
     var first_url: ?[:0]u8 = null;
     defer if (first_url) |allocated| allocator.free(allocated);
@@ -682,6 +690,8 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
     if (command == native.MOON_SHUTDOWN) {
         stopped = true;
         history.close();
+        bookmarks.close();
+        downloads.close();
         for (tabs[0..count]) |*tab| {
             detach(tab);
             forgetSession(tab);
@@ -727,13 +737,10 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             plugins.enable(index);
             network.select(plugins.networkSource());
         },
-        native.MOON_PLUGIN_GRANT => plugins.toggleGrant(index, .@"tabs.read"),
-        native.MOON_PLUGIN_GRANT_LUA => plugins.toggleGrant(index, .@"lua.scripts.manage"),
-        native.MOON_PLUGIN_GRANT_INSPECT => plugins.toggleGrant(index, .@"page.inspect"),
-        native.MOON_PLUGIN_GRANT_HISTORY => plugins.toggleGrant(index, .@"history.manage"),
-        native.MOON_PLUGIN_GRANT_FILTER => {
-            plugins.toggleGrant(index, .@"network.filter");
-            network.select(plugins.networkSource());
+        native.MOON_PLUGIN_GRANT => {
+            const permission = std.enums.fromInt(sdk.Permission,index & 0xffffffff) orelse return;
+            plugins.toggleGrant(index >> 32,permission);
+            if (permission == .@"network.filter") network.select(plugins.networkSource());
         },
         native.MOON_PLUGIN_SETTINGS => {
             var address: [256]u8 = undefined;
@@ -776,7 +783,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             tab.deadline = 0;
             sync(tab);
             if (!tab.extension) {
-                if (!tab.restoring_history and plugins.historyEnabled()) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
+                if (!tab.restoring_history and plugins.systemEnabled(.@"history.manage")) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
                 tab.restoring_history = false;
                 storeSession(tab);
                 if (tab.view) |view| userscripts.apply(view);
@@ -798,7 +805,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         native.MOON_CHANGED => sync(tab),
         native.MOON_SAME_DOCUMENT => {
             sync(tab);
-            if (!tab.extension and !tab.restoring_history and plugins.historyEnabled()) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
+            if (!tab.extension and !tab.restoring_history and plugins.systemEnabled(.@"history.manage")) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
         },
         native.MOON_TERMINATED => {
             tab.phase = .crashed;
@@ -816,8 +823,8 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         },
         native.MOON_DOWNLOAD_END => {
             tab.download_count -|= 1;
-            if (detail != null and index == active and smoke == .off)
-                native.moon_shell_info("Downloads", detail);
+            if (detail != null and index == active and smoke == .off and !plugins.systemEnabled(.@"downloads.manage"))
+                native.moon_shell_toast("下载", detail);
         },
         native.MOON_POPUP => if (detail != null and popup[0] == 0) {
             _ = copy(&popup, slice(detail));
@@ -836,6 +843,35 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         else => {},
     }
     if (index == active) updateChrome(false) else native.moon_shell_refresh();
+}
+export fn moon_download_begin() u32 {
+    if (stopped or !plugins.systemEnabled(.@"downloads.manage")) return 0;
+    return downloads.begin();
+}
+export fn moon_download_destination(id: u32, path: [*c]const u8) void {
+    if (!stopped) downloads.destination(id,slice(path));
+}
+export fn moon_download_progress(id: u32, chunk: u64, total: u64) void {
+    if (!stopped) downloads.progress(id,chunk,total);
+}
+export fn moon_download_finish(id: u32, result: c_int) void {
+    if (stopped) return;
+    const state: sdk.DownloadState = switch (result) {
+        native.MOON_DL_COMPLETE => .complete,
+        native.MOON_DL_FAILED => .failed,
+        native.MOON_DL_CANCELLED => .cancelled,
+        else => .interrupted,
+    };
+    downloads.finish(id,state);
+    if (smoke == .off and plugins.systemEnabled(.@"downloads.manage")) {
+        native.moon_shell_toast("下载",switch (state) {
+            .complete => "下载已完成，可在下载页查看。",
+            .failed => "下载失败，可在下载页查看。",
+            .cancelled => "下载已取消。",
+            .interrupted => "下载已中断。",
+            else => unreachable,
+        });
+    }
 }
 export fn moon_tab_count() usize {
     return count;
@@ -877,8 +913,24 @@ export fn moon_plugin_action(index: usize, command: usize) [*:0]const u8 {
 export fn moon_plugin_action_shortcut(index: usize, command: usize) [*:0]const u8 {
     return if (plugins.actionShortcut(index,command)) |key| @tagName(key) else "";
 }
-export fn moon_plugin_flags(index: usize) c_uint {
-    return plugins.flags(index);
+export fn moon_plugin_enabled(index: usize) bool {
+    return plugins.isEnabled(index);
+}
+export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
+    const permission = std.enums.fromInt(sdk.Permission,index) orelse return "";
+    return switch (permission) {
+        .@"tabs.read" => "允许读取标题和网址",
+        .@"lua.scripts.manage" => "允许管理 Lua 用户脚本",
+        .@"page.inspect" => "允许打开网页开发者工具",
+        .@"history.manage" => "允许管理浏览历史",
+        .@"network.filter" => "允许拦截网页请求",
+        .@"bookmarks.manage" => "允许管理书签",
+        .@"downloads.manage" => "允许管理下载",
+    };
+}
+export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {
+    const permission = std.enums.fromInt(sdk.Permission,ordinal) orelse return 0;
+    return plugins.permissionFlags(index,permission);
 }
 export fn moon_plugin_has_settings(index: usize) bool {
     return plugins.hasSettings(index);
@@ -935,7 +987,7 @@ fn actionAt(index: usize, home: bool) ?Action {
         remaining -= 1;
     }
     for (0..plugins.count()) |plugin| {
-        if (plugins.flags(plugin) & 1 == 0) continue;
+        if (!plugins.isEnabled(plugin)) continue;
         const commands = plugins.actionCount(plugin);
         if (remaining < commands) return .{ .plugin = .{ .index = plugin, .command = remaining } };
         remaining -= commands;
@@ -947,7 +999,7 @@ export fn moon_action_count(home: bool) usize {
     var actions: usize = 0;
     for (shell_actions) |action| actions += @intFromBool(!home or action.home);
     for (0..plugins.count()) |plugin| {
-        if (plugins.flags(plugin) & 1 != 0) actions += plugins.actionCount(plugin);
+        if (plugins.isEnabled(plugin)) actions += plugins.actionCount(plugin);
     }
     return actions;
 }

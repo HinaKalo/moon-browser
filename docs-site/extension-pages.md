@@ -32,4 +32,6 @@ await callSettings('write', { ...current, refreshOnSave: true });
 
 0.1.0-preview.9 起，拥有 `network.filter` 权限的插件页面可调用 `network.filter.status` 和 `network.filter.setSite`。[规则文件格式](./blocker)
 
+0.1.0-preview.10 起，获得相应授权的页面可调用 `bookmarks.list`、`bookmarks.save`、`bookmarks.update`、`bookmarks.remove` 和 `downloads.*`。`bookmarks.saveActive` 由 EXE 在用户命令中调用。[书签与下载](./library)
+
 宿主在文档根节点设置 `data-moon-theme="light"` 或 `data-moon-theme="dark"`，切换浏览器主题时同步更新。页面可使用 CSS 属性选择器适配。

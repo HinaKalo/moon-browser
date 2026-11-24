@@ -48,8 +48,9 @@ static const Theme dark = {
 static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
-enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_PLUGIN_BASE = 100, MENU_PLUGIN_STRIDE = 15,
-       MENU_SCRIPTS_PICK = 400, MENU_SCRIPTS_BASE = 410 };
+enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET,
+       MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 16, MENU_PLUGIN_STRIDE = 24,
+       MENU_SCRIPTS_PICK = 600, MENU_SCRIPTS_BASE = 610 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        PALETTE_TAB_OFFSET = 1000 };
 
@@ -108,6 +109,27 @@ uint64_t moon_wall_ms(void) {
     GetSystemTimeAsFileTime(&time);
     ULARGE_INTEGER ticks = { .LowPart=time.dwLowDateTime, .HighPart=time.dwHighDateTime };
     return ticks.QuadPart / 10000 - UINT64_C(11644473600000);
+}
+uint32_t moon_current_pid(void) { return GetCurrentProcessId(); }
+uint64_t moon_process_birth(uint32_t pid) {
+    FILETIME created,ended,kernel,user;
+    HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION|SYNCHRONIZE,FALSE,pid);
+    if (!process) return 0;
+    const bool live=WaitForSingleObject(process,0)==WAIT_TIMEOUT && GetProcessTimes(process,&created,&ended,&kernel,&user);
+    CloseHandle(process);
+    if (!live) return 0;
+    return ((uint64_t)created.dwHighDateTime<<32)|created.dwLowDateTime;
+}
+bool moon_shell_reveal_file(const char *path) {
+    wchar_t wide[4096];
+    if (!moon_utf16(path,wide,ARRAYSIZE(wide)) || PathIsRelativeW(wide)) return false;
+    const DWORD attrs=GetFileAttributesW(wide);
+    if (attrs==INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) return false;
+    PIDLIST_ABSOLUTE item=ILCreateFromPathW(wide);
+    if (!item) return false;
+    const HRESULT result=SHOpenFolderAndSelectItems(item,0,NULL,0);
+    CoTaskMemFree(item);
+    return SUCCEEDED(result);
 }
 uint64_t moon_perf_us(void) {
     LARGE_INTEGER now, frequency;
@@ -671,14 +693,17 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
         if (!moon_utf16(moon_plugin_label(i),name,ARRAYSIZE(name))) continue;
         HMENU sub=CreatePopupMenu();
         if (!sub) continue;
-        unsigned flags=moon_plugin_flags(i), id=MENU_PLUGIN_BASE+(unsigned)i*MENU_PLUGIN_STRIDE;
-        AppendMenuW(sub,MF_STRING|(flags&1?MF_CHECKED:0),id,L"\u542f\u7528\u672c\u5730\u63d2\u4ef6");
-        AppendMenuW(sub,MF_STRING|(flags&2?MF_CHECKED:0),id+1,L"\u5141\u8bb8\u8bfb\u53d6\u6807\u9898\u548c\u7f51\u5740");
-        if (flags&8) AppendMenuW(sub,MF_STRING|(flags&4?MF_CHECKED:0),id+2,L"允许管理 Lua 用户脚本");
-        if (moon_plugin_has_settings(i)) AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+3,L"配置页面");
-        if (flags&32) AppendMenuW(sub,MF_STRING|(flags&16?MF_CHECKED:0),id+4,L"允许打开网页开发者工具");
-        if (flags&128) AppendMenuW(sub,MF_STRING|(flags&64?MF_CHECKED:0),id+5,L"允许管理浏览历史");
-        if (flags&512) AppendMenuW(sub,MF_STRING|(flags&256?MF_CHECKED:0),id+6,L"允许拦截网页请求");
+        const bool enabled=moon_plugin_enabled(i);
+        const unsigned id=MENU_PLUGIN_BASE+(unsigned)i*MENU_PLUGIN_STRIDE;
+        AppendMenuW(sub,MF_STRING|(enabled?MF_CHECKED:0),id,L"启用本地插件");
+        if (moon_plugin_has_settings(i)) AppendMenuW(sub,MF_STRING|(enabled?0:MF_GRAYED),id+1,L"配置页面");
+        for (size_t j=0;j<MENU_PLUGIN_ACTIONS-2;++j) {
+            const char *permission=moon_plugin_permission_label(j);
+            if (!*permission) break;
+            const unsigned flags=moon_plugin_permission_flags(i,j);
+            if ((flags&1) && moon_utf16(permission,action,ARRAYSIZE(action)))
+                AppendMenuW(sub,MF_STRING|(flags&2?MF_CHECKED:0)|(enabled?0:MF_GRAYED),id+2+j,action);
+        }
         for(size_t j=0;j<moon_plugin_action_count(i);++j) {
             if (!moon_utf16(moon_plugin_action(i,j),action,256)) continue;
             const char *shortcut=moon_plugin_action_shortcut(i,j);
@@ -687,7 +712,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
                 action[end++]=L'\t';
                 if (!moon_utf16(shortcut,action+end,ARRAYSIZE(action)-end)) action[end-1]=0;
             }
-            AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+7+j,action);
+            AppendMenuW(sub,MF_STRING|(enabled?0:MF_GRAYED),id+MENU_PLUGIN_ACTIONS+j,action);
         }
         AppendMenuW(popup,MF_POPUP,(UINT_PTR)sub,name);
     }
@@ -714,9 +739,10 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     else if (command>=MENU_PLUGIN_BASE) {
         unsigned value=command-MENU_PLUGIN_BASE;
         const unsigned offset=value%MENU_PLUGIN_STRIDE, plugin=value/MENU_PLUGIN_STRIDE;
-        const int grants[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_GRANT_LUA,MOON_PLUGIN_SETTINGS,MOON_PLUGIN_GRANT_INSPECT,MOON_PLUGIN_GRANT_HISTORY,MOON_PLUGIN_GRANT_FILTER};
-        if (offset<ARRAYSIZE(grants)) moon_command(grants[offset],plugin,NULL);
-        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-7),NULL);
+        if (!offset) moon_command(MOON_PLUGIN_ENABLE,plugin,NULL);
+        else if (offset==1) moon_command(MOON_PLUGIN_SETTINGS,plugin,NULL);
+        else if (offset<MENU_PLUGIN_ACTIONS) moon_command(MOON_PLUGIN_GRANT,((uint64_t)plugin<<32)|(offset-2),NULL);
+        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-MENU_PLUGIN_ACTIONS),NULL);
         moon_shell_refresh();
     }
 }
@@ -1018,6 +1044,9 @@ static bool keyboard(MSG *msg) {
     if (ctrl && !shift && !alt && msg->wParam == 'H' && moon_plugin_shortcut("Ctrl+H")) return true;
     if (!ctrl && !shift && !alt && msg->wParam == VK_F12 && moon_plugin_shortcut("F12")) return true;
     if (ctrl && shift && !alt && msg->wParam == 'J' && moon_plugin_shortcut("Ctrl+Shift+J")) return true;
+    if (ctrl && !shift && !alt && msg->wParam == 'J' && moon_plugin_shortcut("Ctrl+J")) return true;
+    if (ctrl && !shift && !alt && msg->wParam == 'D' && moon_plugin_shortcut("Ctrl+D")) return true;
+    if (ctrl && shift && !alt && msg->wParam == 'O' && moon_plugin_shortcut("Ctrl+Shift+O")) return true;
     if (ctrl && msg->wParam == 'B') { moon_shell_toggle_sidebar(); return true; }
     if (ctrl && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
     if (ctrl && msg->wParam == 'W') { moon_command(MOON_CLOSE,moon_active_index(),NULL); return true; }
@@ -1079,16 +1108,18 @@ int moon_shell_run(void) {
     init_graphics();
     low_memory = CreateMemoryResourceNotification(LowMemoryResourceNotification);
     HINSTANCE instance = GetModuleHandleW(NULL);
-    WNDCLASSW class = { .hInstance=instance,.hCursor=LoadCursorW(NULL,IDC_ARROW),.lpfnWndProc=frame_message,
-        .lpszClassName=L"MoonBrowserWindow",.hIcon=LoadIconW(NULL,IDI_APPLICATION) };
-    if (!RegisterClassW(&class)) return 1;
+    WNDCLASSEXW class = { .cbSize=sizeof(class),.hInstance=instance,.hCursor=LoadCursorW(NULL,IDC_ARROW),.lpfnWndProc=frame_message,
+        .lpszClassName=L"MoonBrowserWindow",
+        .hIcon=LoadIconW(instance,MAKEINTRESOURCEW(1)),
+        .hIconSm=LoadImageW(instance,MAKEINTRESOURCEW(1),IMAGE_ICON,GetSystemMetrics(SM_CXSMICON),GetSystemMetrics(SM_CYSMICON),LR_SHARED) };
+    if (!RegisterClassExW(&class)) return 1;
     class.lpfnWndProc = content_message;
     class.lpszClassName = L"MoonContent";
-    if (!RegisterClassW(&class)) return 1;
+    if (!RegisterClassExW(&class)) return 1;
     class.lpfnWndProc = palette_message;
     class.lpszClassName = L"MoonPalette";
     class.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);
-    if (!RegisterClassW(&class)) return 1;
+    if (!RegisterClassExW(&class)) return 1;
     frame = CreateWindowExW(0,L"MoonBrowserWindow",L"Moon Browser",WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT,CW_USEDEFAULT,1120,760,NULL,NULL,instance,NULL);
     if (!frame) return 1;

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下载</title>
+<style>
+  :root { color-scheme:light; font:14px/1.55 "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif; --page:#f6f7fa; --surface:#fff; --text:#171b26; --muted:#535e74; --line:#dbe0ed; --accent:#4158bf; --soft:#edf0fc; background:var(--page); color:var(--text); }
+  :root[data-moon-theme=dark] { color-scheme:dark; --page:#171a22; --surface:#222635; --text:#edf0f7; --muted:#b6c0d5; --line:#3a435b; --accent:#acbbff; --soft:#303852; }
+  * { box-sizing:border-box; }
+  body { margin:0; }
+  main { max-width:900px; margin:auto; padding:42px clamp(20px,5vw,48px); }
+  h1 { margin:0 0 20px; font-size:30px; }
+  input,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
+  input { width:100%; }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { background:var(--soft); }
+  button:disabled { opacity:.5; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  ul { padding:0; margin:18px 0 0; list-style:none; border:1px solid var(--line); border-radius:12px; background:var(--surface); }
+  li { display:flex; align-items:center; gap:12px; padding:13px 15px; }
+  li + li { border-top:1px solid var(--line); }
+  .entry { flex:1; min-width:0; }
+  .entry strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .meta,#status,#feedback { color:var(--muted); }
+  progress { display:block; margin-top:7px; width:100%; max-width:240px; height:8px; accent-color:var(--accent); }
+  .actions { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
+  .actions button { border-color:transparent; }
+  #more { margin-top:14px; }
+  #feedback:empty,#status:empty { display:none; }
+</style>
+<main>
+  <h1>下载</h1>
+  <input id="search" type="search" placeholder="搜索下载" aria-label="搜索下载" maxlength="64">
+  <p id="status" role="status">正在读取下载…</p>
+  <p id="feedback" role="status"></p>
+  <ul id="results" aria-label="下载列表" hidden></ul>
+  <button id="more" hidden>加载更多</button>
+</main>
+<script>
+  const el = id => document.getElementById(id);
+  const search = el('search'), list = el('results'), status = el('status'), more = el('more'), feedback = el('feedback');
+  const names = { choosing:'等待保存位置', transferring:'下载中', complete:'已完成', failed:'失败', cancelled:'已取消', interrupted:'已中断' };
+  const date = new Intl.DateTimeFormat('zh-CN',{ month:'short',day:'numeric',hour:'2-digit',minute:'2-digit' });
+  const numeric = new Intl.NumberFormat('zh-CN',{ maximumFractionDigits:1 });
+  let sequence = 0, version = 0, busy = false, timer, cursor, previous, older = [];
+  async function host(method,params) {
+    const id = 'download:' + ++sequence;
+    const reply = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({ jsonrpc:'2.0', id, method, params })));
+    if (reply.id !== id || reply.error) throw Error(reply.error?.message || 'INVALID_RESPONSE');
+    return reply.result;
+  }
+  function bytes(value) {
+    const units = ['B','KB','MB','GB','TB'];
+    let level = 0;
+    while (value >= 1024 && level < units.length - 1) { value /= 1024; level++; }
+    return numeric.format(value) + ' ' + units[level];
+  }
+  function action(row, item, operation, label) {
+    const control = document.createElement('button');
+    control.textContent = label;
+    control.dataset.control = item.id + ':' + operation;
+    control.onclick = async () => {
+      control.disabled = true;
+      list.dataset.working = 'true';
+      try {
+        await host('downloads.' + operation,{ id:item.id });
+        feedback.textContent = operation === 'remove' ? '已移除记录。' : '';
+        if (operation !== 'reveal') await load(false,true);
+      } catch (error) {
+        feedback.textContent = operation === 'reveal' && error.message === 'NOT_FOUND' ? '文件已移动或删除。' : '该操作无法完成。';
+      } finally { delete list.dataset.working; control.disabled = false; }
+    };
+    row.append(control);
+  }
+  function draw(items) {
+    const serialized = JSON.stringify(items);
+    if (serialized === previous) return;
+    previous = serialized;
+    const focused = document.activeElement?.dataset.control;
+    list.replaceChildren();
+    for (const item of items) {
+      const row = document.createElement('li');
+      const entry = document.createElement('div');
+      entry.className = 'entry';
+      const title = document.createElement('strong');
+      title.textContent = item.name || '新下载';
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const amounts = item.state === 'transferring' && item.total ? bytes(item.received) + ' / ' + bytes(item.total) : bytes(item.received);
+      meta.textContent = names[item.state] + ' · ' + amounts + ' · ' + date.format(item.startedAt);
+      entry.append(title,meta);
+      if (item.state === 'transferring') {
+        const progress = document.createElement('progress');
+        progress.setAttribute('aria-label','下载进度');
+        if (item.total) { progress.max = item.total; progress.value = item.received; }
+        entry.append(progress);
+      }
+      const controls = document.createElement('div');
+      controls.className = 'actions';
+      if (item.cancellable) action(controls,item,'cancel','取消下载');
+      if (item.state === 'complete') action(controls,item,'reveal','在文件夹中显示');
+      if (item.state !== 'choosing' && item.state !== 'transferring') action(controls,item,'remove','移除记录');
+      row.append(entry,controls);
+      list.append(row);
+    }
+    if (focused) {
+      const target = [...list.querySelectorAll('button')].find(button => button.dataset.control === focused);
+      (target || search).focus({ preventScroll:true });
+    }
+  }
+  async function load(append = false, reset = false) {
+    const request = ++version;
+    busy = true;
+    more.disabled = true;
+    if (reset) older = [];
+    try {
+      const query = search.value.trim();
+      const page = await host('downloads.list',{ query,before:append ? cursor : null });
+      if (request !== version) return;
+      if (append) {
+        older = older.concat(page.downloads);
+        cursor = page.next;
+        const retained = JSON.parse(previous ?? '[]');
+        draw(retained.concat(page.downloads));
+      } else {
+        if (!older.length) cursor = page.next;
+        const threshold = page.downloads.at(-1)?.id ?? 0;
+        draw(page.downloads.concat(older.filter(item => item.id < threshold)));
+      }
+      list.hidden = !list.children.length;
+      status.textContent = list.hidden ? (query ? '没有匹配的下载。' : '网页下载会显示在这里。') : '';
+      more.hidden = cursor === null;
+    } catch (error) {
+      if (request !== version) return;
+      list.replaceChildren();
+      previous = undefined;
+      list.hidden = more.hidden = true;
+      status.textContent = error.message === 'PERMISSION_DENIED' ? '请在插件菜单允许管理下载。' : '无法读取下载。';
+    } finally {
+      if (request === version) { busy = false; more.disabled = false; }
+    }
+  }
+  search.oninput = () => {
+    feedback.textContent = '';
+    clearTimeout(timer);
+    timer = setTimeout(() => load(false,true),120);
+  };
+  more.onclick = () => load(true);
+  document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });
+  setInterval(() => { if (!document.hidden && !busy && !list.dataset.working) load(); },1000);
+  load();
+</script>
+</html>

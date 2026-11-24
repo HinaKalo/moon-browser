@@ -10,6 +10,7 @@ DefaultDirName={localappdata}\Programs\Moon Browser
 DefaultGroupName=Moon Browser
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\MoonBrowser.exe
+SetupIconFile={#AppIcon}
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -26,7 +27,7 @@ Source: "{#EngineUrl}"; DestName: "webkit.zip"; DestDir: "{app}\engine"; Hash: "
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\Moon Browser"; Filename: "{app}\MoonBrowser.exe"; WorkingDir: "{app}"
+Name: "{group}\Moon Browser"; Filename: "{app}\MoonBrowser.exe"; WorkingDir: "{app}"; IconFilename: "{app}\MoonBrowser.exe"
 
 [Run]
 Filename: "{app}\MoonBrowser.exe"; Description: "Launch Moon Browser"; Flags: postinstall nowait skipifsilent
