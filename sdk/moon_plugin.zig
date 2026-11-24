@@ -31,6 +31,7 @@ pub const Permission = enum {
     @"page.source",
     @"popups.manage",
     @"window.fullscreen",
+    @"page.save",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -43,6 +44,7 @@ pub const Shortcut = enum {
     @"Ctrl+U",
     F11,
     @"Ctrl+Shift+C",
+    @"Ctrl+S",
 };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
 pub const LinkMenuAction = enum(c_uint) { open = 1, copy, bookmark };
@@ -92,6 +94,7 @@ pub const PageSourceStatus = struct {
 };
 pub const PageSourceQuery = struct { generation: u64, offset: usize };
 pub const PageSourceChunk = struct { sourceBase64: []const u8, next: ?usize };
+pub const PageSaveStart = enum(c_int) { started, cancelled, unavailable, unsupported, invalidFilename, busy, failed };
 pub const PopupMode = enum { automatic, allow, block };
 pub const PopupRule = struct { origin: []const u8, mode: PopupMode };
 pub const PopupNotice = struct { id: u64, count: u32, targetOrigin: []const u8 };
@@ -222,6 +225,7 @@ pub const Method = enum {
     @"pageSource.open",
     @"pageSource.status",
     @"pageSource.read",
+    @"page.saveHtml",
     @"popups.open",
     @"popups.status",
     @"popups.setRule",

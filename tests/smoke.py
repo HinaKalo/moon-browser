@@ -56,6 +56,7 @@ class Fixture(BaseHTTPRequestHandler):
     site_data_entry_changed = Event()
     site_data_catalog_ready = Event()
     change_page_source = Event()
+    change_page_save = Event()
     navigate_from_site_menu = Event()
     navigate_from_link_menu = Event()
     page_source_requests = 0
@@ -149,6 +150,8 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"ok", "text/plain"
         elif path == "/page-source-navigation":
             data, content_type = (b"change" if self.change_page_source.is_set() else b"wait"), "text/plain"
+        elif path == "/page-save-navigation":
+            data, content_type = (b"change" if self.change_page_save.is_set() else b"wait"), "text/plain"
         elif path == "/site-menu-navigation":
             data, content_type = (b"change" if self.navigate_from_site_menu.is_set() else b"wait"), "text/plain"
         elif path == "/link-menu-navigation":
@@ -288,6 +291,11 @@ class Fixture(BaseHTTPRequestHandler):
                     'if(await reply.text()==="change")location.replace("/page/source-changed");},300);</script>\n'
                     '<!--' + '月🌙' * 77_000 + 'END-OF-WIRE-->'
                 )
+            if name == "save-stale":
+                demo = ('<script>setInterval(async()=>{const reply=await fetch("/page-save-navigation",{cache:"no-store"});'
+                        'if(await reply.text()==="change")location.replace("/page/save-after");},150);</script>')
+            if name == "save-too-large":
+                demo = '<!--' + 'x' * (16 * 1024 * 1024 + 8) + '-->'
             if name in ("reading-contract", "reading-other-origin", "reading-restart"):
                 demo = (
                     '<p style="margin-top:1100px">月亮查找词</p>'
@@ -628,6 +636,9 @@ def run_win32(exe, base, root):
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     has_site_menu = site_data.exists() and json.loads(site_data.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"][0].get("siteMenu")
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
+    has_page_save = page_source.exists() and any(
+        command["id"]=="save" for command in
+        json.loads(page_source.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"])
     popups = exe.parent / "plugins" / "popups" / "MoonPopups.exe"
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     recent = exe.parent / "plugins" / "recent-tabs" / "MoonRecentTabs.exe"
@@ -859,6 +870,7 @@ def run_win32(exe, base, root):
         action = manifest["contributes"]["commands"][0]
         action["label"] = "运行网页源代码验收"
         del action["shortcut"]
+        manifest["contributes"]["commands"] = [action]
         (fixture / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
         page = (page_source.parent / "source.html").read_text(encoding="utf-8")
         contract = """
@@ -1348,6 +1360,40 @@ def run_win32(exe, base, root):
             surface = next(visible_children(content),None)
             return next(visible_children(surface),None) if docked_devtools and surface else surface
 
+        def pick_html_file(title, selected):
+            dialog = wait_for(lambda: owned_window("#32770",title),f"The {title} dialog did not open")
+            if selected is None:
+                user.PostMessageW(dialog,0x0111,2,0)  # IDCANCEL
+            else:
+                field = user.GetDlgItem(dialog,0x0480)  # edt1
+                if not field:
+                    combo = user.GetDlgItem(dialog,0x047C)  # cmb13
+                    field = user.SendMessageW(combo,0x0407,0,0) if combo else None  # CBEM_GETEDITCONTROL
+                if not field:
+                    callback = ctypes.WINFUNCTYPE(wt.BOOL,wt.HWND,wt.LPARAM)
+                    user.EnumChildWindows.argtypes = [wt.HWND,callback,wt.LPARAM]
+                    user.GetClassNameW.argtypes = [wt.HWND,wt.LPWSTR,ctypes.c_int]
+                    user.GetDlgCtrlID.argtypes = [wt.HWND]
+
+                    @callback
+                    def find_filename(child,_):
+                        nonlocal field
+                        kind = ctypes.create_unicode_buffer(64)
+                        user.GetClassNameW(child,kind,len(kind))
+                        if kind.value=="Edit" and user.GetDlgCtrlID(child)==1001:
+                            field = child
+                            return False
+                        return True
+
+                    user.EnumChildWindows(dialog,find_filename,0)
+                if not field:
+                    raise RuntimeError("The file chooser's filename edit is unavailable")
+                set_control(field,str(selected))
+                if read_control(field)!=str(selected):
+                    raise RuntimeError("The file chooser did not accept the test path")
+                user.PostMessageW(dialog,0x0111,1,0)  # IDOK
+            wait_for(lambda: not user.IsWindow(dialog),f"The {title} dialog did not close")
+
         invoke("版本与更新")
         popup = wait_for(lambda: owned_window("#32770", "版本与更新"), "Compact update dialog did not open")
         popup_rect = wt.RECT()
@@ -1631,43 +1677,9 @@ def run_win32(exe, base, root):
             set_control(edit,"extension://moon.bookmark-fixture/bookmarks.html")
             user.PostMessageW(edit,0x0100,0x0D,1)
 
-            def pick_bookmark_file(title, selected):
-                dialog = wait_for(lambda: owned_window("#32770",title),f"The {title} dialog did not open")
-                if selected is None:
-                    user.PostMessageW(dialog,0x0111,2,0)  # IDCANCEL
-                else:
-                    field = user.GetDlgItem(dialog,0x0480)  # edt1
-                    if not field:
-                        combo = user.GetDlgItem(dialog,0x047C)  # cmb13
-                        field = user.SendMessageW(combo,0x0407,0,0) if combo else None  # CBEM_GETEDITCONTROL
-                    if not field:
-                        callback = ctypes.WINFUNCTYPE(wt.BOOL,wt.HWND,wt.LPARAM)
-                        user.EnumChildWindows.argtypes = [wt.HWND,callback,wt.LPARAM]
-                        user.GetClassNameW.argtypes = [wt.HWND,wt.LPWSTR,ctypes.c_int]
-                        user.GetDlgCtrlID.argtypes = [wt.HWND]
-
-                        @callback
-                        def find_filename(child,_):
-                            nonlocal field
-                            kind = ctypes.create_unicode_buffer(64)
-                            user.GetClassNameW(child,kind,len(kind))
-                            if kind.value=="Edit" and user.GetDlgCtrlID(child)==1001:
-                                field = child
-                                return False
-                            return True
-
-                        user.EnumChildWindows(dialog,find_filename,0)
-                    if not field:
-                        raise RuntimeError("The bookmark file chooser's filename edit is unavailable")
-                    set_control(field,str(selected))
-                    if read_control(field)!=str(selected):
-                        raise RuntimeError("The bookmark file chooser did not accept the test path")
-                    user.PostMessageW(dialog,0x0111,1,0)  # IDOK
-                wait_for(lambda: not user.IsWindow(dialog),f"The {title} dialog did not close")
-
             if bookmark_transfer:
                 page_export = profile / "书签页导出.html"
-                pick_bookmark_file("导出 HTML 书签",page_export)
+                pick_html_file("导出 HTML 书签",page_export)
             library_result("moon.bookmark-fixture")
             with closing(sqlite3.connect(profile / "bookmarks.sqlite3")) as db:
                 row = db.execute("SELECT title,url,folder FROM bookmarks").fetchall()
@@ -1704,7 +1716,7 @@ def run_win32(exe, base, root):
 
                 def import_bookmarks(path, *, feedback=True):
                     invoke("导入 HTML 书签")
-                    pick_bookmark_file("导入 HTML 书签",path)
+                    pick_html_file("导入 HTML 书签",path)
                     if feedback:
                         result = wait_for(lambda: owned_window("#32770","书签"),"The bookmark import did not report a result")
                         wait_for(lambda: not user.IsWindow(result),"The bookmark transfer feedback did not close")
@@ -1721,7 +1733,7 @@ def run_win32(exe, base, root):
                 if read_bookmarks()!=expected_rows:
                     raise RuntimeError("Importing invalid HTML changed the bookmark database")
                 invoke("导出 HTML 书签")
-                pick_bookmark_file("导出 HTML 书签",exported)
+                pick_html_file("导出 HTML 书签",exported)
                 wait_for(exported.is_file,"The exported HTML was not saved")
                 result = wait_for(lambda: owned_window("#32770","书签"),"Bookmark export did not report completion")
                 wait_for(lambda: not user.IsWindow(result),"The bookmark export feedback did not close")
@@ -1819,6 +1831,23 @@ def run_win32(exe, base, root):
             user.PostMessageW(edit,0x0100,0x0D,1)
             wait_for(lambda: ("Moon fixture source-contract",) in history_rows("SELECT title FROM visits WHERE url=?",(target,)),
                      "Page source fixture did not finish loading")
+            if has_page_save:
+                saved = root / "网页 雪月.html"
+                invoke("网页另存为 HTML")
+                pick_html_file("网页另存为 HTML",saved)
+                wait_for(saved.is_file,"The webpage HTML file did not save")
+                content_bytes = saved.read_bytes()
+                if (not content_bytes.startswith(b"\xef\xbb\xbf") or len(content_bytes)<=512*1024
+                        or "源码雪月".encode() not in content_bytes or b"END-OF-WIRE" not in content_bytes):
+                    raise RuntimeError("Saved HTML was truncated or lost its Unicode source")
+                if Fixture.page_source_requests!=1:
+                    raise RuntimeError("Saving the HTML unexpectedly refetched its page")
+                if downloads.exists():
+                    def saved_download():
+                        with closing(sqlite3.connect(profile / "downloads.sqlite3")) as db:
+                            return db.execute("SELECT state,received FROM downloads WHERE path=?",(str(saved),)).fetchone()
+                    wait_for(lambda: saved_download()==(2,len(content_bytes)),"The saved page was missing from downloads")
+                sleep(0.2)
             invoke("查看网页源代码")
             wait_for(lambda: read_address() == "extension://moon.source/source.html",
                      "The bundled page source plugin did not open its page")
@@ -1855,6 +1884,43 @@ def run_win32(exe, base, root):
             if not result.get("passed"):
                 raise RuntimeError(f"Page source invalidation: {result}")
             print("page_source_plugin=ok page_source_original=ok utf8_truncation=ok owner_isolation=ok no_refetch=ok source_find=ok stale_source=ok",flush=True)
+            if has_page_save:
+                target = base + "/page/save-stale"
+                set_control(edit,target)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
+                         "The stale save fixture did not finish loading")
+                invoke("网页另存为 HTML")
+                pick_html_file("网页另存为 HTML",None)
+                sleep(0.2)
+                if set(root.glob("*.html"))!={saved}:
+                    raise RuntimeError("Cancelling the save dialog created an unexpected file")
+
+                invoke("网页另存为 HTML")
+                wait_for(lambda: owned_window("#32770","网页另存为 HTML"),"Choosing the second save destination failed")
+                Fixture.change_page_save.set()
+                after = base + "/page/save-after"
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(after,)),
+                         "The webpage failed to navigate while the save dialog was open")
+                stale = root / "不应保存的网页.html"
+                pick_html_file("网页另存为 HTML",stale)
+                sleep(0.35)
+                if stale.exists() or list(root.glob(".moon-save-*.tmp")):
+                    raise RuntimeError("Stale confirmation left a file or staging data")
+                oversized = base + "/page/save-too-large"
+                set_control(edit,oversized)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(oversized,)),
+                         "The oversized save fixture did not finish loading",20)
+                invoke("网页另存为 HTML")
+                rejected = root / "超出限制.html"
+                pick_html_file("网页另存为 HTML",rejected)
+                completion = wait_for(lambda: owned_window("#32770","网页另存为"),
+                                      "The oversized export did not report a result")
+                wait_for(lambda: not user.IsWindow(completion),"The page save notification did not close")
+                if rejected.exists() or list(root.glob(".moon-save-*.tmp")):
+                    raise RuntimeError("A page over the length limit was saved or left staging data")
+                print("page_save_system_plugin=ok unicode=ok full_source=ok no_refetch=ok cancelled=ok stale_navigation=ok size_limit=ok",flush=True)
         if popups.exists():
             user.ChildWindowFromPointEx.argtypes = [wt.HWND,wt.POINT,wt.UINT]
             user.ChildWindowFromPointEx.restype = wt.HWND
@@ -2471,6 +2537,8 @@ def run_win32(exe, base, root):
                 expected["标签与页面"].add("管理搜索引擎")
             if session_plugin.exists():
                 expected["标签与页面"].update({"管理启动与会话","恢复上次会话"})
+            if has_page_save:
+                expected["标签与页面"].add("网页另存为 HTML\tCtrl+S")
             if bookmark_transfer:
                 expected["浏览资料"].update({"导入 HTML 书签","导出 HTML 书签"})
             if private_window.exists():

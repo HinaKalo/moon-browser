@@ -41,6 +41,7 @@
 #include <wchar.h>
 
 extern void WKHTTPCookieStoreDeleteAllCookies(WKHTTPCookieStoreRef, void *, void (*)(void *));
+extern WKStringRef WKFrameCopyMIMEType(WKFrameRef);
 
 #define WK_FUNCTIONS(X) \
     X(WKRelease) X(WKGetTypeID) X(WKSessionStateGetTypeID) X(WKSessionStateCopyData) X(WKDataGetSize) \
@@ -82,6 +83,7 @@ extern void WKHTTPCookieStoreDeleteAllCookies(WKHTTPCookieStoreRef, void *, void
     X(WKInspectorIsVisible) X(WKInspectorIsAttached) X(WKInspectorAttach) X(WKInspectorDetach) X(WKInspectorClose) \
     X(WKInspectorIsElementSelectionActive) X(WKInspectorToggleElementSelection) \
     X(WKPageGetMainFrame) X(WKPageGetSourceForFrame) X(WKStringGetUTF8CStringNonStrict) \
+    X(WKFrameCopyMIMEType) X(WKStringGetMaximumUTF8CStringSize) \
     X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
     X(WKPageSetPageFindClient) X(WKPageFindString) X(WKPageHideFindUI) \
     X(WKPageGetPageZoomFactor) X(WKPageSetPageZoomFactor) \
@@ -1009,6 +1011,34 @@ bool moon_engine_page_source(MoonView *view, uint64_t generation) {
     WKFrameRef frame = wk.WKPageGetMainFrame(view->page);
     if (!frame) return false;
     wk.WKPageGetSourceForFrame(view->page, frame, (void *)(uintptr_t)generation, page_source_received);
+    return true;
+}
+
+bool moon_engine_can_save_html(MoonView *view) {
+    if (view->extension_address) return false;
+    WKFrameRef frame=wk.WKPageGetMainFrame(view->page);
+    WKStringRef mime=frame?wk.WKFrameCopyMIMEType(frame):NULL;
+    const bool html=mime && wk.WKStringIsEqualToUTF8CString(mime,"text/html");
+    release(mime);
+    return html;
+}
+
+static void page_save_received(WKStringRef source, WKErrorRef error, void *context) {
+    const uint64_t request=(uintptr_t)context;
+    size_t cap=source && !error?wk.WKStringGetMaximumUTF8CStringSize(source):0;
+    // Leave room for a complete UTF-8 character beyond the size limit.
+    if (cap>MOON_HTML_SAVE_LIMIT+5) cap=MOON_HTML_SAVE_LIMIT+5;
+    char *buffer=cap>1?malloc(cap):NULL;
+    size_t size=buffer?wk.WKStringGetUTF8CStringNonStrict(source,buffer,cap):0;
+    const bool too_large=size>MOON_HTML_SAVE_LIMIT+1;
+    moon_page_save_result(request,size>1 && !too_large?buffer:NULL,size>1 && !too_large?size-1:0,too_large);
+    free(buffer);
+}
+
+bool moon_engine_save_html(MoonView *view, uint64_t request) {
+    WKFrameRef frame=wk.WKPageGetMainFrame(view->page);
+    if (!frame) return false;
+    wk.WKPageGetSourceForFrame(view->page,frame,(void *)(uintptr_t)request,page_save_received);
     return true;
 }
 

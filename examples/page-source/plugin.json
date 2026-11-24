@@ -1,13 +1,16 @@
 {
   "id": "moon.source",
   "name": "网页源代码",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonPageSource.exe",
   "settingsPage": "source.html",
   "contributes": {
-    "commands": [{ "id": "open", "label": "查看网页源代码", "menu": "developer", "siteMenu": true, "shortcut": "Ctrl+U" }]
+    "commands": [
+      { "id": "open", "label": "查看网页源代码", "menu": "developer", "siteMenu": true, "shortcut": "Ctrl+U" },
+      { "id": "save", "label": "网页另存为 HTML", "menu": "page", "shortcut": "Ctrl+S", "interactive": true }
+    ]
   },
-  "permissions": ["page.source"]
+  "permissions": ["page.source", "page.save"]
 }

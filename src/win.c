@@ -65,7 +65,7 @@ enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 
 enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, FULLSCREEN_HINT_TIMER = 3, TAB_DRAG_TIMER = 4,
        ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
 enum { MENU_ADD = 11, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_MANAGE_PLUGINS,
-       MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 24, MENU_PLUGIN_STRIDE = 32,
+       MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 32, MENU_PLUGIN_STRIDE = 48,
        MENU_SCRIPTS_PICK = 2000, MENU_SCRIPTS_BASE = 2010 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        FULLSCREEN_EXIT_CONTROL = 1005,
@@ -273,6 +273,29 @@ bool moon_write_text(const char *path, const char *data) {
         !moon_utf16(temporary, from, ARRAYSIZE(from)) || !write_file(temporary, data, CREATE_ALWAYS)) return false;
     if (MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) return true;
     DeleteFileW(from);
+    return false;
+}
+bool moon_shell_write_html(const char *path, const char *data, size_t length, bool replace) {
+    if (!length || length>MOON_HTML_SAVE_LIMIT) return false;
+    wchar_t target_path[2048], temporary[2048], token[40];
+    if (!moon_utf16(path,target_path,ARRAYSIZE(target_path))) return false;
+    wchar_t *filename=wcsrchr(target_path,L'\\');
+    GUID id;
+    if (!filename || FAILED(CoCreateGuid(&id)) || !StringFromGUID2(&id,token,ARRAYSIZE(token))) return false;
+    size_t directory=(size_t)(filename-target_path)+1;
+    if (directory+64>=ARRAYSIZE(temporary)) return false;
+    wmemcpy(temporary,target_path,directory);
+    swprintf(temporary+directory,ARRAYSIZE(temporary)-directory,L".moon-save-%ls.tmp",token);
+    HANDLE file=CreateFileW(temporary,GENERIC_WRITE,0,NULL,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,NULL);
+    if (file==INVALID_HANDLE_VALUE) return false;
+    const unsigned char bom[]={0xef,0xbb,0xbf};
+    DWORD written;
+    bool ok=(length>=sizeof(bom) && memcmp(data,bom,sizeof(bom))==0) ||
+        (WriteFile(file,bom,sizeof(bom),&written,NULL) && written==sizeof(bom));
+    ok=ok && WriteFile(file,data,(DWORD)length,&written,NULL) && written==length && FlushFileBuffers(file);
+    CloseHandle(file);
+    if (ok && MoveFileExW(temporary,target_path,MOVEFILE_WRITE_THROUGH|(replace?MOVEFILE_REPLACE_EXISTING:0))) return true;
+    DeleteFileW(temporary);
     return false;
 }
 size_t moon_plugin_directories(const char *parent, char *names, size_t stride, size_t cap) {
@@ -774,17 +797,42 @@ void moon_engine_test_fallback(bool value) {
 }
 
 static void open_palette(void);
+static int pick_html_file(bool save,const wchar_t *title,wchar_t *file,DWORD capacity) {
+    OPENFILENAMEW dialog={.lStructSize=sizeof(dialog), .hwndOwner=frame,
+        .lpstrFilter=L"HTML 文件 (*.html;*.htm)\0*.html;*.htm\0\0",
+        .lpstrFile=file, .nMaxFile=capacity, .lpstrDefExt=L"html", .lpstrTitle=title,
+        .Flags=OFN_EXPLORER|OFN_NOCHANGEDIR|OFN_PATHMUSTEXIST|(save?OFN_OVERWRITEPROMPT:OFN_FILEMUSTEXIST)|
+            (private_window?OFN_DONTADDTORECENT:0)};
+    const BOOL chosen=save?GetSaveFileNameW(&dialog):GetOpenFileNameW(&dialog);
+    if (!chosen) return CommDlgExtendedError() ? -1 : 0;
+    return 1;
+}
 int moon_shell_pick_bookmarks(bool save,char *path,size_t capacity) {
     wchar_t file[2048]=L"";
     if (save) wcscpy(file,L"Moon-Bookmarks.html");
-    OPENFILENAMEW dialog={.lStructSize=sizeof(dialog), .hwndOwner=frame,
-        .lpstrFilter=L"HTML 文件 (*.html;*.htm)\0*.html;*.htm\0\0",
-        .lpstrFile=file, .nMaxFile=ARRAYSIZE(file), .lpstrDefExt=L"html",
-        .lpstrTitle=save?L"导出 HTML 书签":L"导入 HTML 书签",
-        .Flags=OFN_EXPLORER|OFN_NOCHANGEDIR|OFN_PATHMUSTEXIST|(save?OFN_OVERWRITEPROMPT:OFN_FILEMUSTEXIST)};
-    const BOOL chosen=save?GetSaveFileNameW(&dialog):GetOpenFileNameW(&dialog);
-    if (!chosen) return CommDlgExtendedError() ? -1 : 0;
-    return moon_utf8(file,path,capacity) ? 1 : -1;
+    int result=pick_html_file(save,save?L"导出 HTML 书签":L"导入 HTML 书签",file,ARRAYSIZE(file));
+    return result==1 && !moon_utf8(file,path,capacity) ? -1 : result;
+}
+int moon_shell_pick_html(const char *title,char *path,size_t capacity,bool *replace) {
+    wchar_t file[2048]=L"网页.html", cleaned[512];
+    if (moon_utf16(title,cleaned,ARRAYSIZE(cleaned)) && cleaned[0]) {
+        size_t length=wcslen(cleaned);
+        if (length>100) {
+            length=100;
+            if (IS_HIGH_SURROGATE(cleaned[length-1])) --length;
+        }
+        for (size_t i=0;i<length;++i)
+            if (cleaned[i]<32 || wcschr(L"<>:\"/\\|?*",cleaned[i])) cleaned[i]=L' ';
+        while (length && (cleaned[length-1]==L' ' || cleaned[length-1]==L'.')) --length;
+        cleaned[length]=0;
+        if (length) swprintf(file,ARRAYSIZE(file),L"网页 - %ls.html",cleaned);
+    }
+    int result=pick_html_file(true,L"网页另存为 HTML",file,ARRAYSIZE(file));
+    if (result!=1) return result;
+    const wchar_t *extension=wcsrchr(file,L'.');
+    if (!extension || (_wcsicmp(extension,L".html")!=0 && _wcsicmp(extension,L".htm")!=0)) return -2;
+    *replace=GetFileAttributesW(file)!=INVALID_FILE_ATTRIBUTES;
+    return moon_utf8(file,path,capacity)?1:-1;
 }
 static void pick_userscript(void) {
     wchar_t file[2048] = {0};

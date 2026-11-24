@@ -130,7 +130,7 @@
     {
       "id": "moon.source",
       "name": "网页源代码",
-      "description": "按 Ctrl+U 查看已加载的网页主文档，可按行阅读、自动换行和查找。",
+      "description": "按 Ctrl+U 查看已加载的网页主文档，也可按 Ctrl+S 将它保存为 HTML。",
       "permission": "查看触发命令的当前网页源代码",
       "url": "https://docs.browser.moonl.cloud/devtools.html#查看网页源代码"
     }

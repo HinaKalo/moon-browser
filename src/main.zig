@@ -60,6 +60,12 @@ var active: usize = 0;
 var find_tab: u64 = 0;
 var find_owner: [96:0]u8 = @splat(0);
 var fullscreen_owner: [96:0]u8 = @splat(0);
+const PageSaveJob = struct {
+    request: u64, tab: u64, navigation: u64, deadline: u64,
+    owner: [96:0]u8, path: [4096:0]u8, replace: bool,
+};
+var page_save_job: ?PageSaveJob = null;
+var page_save_serial: u64 = 0;
 var next_id: u64 = 1;
 var pins_path: [4096:0]u8 = @splat(0);
 var pins_save_at: ?u64 = null;
@@ -963,6 +969,10 @@ fn maintenance() void {
     downloads.flush();
     site_data.tick(now);
     page_source.tick(now);
+    if (page_save_job) |job| if (now>=job.deadline) {
+        page_save_job = null;
+        native.moon_shell_toast("网页另存为","读取网页超时。请重试。");
+    };
     if (market.changed()) {
         const allocator = std.heap.page_allocator;
         if (market.document(allocator)) |html| {
@@ -1528,6 +1538,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"page.source" => "允许查看当前网页源代码",
+        .@"page.save" => "允许通过文件对话框保存当前网页",
         .@"popups.manage" => "允许管理网站弹窗",
         .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",
@@ -1720,6 +1731,71 @@ export fn moon_page_source_open(id: [*c]const u8, source: u64, expected: [*c]con
 
 export fn moon_page_source_result(generation: u64, html: [*c]const u8, bytes: usize) void {
     if (!stopped) page_source.complete(generation,if (html!=null) html[0..bytes] else null);
+}
+
+fn pageSaveView(id: u64, navigation: u64) ?*native.MoonView {
+    if (stopped) return null;
+    const tab = &tabs[tabIndex(id) orelse return null];
+    if (tab.navigation!=navigation or !hasSite(tab) or !tab.loaded or tab.loading) return null;
+    return tab.view;
+}
+
+export fn moon_page_save(owner: [*c]const u8, id: u64, navigation: u64,
+    context: ?*const anyopaque, consent: native.MoonPluginConsent) c_int {
+    return @intFromEnum(startPageSave(owner,id,navigation,context,consent));
+}
+
+fn startPageSave(owner: [*c]const u8, id: u64, navigation: u64,
+    context: ?*const anyopaque, consent: native.MoonPluginConsent) sdk.PageSaveStart {
+    const permitted = consent orelse return .unavailable;
+    if (page_save_job!=null) return .busy;
+    if (count==0 or tabs[active].id!=id) return .unavailable;
+    const view = pageSaveView(id,navigation) orelse return .unavailable;
+    if (!native.moon_engine_can_save_html(view)) return .unsupported;
+    const title = tabs[active].title;
+    var job: PageSaveJob = .{
+        .request=0,.tab=id,.navigation=navigation,.deadline=0,.owner=@splat(0),.path=@splat(0),.replace=false,
+    };
+    if (!copy(&job.owner,slice(owner))) return .unavailable;
+    switch (native.moon_shell_pick_html(&title,&job.path,job.path.len,&job.replace)) {
+        1 => {},
+        0 => return .cancelled,
+        -2 => return .invalidFilename,
+        else => return .failed,
+    }
+    if (!permitted(context) or count==0 or tabs[active].id!=id or
+        !plugins.hasGrant(slice(&job.owner),.@"page.save")) return .unavailable;
+    const confirmed = pageSaveView(id,navigation) orelse return .unavailable;
+    page_save_serial += 1;
+    job.request = page_save_serial;
+    job.deadline = native.moon_clock()+15000;
+    page_save_job = job;
+    if (native.moon_engine_save_html(confirmed,job.request)) return .started;
+    page_save_job = null;
+    return .failed;
+}
+
+export fn moon_page_save_result(request: u64, html: [*c]const u8, bytes: usize, too_large: bool) void {
+    const job = page_save_job orelse return;
+    if (stopped or request!=job.request) return;
+    page_save_job = null;
+    const message = result: {
+        if (pageSaveView(job.tab,job.navigation)==null or !plugins.hasGrant(slice(&job.owner),.@"page.save"))
+            break :result "原网页已切换或保存权限已撤销。";
+        if (too_large) break :result "网页主文档超过 16 MiB。";
+        if (html==null or bytes==0) break :result "未能读取网页主文档。";
+        if (!native.moon_shell_write_html(&job.path,html,bytes,job.replace))
+            break :result "无法写入所选位置。请检查文件和目录权限。";
+        if (!native.moon_shell_private() and plugins.systemEnabled(.@"downloads.manage")) {
+            const length = bytes + @as(usize,if (std.mem.startsWith(u8,html[0..bytes],"\xef\xbb\xbf")) 0 else 3);
+            const id = downloads.begin();
+            downloads.destination(id,slice(&job.path));
+            downloads.progress(id,length,length);
+            downloads.finish(id,.complete);
+        }
+        break :result "已保存网页主文档。";
+    };
+    native.moon_shell_toast("网页另存为",message);
 }
 
 export fn moon_web_popup(source: u64, opener: [*c]const u8, destination: [*c]const u8, gesture: bool) void {

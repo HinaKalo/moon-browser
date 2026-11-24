@@ -15,7 +15,7 @@
     "entry": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.[eE][xX][eE]$" },
     "permissions": {
       "type": "array",
-      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage", "network.filter", "bookmarks.manage", "downloads.manage", "siteData.read", "page.reading", "tabs.closed.manage", "privacy.clear", "taskManager.manage", "ui.commands", "tabs.organize", "privacy.privateWindow", "tabs.manage", "search.manage", "siteData.write", "tabs.session.manage", "bookmarks.transfer", "page.source", "popups.manage", "window.fullscreen"] }
+      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage", "network.filter", "bookmarks.manage", "downloads.manage", "siteData.read", "page.reading", "tabs.closed.manage", "privacy.clear", "taskManager.manage", "ui.commands", "tabs.organize", "privacy.privateWindow", "tabs.manage", "search.manage", "siteData.write", "tabs.session.manage", "bookmarks.transfer", "page.source", "popups.manage", "window.fullscreen", "page.save"] }
     },
     "events": {
       "type": "array",
@@ -55,7 +55,7 @@
               "siteMenu": { "type": "boolean", "default": false },
               "linkMenu": { "enum": ["open", "copy", "bookmark"] },
               "tabDrop": { "type": "boolean", "default": false },
-              "shortcut": { "enum": ["Ctrl+H", "F11", "F12", "Ctrl+Shift+C", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+Shift+T", "Ctrl+Shift+Delete", "Ctrl+Shift+M", "Ctrl+Shift+N", "Ctrl+U"] }
+              "shortcut": { "enum": ["Ctrl+H", "F11", "F12", "Ctrl+Shift+C", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+Shift+T", "Ctrl+Shift+Delete", "Ctrl+Shift+M", "Ctrl+Shift+N", "Ctrl+U", "Ctrl+S"] }
             }
           }
         }

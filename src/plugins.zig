@@ -38,6 +38,7 @@ const Grant = struct {
     tabs_session_manage: bool = false,
     bookmarks_transfer: ?bool = null,
     window_fullscreen: ?bool = null,
+    page_save: ?bool = null,
     menu_items: []const []const u8 = &.{},
     hidden_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
@@ -229,6 +230,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"window.fullscreen");
             plugin.grants.insert(.@"window.fullscreen");
         }
+        if (std.mem.eql(u8,id,"moon.source") and plugin.enabled and requests.contains(.@"page.save")) {
+            plugin.default_grants.insert(.@"page.save");
+            plugin.grants.insert(.@"page.save");
+        }
         if (std.mem.eql(u8,id,"moon.blocker") and requests.contains(.@"network.filter"))
             plugin.default_grants.insert(.@"network.filter");
     }
@@ -323,6 +328,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"bookmarks.transfer")) plugin.grants.insert(.@"bookmarks.transfer");
         if (grant.enabled and (grant.window_fullscreen orelse plugin.default_grants.contains(.@"window.fullscreen")) and
             plugin.requests.contains(.@"window.fullscreen")) plugin.grants.insert(.@"window.fullscreen");
+        if (grant.enabled and (grant.page_save orelse plugin.default_grants.contains(.@"page.save")) and
+            plugin.requests.contains(.@"page.save")) plugin.grants.insert(.@"page.save");
         if (canContribute(plugin)) {
             for (grant.hidden_menu_items) |id| {
                 if (findAction(plugin,id)) |index| {
@@ -397,6 +404,7 @@ fn persist() bool {
         .tabs_session_manage = plugin.grants.contains(.@"tabs.session.manage"),
         .bookmarks_transfer = plugin.grants.contains(.@"bookmarks.transfer"),
         .window_fullscreen = plugin.grants.contains(.@"window.fullscreen"),
+        .page_save = plugin.grants.contains(.@"page.save"),
         .menu_items = menus[index][0..used],
         .hidden_menu_items = hidden_menus[index][0..hidden],
         .hotkey = saved_key,
@@ -433,6 +441,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"lua.scripts.manage" => "此插件可导入、停用或移除 Lua 用户脚本。新脚本首次启用时，浏览器会单独确认网站范围。",
                 .@"page.inspect" => "此插件可为触发命令时的网页打开开发者工具。控制台和站点存储可在工具中查看。",
                 .@"page.source" => "你从网页触发此插件命令时，它的专属页面可读取该网页已经加载的主文档源代码。",
+                .@"page.save" => "此插件可在你触发命令时打开保存对话框，将已加载的网页写到你选中的 HTML 文件。",
                 .@"popups.manage" => "此插件可管理网站弹窗权限，并为触发命令的网页打开最近拦截的链接。",
                 .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",
@@ -849,6 +858,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
             'D' => .@"Ctrl+D",
             'F' => .@"Ctrl+F",
             'U' => .@"Ctrl+U",
+            'S' => .@"Ctrl+S",
             0xbd, 0x6d => .@"Ctrl+-",
             '0', 0x60 => .@"Ctrl+0",
             else => null,
@@ -902,7 +912,7 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
             if (entry.shortcut!=key or entry.user_shortcut!=null or registeredShortcut(index,command_index)!=null) continue;
             if (key==.F11 and ((!plugin.bundled and !canContribute(plugin)) or
                 !plugin.grants.contains(.@"window.fullscreen"))) continue;
-            if (!repeated or (key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C"))
+            if (!repeated or (key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C" and key!=.@"Ctrl+S"))
                 runShortcut(index,command_index,snapshot,repeated);
             return true;
         }

@@ -58,6 +58,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive" => .@"lua.scripts.manage",
         .@"devtools.open", .@"devtools.toggle" => .@"page.inspect",
         .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
+        .@"page.saveHtml" => .@"page.save",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
@@ -319,6 +320,14 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const tab = context.tab orelse break :open sdk.result(output,id,false);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             break :open sdk.result(output,id,native.moon_page_source_open(owner.ptr,tab.id,&tab.url));
+        },
+        .@"page.saveHtml" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const result = native.moon_page_save(owner.ptr,context.target_tab_id,context.target_navigation,
+                context.consent.context,context.consent.valid);
+            return sdk.result(output,id,std.enums.fromInt(sdk.PageSaveStart,result) orelse .failed);
         },
         .@"pageSource.status" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
