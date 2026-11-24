@@ -1,6 +1,6 @@
 # 插件 API 草案
 
-下一版协议与公开 SDK 的设计稿。当前浏览器支持[预览版协议](./protocol-v1)。
+下一版浏览器 API 与公开 SDK 的设计稿。当前浏览器提供 [Lua 用户脚本 API](./lua-userscripts)与[原生 EXE 预览协议](./protocol-v1)。两种运行时共用能力设计，调用形式分别是 Lua 模块和 JSON-RPC。
 
 ## 插件清单
 
@@ -29,7 +29,7 @@
 
 ## SDK 接口
 
-以下用 TypeScript 表达语言无关的数据模型。Zig 等语言的 SDK 使用同一方法名、输入和结果。
+以下用 TypeScript 表达语言无关的数据模型。Lua SDK 和 EXE 插件使用同一方法名、输入和结果，调用边界见[插件开发体系](./plugin-system)。
 
 | SDK 接口 | 权限 | 行为 |
 | --- | --- | --- |

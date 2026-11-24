@@ -5,6 +5,7 @@
 #include <dwrite.h>
 #include <gdiplus.h>
 #include <commctrl.h>
+#include <commdlg.h>
 #include <imm.h>
 #include <psapi.h>
 #include <shellapi.h>
@@ -47,7 +48,8 @@ static const Theme dark = {
 static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
-enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_PLUGIN_BASE = 100 };
+enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_PLUGIN_BASE = 100,
+       MENU_SCRIPTS_PICK = 300, MENU_SCRIPTS_BASE = 310 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        PALETTE_TAB_OFFSET = 1000 };
 
@@ -606,7 +608,38 @@ void moon_engine_test_fallback(bool value) {
 }
 
 static void open_palette(void);
-static void menu(HWND hwnd) {
+static void pick_userscript(void) {
+    wchar_t file[2048] = {0};
+    char path[4096];
+    OPENFILENAMEW dialog = {.lStructSize = sizeof(dialog), .hwndOwner = frame,
+        .lpstrFilter = L"Lua 脚本 (*.lua)\0*.lua\0\0", .lpstrFile = file, .nMaxFile = ARRAYSIZE(file),
+        .lpstrTitle = L"安装 Lua 用户脚本",
+        .Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER};
+    if (GetOpenFileNameW(&dialog) && moon_utf8(file, path, ARRAYSIZE(path)))
+        moon_command(MOON_SCRIPTS_INSTALL, 0, path);
+}
+static void userscript_menu(HMENU popup) {
+    HMENU scripts = CreatePopupMenu();
+    if (!scripts) return;
+    AppendMenuW(scripts, MF_STRING, MENU_SCRIPTS_PICK, L"安装 Lua 脚本…");
+    const size_t count = moon_userscript_count();
+    if (count) AppendMenuW(scripts, MF_SEPARATOR, 0, NULL);
+    for (size_t i = 0; i < count; ++i) {
+        wchar_t name[96], error[200];
+        if (!moon_utf16(moon_userscript_label(i), name, ARRAYSIZE(name))) continue;
+        HMENU item = CreatePopupMenu();
+        if (!item) continue;
+        const UINT id = MENU_SCRIPTS_BASE + (UINT)i * 2;
+        const bool enabled = moon_userscript_enabled(i);
+        AppendMenuW(item, MF_STRING | (enabled ? MF_CHECKED : 0), id, L"启用");
+        AppendMenuW(item, MF_STRING, id + 1, L"移除…");
+        if (moon_utf16(moon_userscript_error(i), error, ARRAYSIZE(error)) && *error)
+            AppendMenuW(item, MF_STRING | MF_GRAYED, 0, error);
+        AppendMenuW(scripts, MF_POPUP, (UINT_PTR)item, name);
+    }
+    AppendMenuW(popup, MF_POPUP, (UINT_PTR)scripts, L"Lua 用户脚本");
+}
+static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     HMENU popup=CreatePopupMenu();
     if (!popup) return;
     AppendMenuW(popup,MF_STRING,MENU_ADD,L"\u65b0\u5efa\u6807\u7b7e\u9875\tCtrl+T");
@@ -615,6 +648,7 @@ static void menu(HWND hwnd) {
     AppendMenuW(popup,MF_STRING,MENU_UPDATES,L"\u7248\u672c\u4e0e\u66f4\u65b0");
     AppendMenuW(popup,MF_STRING|(theme==&dark?MF_CHECKED:0),MENU_THEME,L"\u6df1\u8272\u4e3b\u9898\tCtrl+Shift+L");
     AppendMenuW(popup,MF_STRING|(focus_mode?MF_CHECKED:0),MENU_FOCUS,L"\u4e13\u6ce8\u6a21\u5f0f\tCtrl+B");
+    userscript_menu(popup);
     size_t count=moon_plugin_count();
     if (count) AppendMenuW(popup,MF_SEPARATOR,0,NULL);
     for(size_t i=0;i<count;++i) {
@@ -629,9 +663,13 @@ static void menu(HWND hwnd) {
         AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+2,action);
         AppendMenuW(popup,MF_POPUP,(UINT_PTR)sub,name);
     }
-    POINT anchor={px(client_width()-142),px(TOP-4)};
-    ClientToScreen(hwnd,&anchor);
-    UINT command=TrackPopupMenu(popup,TPM_RETURNCMD|TPM_RIGHTALIGN|TPM_NONOTIFY,anchor.x,anchor.y,0,hwnd,NULL);
+    MapWindowPoints(hwnd,NULL,(POINT *)&button,2);
+    TPMPARAMS placement={.cbSize=sizeof(placement),.rcExclude=button};
+    UINT flags=TPM_RETURNCMD|TPM_NONOTIFY|
+        (above ? TPM_BOTTOMALIGN|TPM_VERTICAL : TPM_TOPALIGN)|
+        (right_aligned ? TPM_RIGHTALIGN : TPM_LEFTALIGN);
+    UINT command=TrackPopupMenuEx(popup,flags,right_aligned?button.right:button.left,
+        above?button.top:button.bottom,hwnd,&placement);
     DestroyMenu(popup);
     if (command==MENU_DIAG) moon_command(MOON_DIAGNOSTICS,0,NULL);
     else if (command==MENU_ADD) moon_command(MOON_NEW,0,NULL);
@@ -639,6 +677,11 @@ static void menu(HWND hwnd) {
     else if (command==MENU_FOCUS) moon_shell_toggle_sidebar();
     else if (command==MENU_PALETTE) open_palette();
     else if (command==MENU_UPDATES) moon_command(MOON_UPDATES,0,NULL);
+    else if (command==MENU_SCRIPTS_PICK) pick_userscript();
+    else if (command>=MENU_SCRIPTS_BASE) {
+        const unsigned value=command-MENU_SCRIPTS_BASE;
+        moon_command(value%2?MOON_SCRIPTS_REMOVE:MOON_SCRIPTS_TOGGLE,value/2,NULL);
+    }
     else if (command>=MENU_PLUGIN_BASE) {
         unsigned value=command-MENU_PLUGIN_BASE;
         const int actions[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_COMMAND};
@@ -646,7 +689,15 @@ static void menu(HWND hwnd) {
         moon_shell_refresh();
     }
 }
-void moon_shell_open_plugins(void) { menu(frame); }
+void moon_shell_open_plugins(void) {
+    const int width=client_width(), height=client_height(), search=home_top(height)+98;
+    if (show_home && height-search>=145) {
+        const int tile=tile_width(width);
+        menu(frame,rectangle(home_left(width)+tile+10,search+94,tile,61),false,false);
+    } else {
+        menu(frame,rectangle(width-175,8,32,32),false,true);
+    }
+}
 
 static void palette_row(const wchar_t *name,LPARAM data) {
     LRESULT row=SendMessageW(palette_list,LB_ADDSTRING,0,(LPARAM)name);
@@ -762,7 +813,7 @@ static void click(HWND hwnd,int psx,int psy) {
         if (x>=width-50) { PostMessageW(hwnd,WM_SYSCOMMAND,SC_CLOSE,0); return; }
         if (x>=width-94) { ShowWindow(hwnd,IsZoomed(hwnd)?SW_RESTORE:SW_MAXIMIZE); return; }
         if (x>=width-138) { ShowWindow(hwnd,SW_MINIMIZE); return; }
-        if (x>=width-175) { menu(hwnd); return; }
+        if (x>=width-175) { menu(hwnd,rectangle(width-175,8,32,32),false,true); return; }
         if (x>=width-213) {
             moon_shell_toggle_sidebar();
             return;
@@ -782,9 +833,9 @@ static void click(HWND hwnd,int psx,int psy) {
                 moon_command(x>=SIDEBAR-26 ? MOON_CLOSE : MOON_SELECT,index,NULL);
             }
         } else if (y>=height-FOOTER) {
-            if (x<49) moon_shell_open_plugins();
+            if (x<49) menu(hwnd,rectangle(14,height-FOOTER+7,32,31),true,false);
             else if (x<86) moon_command(MOON_DIAGNOSTICS,0,NULL);
-            else if (x<125) menu(hwnd);
+            else if (x<125) menu(hwnd,rectangle(88,height-FOOTER+7,32,31),true,false);
         }
         return;
     }

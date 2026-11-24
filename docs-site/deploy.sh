@@ -20,7 +20,7 @@ cleanup() {
 }
 trap cleanup EXIT
 tar -xzf "$1" -C "$stage"
-for page in index guide protocol-v1 api; do
+for page in index guide protocol-v1 api lua-userscripts plugin-system; do
     test -s "$stage/$page.html"
 done
 chmod -R a+rX "$stage"

@@ -103,6 +103,7 @@ $docs = @(
     (Join-Path $repo 'README.md')
     (Join-Path $repo 'THIRD-PARTY.md')
     (Join-Path $repo 'examples\plugin.json')
+    (Join-Path $repo 'examples\welcome.user.lua')
 )
 if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
@@ -122,6 +123,7 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     Copy-Item -LiteralPath $EngineLock -Destination (Join-Path $stage 'engine.json')
     Copy-Item -LiteralPath (Join-Path $repo 'THIRD-PARTY.md') -Destination $stage
     Copy-Item -LiteralPath (Join-Path $repo 'README.md') -Destination $stage
+    Copy-Item -LiteralPath (Join-Path $repo 'examples\welcome.user.lua') -Destination $stage
     $notice = [IO.Directory]::CreateDirectory((Join-Path $stage 'licenses')).FullName
     $notices | Copy-Item -Destination $notice
     $example = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\example')).FullName

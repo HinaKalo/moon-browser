@@ -53,7 +53,7 @@ try {
         }
         $package = [IO.Compression.ZipFile]::OpenRead($portable)
         try {
-            foreach ($name in 'MoonBrowser.exe','portable.flag','Install-Engine.ps1') {
+            foreach ($name in 'MoonBrowser.exe','portable.flag','Install-Engine.ps1','welcome.user.lua') {
                 if (!$package.GetEntry($name)) { throw "Portable package is missing $name." }
             }
         } finally { $package.Dispose() }

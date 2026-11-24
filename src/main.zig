@@ -2,6 +2,7 @@ const std = @import("std");
 const native = @import("native");
 const policy = @import("policy.zig");
 const plugins = @import("plugins.zig");
+const userscripts = @import("userscripts.zig");
 const updater = @import("updater.zig");
 
 const max_tabs = 128;
@@ -510,6 +511,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     updater.configure(app, native.moon_clock());
     applySettings(profile);
     plugins.init(app, profile);
+    userscripts.init(profile);
     var first_url: ?[:0]u8 = null;
     defer if (first_url) |allocated| allocator.free(allocated);
     var index: usize = 1;
@@ -619,6 +621,9 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_TOGGLE_THEME => native.moon_shell_toggle_theme(),
         native.MOON_OPEN_PLUGINS => native.moon_shell_open_plugins(),
         native.MOON_UPDATES => updater.open(native.moon_clock()),
+        native.MOON_SCRIPTS_INSTALL => userscripts.install(slice(c_text)),
+        native.MOON_SCRIPTS_TOGGLE => userscripts.toggle(index),
+        native.MOON_SCRIPTS_REMOVE => userscripts.remove(index),
         else => {},
     }
 }
@@ -645,6 +650,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             tab.deadline = 0;
             sync(tab);
             storeSession(tab);
+            if (tab.view) |view| userscripts.apply(view);
         },
         native.MOON_FAILED => {
             const message = if (detail != null) slice(detail) else "";
@@ -802,10 +808,12 @@ fn beginWarm() void {
 }
 fn smokeTick(now: u64) void {
     if (now >= smoke_deadline) return failSmoke("timeout");
+    const lua_fixture = equals(slice(native.moon_userscript_label(0)), "Moon Lua smoke budget");
+    const initial_title = if (lua_fixture) "Moon fixture initial Lua ✓" else "Moon fixture initial";
     switch (smoke) {
         .off => {},
         .first => {
-            if (!smokePage("Moon fixture initial")) return;
+            if (!smokePage(initial_title)) return;
             requestSmokePaint();
             if (!smoke_painted) return;
             smoke = .second;
@@ -813,6 +821,11 @@ fn smokeTick(now: u64) void {
         },
         .second => {
             if (!smokePage("Moon fixture second")) return;
+            if (lua_fixture) {
+                const failure = slice(native.moon_userscript_error(0));
+                if (std.mem.indexOf(u8, failure, "instruction limit exceeded") == null) return failSmoke("Lua instruction budget");
+                log("lua_userscripts=ok", .{});
+            }
             if (moon_controls() & 1 == 0) return failSmoke("initial back history missing");
             log("navigation_ok=1 baseline_commit={d}", .{sampleMemory()});
             if (smoke_quick) {
@@ -876,7 +889,7 @@ fn smokeTick(now: u64) void {
             moon_command(native.MOON_BACK, 0, null);
         },
         .back => {
-            if (!smokePage("Moon fixture initial")) return;
+            if (!smokePage(initial_title)) return;
             if (moon_controls() & 2 == 0) return failSmoke("forward navigation unavailable");
             smoke = .forward;
             moon_command(native.MOON_FORWARD, 0, null);
@@ -916,7 +929,7 @@ fn smokeTick(now: u64) void {
             smokeNavigate(&tabs[active], "/page/initial");
         },
         .crash => {
-            if (!smokePage("Moon fixture initial")) return;
+            if (!smokePage(initial_title)) return;
             if (!native.moon_engine_test_crash(tabs[active].view.?)) return failSmoke("could not terminate fixture web process");
             smoke = .recover;
         },
@@ -926,7 +939,7 @@ fn smokeTick(now: u64) void {
                 moon_command(native.MOON_RELOAD, 0, null);
                 return;
             }
-            if (!recovery_started or !smokePage("Moon fixture initial")) return;
+            if (!recovery_started or !smokePage(initial_title)) return;
             log("crash_recovery=ok", .{});
             log("PASS", .{});
             native.moon_quit(0);

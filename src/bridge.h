@@ -8,7 +8,8 @@ enum MoonCommand {
     MOON_NEW = 1, MOON_CLOSE, MOON_SELECT, MOON_BACK, MOON_FORWARD, MOON_RELOAD,
     MOON_ADDRESS, MOON_TICK, MOON_INPUT, MOON_DIAGNOSTICS, MOON_PLUGIN_COMMAND,
     MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
-    MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES
+    MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES,
+    MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE
 };
 enum MoonEngineEvent {
     MOON_STARTED = 1, MOON_COMMITTED, MOON_FINISHED, MOON_FAILED, MOON_CHANGED,
@@ -19,6 +20,8 @@ enum MoonEngineEvent {
 typedef struct MoonView MoonView;
 typedef struct MoonPipe MoonPipe;
 typedef struct MoonSample { uint32_t pid; uint64_t bytes; } MoonSample;
+enum { MOON_DOM_SET_TEXT = 1, MOON_DOM_HIDE, MOON_DOM_ADD_CLASS, MOON_DOM_MAX_OPS = 32 };
+typedef struct MoonDomOp { unsigned kind; char selector[257]; char value[1025]; } MoonDomOp;
 
 int moon_shell_run(void);
 unsigned moon_shell_test_dpi(void);
@@ -65,6 +68,8 @@ void moon_engine_release_state(const void *state);
 uint32_t moon_engine_pid(MoonView *view);
 bool moon_engine_media(MoonView *view);
 void moon_engine_read(MoonView *view, char *title, size_t title_cap, char *url, size_t url_cap);
+void moon_engine_committed_url(MoonView *view, char *url, size_t cap);
+void moon_engine_apply_dom(MoonView *view, const char *javascript);
 void moon_engine_trim(void);
 bool moon_engine_test_crash(MoonView *view);
 int moon_engine_test_download(MoonView *view, const char *path);
@@ -75,6 +80,12 @@ MoonPipe *moon_pipe_open(const char *executable, uint32_t *error);
 bool moon_pipe_send(MoonPipe *pipe, const char *line);
 int moon_pipe_read(MoonPipe *pipe, char *data, size_t capacity);
 bool moon_pipe_close(MoonPipe *pipe);
+bool moon_lua_check(const char *source, char *error, size_t cap);
+int moon_lua_userscript(const char *source, const char *url, MoonDomOp *ops, char *error, size_t cap);
+size_t moon_userscript_count(void);
+const char *moon_userscript_label(size_t index);
+const char *moon_userscript_error(size_t index);
+bool moon_userscript_enabled(size_t index);
 
 bool moon_start(int argc, const uint16_t *const *argv);
 void moon_command(int command, uint64_t argument, const char *text);

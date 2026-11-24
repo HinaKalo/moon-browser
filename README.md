@@ -41,6 +41,8 @@ build 生成本地开发目录，package 打包本地开发用的自包含 ZIP�
 
 [插件开发文档](https://docs.browser.moonl.cloud/) · [插件 API 草案](https://docs.browser.moonl.cloud/api.html)
 
+Lua 用户脚本可从工具栏「… → Lua 用户脚本」安装。随包的 `welcome.user.lua` 可作为网页定制起点。[Lua 用户脚本指南](https://docs.browser.moonl.cloud/lua-userscripts.html)
+
 协议使用 UTF-8、一行一个 JSON-RPC 2.0 消息。宿主每次启动独立进程进行一次交互，整个交互限时 2 秒，每帧小于 16 KiB。
 
 | 方向 | ID | 方法或返回值 |

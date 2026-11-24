@@ -17,6 +17,7 @@ PAYLOAD = b"Moon Browser download fixture\n"
 CHECKS = (
     "dpi_reflow=ok",
     "first_page_paint_ms=",
+    "lua_userscripts=ok",
     "navigation_ok=1",
     "tab_stress open=50",
     "warm_switch_p95_us=",
@@ -81,6 +82,29 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
     env = preview_env(root)
     profile = Path(env["MOON_BROWSER_PROFILE_DIR"])
     profile.mkdir()
+    def userscript(name, host_and_path, body, *, extra="", enabled=True):
+        return {
+            "enabled": enabled,
+            "source": (
+                f"-- ==MoonUserScript==\n-- @name {name}\n-- @api 1\n"
+                f"-- @match {host_and_path}\n{extra}-- ==/MoonUserScript==\n{body}\n"
+            ),
+        }
+
+    initial = f"{base}/page/initial"
+    second = f"{base}/page/second"
+    change_second = 'moon.dom.setText("title", "This script should have been blocked")'
+    scripts = [
+        userscript("Moon Lua smoke budget", initial, "while true do end"),
+        userscript("Moon Lua smoke allowed", initial,
+                   'assert(io == nil and os == nil and package == nil and debug == nil and pcall == nil)\n'
+                   'assert(moon.apiVersion == 1 and moon.page.url == "' + initial + '")\n'
+                   'moon.dom.setText("title", "Moon fixture initial Lua ✓")'),
+        userscript("Moon Lua smoke excluded", second, change_second, extra=f"-- @exclude {second}\n"),
+        userscript("Moon Lua smoke disabled", second, change_second, enabled=False),
+        userscript("Moon Lua smoke wrong origin", second.replace("127.0.0.1", "localhost"), change_second),
+    ]
+    (profile / "lua-userscripts.json").write_text(json.dumps(scripts), encoding="utf-8")
     if force_pressure:
         (profile / "memory.json").write_text(
             json.dumps({"pressure_mib": 128, "target_mib": 96}), encoding="utf-8"
@@ -186,6 +210,34 @@ def run_win32(exe, base, root):
 
         def click(x, y):
             user.PostMessageW(frame, 0x0202, 0, y << 16 | x)  # WM_LBUTTONUP
+
+        def popup_bounds():
+            deadline = monotonic() + 4
+            while monotonic() < deadline:
+                candidate = None
+                while candidate := user.FindWindowExW(None, candidate, "#32768", None):
+                    owner = wt.DWORD()
+                    user.GetWindowThreadProcessId(candidate, ctypes.byref(owner))
+                    if owner.value == proc.pid and user.IsWindowVisible(candidate):
+                        rect = wt.RECT()
+                        user.GetWindowRect(candidate, ctypes.byref(rect))
+                        user.PostMessageW(frame, 0x001F, 0, 0)  # WM_CANCELMODE
+                        sleep(0.1)
+                        return rect
+                sleep(0.05)
+            raise RuntimeError("Native menu did not open")
+
+        click(px(104), client.bottom - px(26))
+        footer_menu = popup_bounds()
+        if (abs(footer_menu.left - (origin.x + px(88))) > px(16)
+                or abs(footer_menu.bottom - (origin.y + client.bottom - px(41))) > px(16)):
+            raise RuntimeError(f"Sidebar menu is not anchored to its button: {footer_menu.left}, {footer_menu.bottom}")
+        click(client.right - px(159), px(24))
+        toolbar_menu = popup_bounds()
+        if (abs(toolbar_menu.right - (origin.x + client.right - px(143))) > px(16)
+                or abs(toolbar_menu.top - (origin.y + px(40))) > px(16)):
+            raise RuntimeError(f"Toolbar menu is not anchored to its button: {toolbar_menu.right}, {toolbar_menu.top}")
+        print("native_menu_anchors=ok", flush=True)
 
         def find_palette():
             deadline = monotonic() + 4

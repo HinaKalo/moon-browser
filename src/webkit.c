@@ -48,6 +48,7 @@
     X(WKViewCreate) X(WKViewGetWindow) X(WKViewGetPage) X(WKViewSetIsInWindow) \
     X(WKPageSetPageNavigationClient) X(WKPageSetPageUIClient) X(WKPageSetPageStateClient) \
     X(WKPageLoadURL) X(WKPageCopyTitle) X(WKPageCopyActiveURL) X(WKPageClose) \
+    X(WKPageCopyCommittedURL) X(WKPageCallAsyncJavaScriptWithoutUserGesture) \
     X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
     X(WKPageCopySessionState) X(WKPageRestoreFromSessionState) X(WKPageGetProcessIdentifier) X(WKPageGetMediaState) \
     X(WKNavigationActionCopyRequest) X(WKNavigationActionShouldPerformDownload) \
@@ -353,6 +354,21 @@ bool moon_engine_load(MoonView *view, const char *url) {
 void moon_engine_back(MoonView *view) { if (wk.WKPageCanGoBack(view->page)) wk.WKPageGoBack(view->page); }
 void moon_engine_forward(MoonView *view) { if (wk.WKPageCanGoForward(view->page)) wk.WKPageGoForward(view->page); }
 void moon_engine_reload(MoonView *view) { wk.WKPageReload(view->page); }
+void moon_engine_committed_url(MoonView *view, char *url, size_t cap) {
+    if (!cap) return;
+    url[0] = 0;
+    WKURLRef committed = wk.WKPageCopyCommittedURL(view->page);
+    WKStringRef string = committed ? wk.WKURLCopyString(committed) : NULL;
+    if (string && wk.WKStringGetUTF8CString(string, url, cap) >= cap) url[0] = 0;
+    release(string);
+    release(committed);
+}
+void moon_engine_apply_dom(MoonView *view, const char *javascript) {
+    WKStringRef source = wk.WKStringCreateWithUTF8CString(javascript);
+    if (!source) return;
+    wk.WKPageCallAsyncJavaScriptWithoutUserGesture(view->page, source, NULL, NULL, NULL, NULL);
+    release(source);
+}
 unsigned moon_engine_controls(MoonView *view) {
     return (wk.WKPageCanGoBack(view->page) ? 1u : 0u) | (wk.WKPageCanGoForward(view->page) ? 2u : 0u);
 }
