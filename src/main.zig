@@ -2,6 +2,7 @@ const std = @import("std");
 const native = @import("native");
 const policy = @import("policy.zig");
 const plugins = @import("plugins.zig");
+const updater = @import("updater.zig");
 
 const max_tabs = 128;
 const Phase = enum { blank, live, dormant, crashed, restoring, failed };
@@ -49,6 +50,21 @@ var retiring_count: usize = 0;
 var stopped = false;
 var popup: [4096:0]u8 = @splat(0);
 var error_text: [512:0]u8 = @splat(0);
+
+const ShellAction = struct {
+    label: [:0]const u8,
+    command: c_int,
+    home: bool = false,
+};
+const shell_actions = [_]ShellAction{
+    .{ .label = "新建标签页", .command = native.MOON_NEW },
+    .{ .label = "聚焦地址栏", .command = native.MOON_FOCUS_ADDRESS },
+    .{ .label = "切换侧边栏", .command = native.MOON_TOGGLE_SIDEBAR },
+    .{ .label = "切换亮色 / 深色主题", .command = native.MOON_TOGGLE_THEME },
+    .{ .label = "内存诊断", .command = native.MOON_DIAGNOSTICS, .home = true },
+    .{ .label = "本地插件", .command = native.MOON_OPEN_PLUGINS, .home = true },
+    .{ .label = "版本与更新", .command = native.MOON_UPDATES, .home = true },
+};
 
 const SmokeStep = enum { off, first, second, load_tabs, settle, warm_prepare, warm, restore, back, forward, plugin, download, crash, recover };
 var smoke: SmokeStep = .off;
@@ -177,6 +193,7 @@ fn tabIndex(id: u64) ?usize {
 fn updateChrome(force_address: bool) void {
     if (count == 0 or stopped) return;
     const tab = &tabs[active];
+    native.moon_shell_show_home(tab.phase == .blank and tab.opening == .none);
     native.moon_shell_address(&tab.url, force_address);
     native.moon_shell_status(if (tab.opening != .none) "Waiting for an available WebKit process..." else switch (tab.phase) {
         .blank => "Open a page from the address bar",
@@ -282,8 +299,8 @@ fn navigate(tab: *Tab, url: []const u8) void {
     tab.deadline = 0;
     error_text[0] = 0;
     if (&tabs[active] == tab) {
-        show(tab);
         updateChrome(true);
+        show(tab);
     }
     if (!native.moon_engine_load(tab.view.?, &storage)) {
         tab.phase = .failed;
@@ -322,8 +339,9 @@ fn chooseTab(index: usize, notify: bool) void {
     active = index;
     const tab = &tabs[index];
     tab.last_used = now;
-    if (tab.phase == .dormant) restore(tab) else if (tab.phase != .crashed and tab.phase != .failed) show(tab);
     updateChrome(true);
+    if (tab.phase == .dormant) restore(tab) else if (tab.phase != .crashed and tab.phase != .failed) show(tab);
+    updateChrome(false);
     if (notify) plugins.changed(tabSnapshot());
 }
 fn addTab(url: ?[]const u8, notify: bool) void {
@@ -435,6 +453,8 @@ fn manage(now: u64) void {
 }
 fn maintenance() void {
     const now = native.moon_clock();
+    if (smoke == .off) updater.tick(now);
+    if (stopped) return;
     collectRetirements();
     if (popup[0] != 0) {
         const target = popup;
@@ -487,6 +507,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     const allocator = std.heap.page_allocator;
     const app = slice(native.moon_app_dir());
     const profile = slice(native.moon_profile_dir());
+    updater.configure(app, native.moon_clock());
     applySettings(profile);
     plugins.init(app, profile);
     var first_url: ?[:0]u8 = null;
@@ -497,6 +518,17 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         defer allocator.free(argument);
         if (equals(argument, "--gdi")) {
             native.moon_engine_test_fallback(true);
+        } else if (equals(argument, "--relhub-probe") and index + 3 < @as(usize, @intCast(argc))) {
+            const report = std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.sliceTo(argv[index + 1], 0)) catch return false;
+            defer allocator.free(report);
+            const mode = std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.sliceTo(argv[index + 2], 0)) catch return false;
+            defer allocator.free(mode);
+            const raw_code = std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.sliceTo(argv[index + 3], 0)) catch return false;
+            defer allocator.free(raw_code);
+            const code = std.fmt.parseUnsigned(u64, raw_code, 10) catch return false;
+            if (!updater.configureProbe(report, mode, code)) return false;
+            addTab(null, false);
+            return true;
         } else if (equals(argument, "--smoke-quick")) {
             smoke_quick = true;
         } else if (equals(argument, "--smoke") and index + 2 < @as(usize, @intCast(argc))) {
@@ -582,6 +614,11 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_PLUGIN_ENABLE => plugins.enable(index),
         native.MOON_PLUGIN_GRANT => plugins.toggleGrant(index),
         native.MOON_PLUGIN_COMMAND => plugins.command(index, tabSnapshot()),
+        native.MOON_FOCUS_ADDRESS => native.moon_shell_focus_address(),
+        native.MOON_TOGGLE_SIDEBAR => native.moon_shell_toggle_sidebar(),
+        native.MOON_TOGGLE_THEME => native.moon_shell_toggle_theme(),
+        native.MOON_OPEN_PLUGINS => native.moon_shell_open_plugins(),
+        native.MOON_UPDATES => updater.open(native.moon_clock()),
         else => {},
     }
 }
@@ -667,11 +704,11 @@ export fn moon_active_index() usize {
     return active;
 }
 export fn moon_tab_label(index: usize) [*:0]const u8 {
-    if (index >= count) return "New tab";
+    if (index >= count) return "新标签页";
     const tab = &tabs[index];
     if (tab.title[0] != 0) return &tab.title;
     if (tab.url[0] != 0) return &tab.url;
-    return "New tab";
+    return "新标签页";
 }
 export fn moon_tab_flags(index: usize) c_uint {
     if (index >= count) return 0;
@@ -696,6 +733,44 @@ export fn moon_plugin_action(index: usize) [*:0]const u8 {
 }
 export fn moon_plugin_flags(index: usize) c_uint {
     return plugins.flags(index);
+}
+
+const Action = union(enum) { built_in: ShellAction, plugin: usize };
+
+fn actionAt(index: usize, home: bool) ?Action {
+    var remaining = index;
+    for (shell_actions) |action| {
+        if (home and !action.home) continue;
+        if (remaining == 0) return .{ .built_in = action };
+        remaining -= 1;
+    }
+    for (0..plugins.count()) |plugin| {
+        if (plugins.flags(plugin) & 1 == 0) continue;
+        if (remaining == 0) return .{ .plugin = plugin };
+        remaining -= 1;
+    }
+    return null;
+}
+
+export fn moon_action_count(home: bool) usize {
+    var actions: usize = 0;
+    for (shell_actions) |action| actions += @intFromBool(!home or action.home);
+    for (0..plugins.count()) |plugin| actions += @intFromBool(plugins.flags(plugin) & 1 != 0);
+    return actions;
+}
+
+export fn moon_action_label(index: usize, home: bool) [*:0]const u8 {
+    return switch (actionAt(index, home) orelse return "") {
+        .built_in => |action| action.label,
+        .plugin => |plugin| plugins.action(plugin),
+    };
+}
+
+export fn moon_action_run(index: usize, home: bool) void {
+    switch (actionAt(index, home) orelse return) {
+        .built_in => |action| moon_command(action.command, 0, null),
+        .plugin => |plugin| plugins.command(plugin, tabSnapshot()),
+    }
 }
 export fn moon_plugin_worker(task: ?*anyopaque) void {
     plugins.worker(task);

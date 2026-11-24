@@ -5,17 +5,19 @@
 #include <dwrite.h>
 #include <gdiplus.h>
 #include <commctrl.h>
+#include <imm.h>
 #include <psapi.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shlwapi.h>
 #include <tlhelp32.h>
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
 
-static HWND frame, content, address, diagnostics;
+static HWND frame, content, address, home_edit, diagnostics, palette, palette_input, palette_list;
 static HBRUSH address_brush;
-static HFONT edit_font;
+static HFONT edit_font, hero_font;
 static UINT dpi = 96;
 static HANDLE low_memory;
 static char profile_dir[4096], app_dir[4096];
@@ -23,14 +25,31 @@ static wchar_t content_status[512];
 static size_t first_tab;
 static ID2D1Factory *drawing;
 static IDWriteFactory *writing;
-static IDWriteTextFormat *font_left, *font_center;
+static IDWriteTextFormat *font_left, *font_center, *font_hero;
 static ID2D1HwndRenderTarget *target;
 static ID2D1SolidColorBrush *brush;
 static ULONG_PTR gdiplus;
 static bool force_fallback, quitting;
+static bool show_home, focus_mode, tracking_mouse;
+static POINT hover = {-1,-1};
 
-enum { CHROME_HEIGHT = 89, TAB_Y = 8, TAB_HEIGHT = 34, TOOL_Y = 50, TOOL_HEIGHT = 31 };
-enum { MENU_DIAG = 10, MENU_ADD = 11, MENU_PLUGIN_BASE = 100 };
+typedef struct Theme {
+    unsigned frame, panel, field, hover, line, outline, text, muted, accent, soft, danger, loading;
+} Theme;
+static const Theme light = {
+    0xe6e8ee, 0xffffff, 0xf5f6f9, 0xf0f1f6, 0xd9dce6, 0xb5bbcd,
+    0x14161d, 0x51586a, 0x4359c5, 0xe8ecff, 0xc13f46, 0xa26721
+};
+static const Theme dark = {
+    0x14161b, 0x191c23, 0x20232c, 0x292d38, 0x363b49, 0x5e687f,
+    0xe9ebf2, 0xa3a9bb, 0xa6b6ff, 0x2b365e, 0xf47c82, 0xf0bf73
+};
+static const Theme *theme = &light;
+
+enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
+enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_PLUGIN_BASE = 100 };
+enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
+       PALETTE_TAB_OFFSET = 1000 };
 
 typedef struct Canvas {
     ID2D1RenderTarget *d2d;
@@ -242,71 +261,181 @@ static void text_at(Canvas c, const wchar_t *text, int x, int y, int w, int h, u
         SelectObject(c.hdc, old);
     }
 }
+
 static int client_width(void) {
     RECT r;
-    GetClientRect(frame, &r);
-    return MulDiv(r.right, 96, dpi);
+    GetClientRect(frame,&r);
+    return MulDiv(r.right,96,dpi);
 }
-static int tab_span(void) {
-    int width = client_width() - 110;
-    size_t count = moon_tab_count();
-    int ideal = count ? width / (int)count : 160;
-    return ideal < 116 ? 116 : ideal > 210 ? 210 : ideal;
+static int client_height(void) {
+    RECT r;
+    GetClientRect(frame,&r);
+    return MulDiv(r.bottom,96,dpi);
+}
+static int pane_left(void) { return focus_mode ? PAD : PAD + SIDEBAR + PAD; }
+static int home_left(int width) {
+    int available = width - pane_left() - PAD;
+    return pane_left() + (available > 768 ? (available-720)/2 : 24);
+}
+static int home_width(int width) {
+    int available = width - PAD - home_left(width) - 24;
+    return available > 720 ? 720 : available;
+}
+static int home_top(int height) { return TOP + (height > 520 ? 70 : 32); }
+static int address_left(void) { return pane_left()+106; }
+static int address_right(int width) { return width-222; }
+static bool pointed(int x,int y,int w,int h) {
+    return hover.x>=x && hover.x<x+w && hover.y>=y && hover.y<y+h;
 }
 static size_t tab_capacity(void) {
-    int width = client_width() - 110;
-    size_t count = moon_tab_count();
-    if (width <= tab_span()) return 1;
-    size_t capacity = (size_t)(width / tab_span());
-    return capacity < count ? capacity : count;
+    int room = client_height()-TAB_START-FOOTER-6;
+    return room > ROW ? (size_t)(room/ROW) : 1;
 }
 static void clamp_tab_strip(bool reveal_active) {
-    size_t count = moon_tab_count(), capacity = tab_capacity(), active = moon_active_index();
-    size_t last = count > capacity ? count - capacity : 0;
-    if (first_tab > last) first_tab = last;
-    if (reveal_active && active < count) {
-        if (active < first_tab) first_tab = active;
-        if (capacity && active >= first_tab + capacity) first_tab = active - capacity + 1;
+    size_t count=moon_tab_count(), capacity=tab_capacity(), active=moon_active_index();
+    size_t last=count>capacity ? count-capacity : 0;
+    if (first_tab>last) first_tab=last;
+    if (reveal_active && active<count) {
+        if (active<first_tab) first_tab=active;
+        if (active>=first_tab+capacity) first_tab=active-capacity+1;
     }
 }
-static int add_position(void) { return 15 + (int)tab_capacity() * tab_span(); }
-static void paint_chrome(Canvas c, int width, int height, bool full) {
-    if (full) fill(c, 0, 0, width, height, 0x101218, 0);
-    fill(c, 0, 0, width, CHROME_HEIGHT, 0x111319, 0);
-    fill(c, 0, 44, width, 45, 0x171a23, 0);
-    fill(c, 0, 88, width, 1, 0x2d3444, 0);
+static void ellipse(Canvas c,int x,int y,int w,int h,unsigned color) {
+    if (c.d2d) {
+        D2D1_COLOR_F tint=color_value(color);
+        D2D1_ELLIPSE shape={{x+w*.5f,y+h*.5f},w*.5f,h*.5f};
+        ID2D1SolidColorBrush_SetColor(brush,&tint);
+        ID2D1RenderTarget_FillEllipse(c.d2d,&shape,(ID2D1Brush *)brush);
+    } else if (c.gplus) {
+        GpSolidFill *paint=NULL;
+        if (GdipCreateSolidFill(0xff000000u|color,&paint)==Ok) {
+            GdipFillEllipseI(c.gplus,(GpBrush *)paint,px(x),px(y),px(w),px(h));
+            GdipDeleteBrush((GpBrush *)paint);
+        }
+    } else {
+        HBRUSH solid=CreateSolidBrush(rgb(color));
+        HBRUSH old=SelectObject(c.hdc,solid);
+        HPEN pen=SelectObject(c.hdc,GetStockObject(NULL_PEN));
+        Ellipse(c.hdc,px(x),px(y),px(x+w),px(y+h));
+        SelectObject(c.hdc,pen);
+        SelectObject(c.hdc,old);
+        DeleteObject(solid);
+    }
+}
+static void moon_mark(Canvas c,int x,int y,int size,unsigned background) {
+    ellipse(c,x,y,size,size,theme->accent);
+    ellipse(c,x+size*37/100,y-size/10,size*81/100,size*81/100,background);
+    ellipse(c,x+size*76/100,y+size/8,size/7+1,size/7+1,theme->accent);
+}
+static void icon_button(Canvas c,const wchar_t *glyph,int x,int y,int w,int h,bool enabled) {
+    if (enabled && pointed(x,y,w,h)) fill(c,x,y,w,h,theme->hover,7);
+    text_at(c,glyph,x,y,w,h,enabled?theme->text:theme->outline,true);
+}
+static void heading_at(Canvas c,const wchar_t *text,int x,int y,int w,int h) {
+    if (c.d2d && font_hero) {
+        D2D1_COLOR_F tone=color_value(theme->text);
+        D2D1_RECT_F shape={(float)x,(float)y,(float)(x+w),(float)(y+h)};
+        ID2D1SolidColorBrush_SetColor(brush,&tone);
+        ID2D1RenderTarget_DrawText(c.d2d,text,(UINT32)wcslen(text),font_hero,&shape,
+            (ID2D1Brush *)brush,D2D1_DRAW_TEXT_OPTIONS_CLIP,DWRITE_MEASURING_MODE_NATURAL);
+    } else {
+        RECT r=rectangle(x,y,w,h);
+        HFONT old=SelectObject(c.hdc,hero_font);
+        SetTextColor(c.hdc,rgb(theme->text));
+        SetBkMode(c.hdc,TRANSPARENT);
+        DrawTextW(c.hdc,text,-1,&r,DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS|DT_NOPREFIX);
+        SelectObject(c.hdc,old);
+    }
+}
+static void paint_sidebar(Canvas c,int height) {
+    const int x=12, w=SIDEBAR-8;
+    moon_mark(c,17,15,20,theme->frame);
+    text_at(c,L"MoonBrowser",45,0,150,TOP,theme->text,false);
+    fill(c,x,50,w,34,pointed(x,50,w,34)?theme->panel:theme->field,8);
+    text_at(c,L"\x2315",x+6,50,25,34,theme->muted,true);
+    text_at(c,L"\u641c\u7d22\u6216\u8f93\u5165\u7f51\u5740",x+33,50,147,34,theme->text,false);
+    fill(c,x+w-57,57,49,20,theme->frame,4);
+    text_at(c,L"Ctrl K",x+w-57,57,49,20,theme->muted,true);
+    text_at(c,L"\u6807\u7b7e\u9875",x+8,92,130,30,theme->muted,false);
+    icon_button(c,L"+",x+w-32,92,30,29,true);
+    fill(c,x,125,w,1,theme->line,0);
+    size_t active=moon_active_index(), count=moon_tab_count(), capacity=tab_capacity();
+    for(size_t i=0;i<capacity && first_tab+i<count;++i) {
+        size_t tab=first_tab+i;
+        int y=TAB_START+(int)i*ROW;
+        bool selected=tab==active, hot=pointed(x,y,w,ROW-3);
+        unsigned flags=moon_tab_flags(tab);
+        if (selected || hot) fill(c,x,y,w,ROW-3,selected?theme->panel:theme->hover,7);
+        if (selected) fill(c,x,y+6,3,ROW-15,theme->accent,2);
+        unsigned tone=(flags&2)?theme->danger:(flags&1)?theme->muted:(flags&4)?theme->loading:theme->accent;
+        fill(c,x+11,y+8,18,18,selected?theme->soft:theme->field,5);
+        ellipse(c,x+17,y+14,6,6,tone);
+        wchar_t label[512];
+        if (!moon_utf16(moon_tab_label(tab),label,ARRAYSIZE(label))) wcscpy(label,L"\u6807\u7b7e\u9875");
+        text_at(c,label,x+38,y,w-71,ROW-3,selected?theme->text:theme->muted,false);
+        if (selected || hot) icon_button(c,L"\xd7",x+w-29,y+3,25,ROW-9,true);
+    }
+    if (count>capacity) {
+        const int track=height-TAB_START-FOOTER-9, thumb=track*(int)capacity/(int)count;
+        if (track>0) fill(c,SIDEBAR+3,TAB_START+track*(int)first_tab/(int)count,2,thumb>12?thumb:12,theme->outline,1);
+    }
+    int footer=height-FOOTER;
+    fill(c,x,footer,w,1,theme->line,0);
+    icon_button(c,L"\x229e",x+2,footer+7,32,31,true);
+    icon_button(c,L"\x25f7",x+39,footer+7,32,31,true);
+    icon_button(c,L"\x2026",x+76,footer+7,32,31,true);
+}
+static int tile_width(int width) {
+    int w=(home_width(width)-20)/3;
+    return w>176?176:w;
+}
+static void paint_home(Canvas c,int width,int height) {
+    int x=home_left(width), y=home_top(height), w=home_width(width);
+    moon_mark(c,x,y+7,65,theme->panel);
+    heading_at(c,L"MoonBrowser",x+87,y,w-87,52);
+    text_at(c,L"\u65b0\u6807\u7b7e\u9875",x+88,y+48,w-88,25,theme->muted,false);
+    int search=y+98;
+    fill(c,x,search,w,44,GetFocus()==home_edit?theme->accent:theme->line,9);
+    fill(c,x+1,search+1,w-2,42,theme->field,8);
+    text_at(c,L"\x2315",x+5,search,34,44,theme->muted,true);
+    if (height-search<145) return;
+    text_at(c,L"\u5feb\u6377\u529f\u80fd",x,search+61,w,26,theme->muted,false);
+    int tile=tile_width(width);
+    for(size_t i=0;i<3 && i<moon_action_count(true);++i) {
+        int left=x+(int)i*(tile+10), top=search+94;
+        fill(c,left,top,tile,61,pointed(left,top,tile,61)?theme->hover:theme->field,9);
+        fill(c,left+10,top+16,28,28,theme->soft,8);
+        text_at(c,i==0?L"\x25f7":L"\x229e",left+10,top+16,28,28,theme->accent,true);
+        wchar_t title[256];
+        if (moon_utf16(moon_action_label(i,true),title,ARRAYSIZE(title)))
+            text_at(c,title,left+47,top,tile-52,61,theme->text,false);
+    }
+}
+static void paint_chrome(Canvas c,int width,int height) {
+    fill(c,0,0,width,height,theme->frame,0);
+    int left=pane_left();
+    if (!focus_mode) paint_sidebar(c,height);
+    fill(c,left,TOP,width-left-PAD,height-TOP-PAD,theme->line,12);
+    fill(c,left+1,TOP+1,width-left-PAD-2,height-TOP-PAD-2,theme->panel,11);
+    unsigned controls=moon_controls();
+    icon_button(c,L"\x2190",left,8,31,32,controls&1);
+    icon_button(c,L"\x2192",left+34,8,31,32,controls&2);
+    icon_button(c,L"\x21bb",left+68,8,31,32,true);
+    int address_x=address_left(), address_w=address_right(width)-address_x;
+    fill(c,address_x,8,address_w,32,GetFocus()==address?theme->accent:theme->line,8);
+    fill(c,address_x+1,9,address_w-2,30,theme->field,7);
+    text_at(c,L"\x2315",address_x+3,8,24,32,theme->muted,true);
+    icon_button(c,L"\x25e7",width-213,8,32,32,true);
+    icon_button(c,L"\x2026",width-175,8,32,32,true);
+    icon_button(c,L"\x2212",width-138,0,44,TOP,true);
+    icon_button(c,IsZoomed(frame)?L"\x29c9":L"\x25a1",width-94,0,44,TOP,true);
+    if (pointed(width-50,0,44,TOP)) fill(c,width-50,1,44,TOP-2,theme->danger,7);
+    text_at(c,L"\xd7",width-50,0,44,TOP,pointed(width-50,0,44,TOP)?0xffffff:theme->text,true);
+    if (show_home) paint_home(c,width,height);
+    else if (moon_tab_count() && (moon_tab_flags(moon_active_index())&4))
+        fill(c,left+8,TOP+1,74,2,theme->accent,1);
+}
 
-    size_t active = moon_active_index(), count = moon_tab_count();
-    int span = tab_span();
-    for (size_t i = 0; i < tab_capacity() && first_tab+i < count; ++i) {
-        size_t tab = first_tab+i;
-        int x = 12 + (int)i * span;
-        bool chosen = tab == active;
-        unsigned flags = moon_tab_flags(tab);
-        fill(c, x, TAB_Y, span-4, TAB_HEIGHT, chosen ? 0x292f3f : 0x1a1e27, 7);
-        if (chosen) fill(c, x+11, TAB_Y+3, 16, 2, 0x91afff, 0);
-        fill(c, x+12, TAB_Y+15, 6, 6, (flags & 2) ? 0xf38983 :
-            (flags & 1) ? 0x65718a : (flags & 4) ? 0xf1ba82 : 0x91afff, 3);
-        wchar_t name[512];
-        if (!moon_utf16(moon_tab_label(tab), name, ARRAYSIZE(name))) wcscpy(name,L"Tab");
-        text_at(c, name, x+26, TAB_Y, span-56, TAB_HEIGHT, chosen ? 0xf0f3ff : 0xc0c9db, false);
-        text_at(c, L"\x00d7", x+span-28, TAB_Y, 21, TAB_HEIGHT, 0xaab5c9, true);
-    }
-    int add = add_position();
-    fill(c, add, TAB_Y+3, 30, 28, 0x222735, 6);
-    text_at(c, L"+", add, TAB_Y+3, 30, 28, 0xe1e9fb, true);
-    if (count > tab_capacity()) {
-        text_at(c, L"\x2039", width-66, TAB_Y, 27, TAB_HEIGHT, 0xadb9cf, true);
-        text_at(c, L"\x203a", width-39, TAB_Y, 27, TAB_HEIGHT, 0xadb9cf, true);
-    }
-    unsigned controls = moon_controls();
-    text_at(c, L"\x2190", 9, TOOL_Y, 29, TOOL_HEIGHT, controls & 1 ? 0xe1e9fb : 0x738098, true);
-    text_at(c, L"\x2192", 40, TOOL_Y, 29, TOOL_HEIGHT, controls & 2 ? 0xe1e9fb : 0x738098, true);
-    text_at(c, L"\x21bb", 70, TOOL_Y, 29, TOOL_HEIGHT, 0xe1e9fb, true);
-    fill(c, 107, TOOL_Y, width-162, TOOL_HEIGHT, 0x242b3a, 6);
-    fill(c, width-45, TOOL_Y, 32, TOOL_HEIGHT, 0x242b3a, 6);
-    text_at(c, L"\x2026", width-45, TOOL_Y-1, 32, TOOL_HEIGHT, 0xe1e9fb, true);
-}
 static void release_target(void) {
     if (brush) ID2D1SolidColorBrush_Release(brush);
     if (target) ID2D1HwndRenderTarget_Release(target);
@@ -337,7 +466,7 @@ static void chrome_frame(HWND hwnd) {
     if (create_target(hwnd)) {
         ID2D1RenderTarget *render = (ID2D1RenderTarget *)target;
         ID2D1RenderTarget_BeginDraw(render);
-        paint_chrome((Canvas){.d2d=render},w,h,false);
+        paint_chrome((Canvas){.d2d=render,.hdc=dc},w,h);
         if (FAILED(ID2D1RenderTarget_EndDraw(render,NULL,NULL))) {
             release_target();
             InvalidateRect(hwnd,NULL,FALSE);
@@ -345,7 +474,7 @@ static void chrome_frame(HWND hwnd) {
     } else {
         GpGraphics *graphics = NULL;
         if (gdiplus) GdipCreateFromHDC(dc,&graphics);
-        paint_chrome((Canvas){.gplus=graphics,.hdc=dc},w,h,false);
+        paint_chrome((Canvas){.gplus=graphics,.hdc=dc},w,h);
         if (graphics) GdipDeleteGraphics(graphics);
     }
     EndPaint(hwnd,&paint);
@@ -353,10 +482,21 @@ static void chrome_frame(HWND hwnd) {
 static void layout(void) {
     RECT r;
     GetClientRect(frame,&r);
-    int y = px(CHROME_HEIGHT);
-    MoveWindow(content,0,y,r.right,r.bottom > y ? r.bottom-y : 0,TRUE);
-    int width = r.right-px(181);
-    MoveWindow(address,px(117),px(TOOL_Y+6),width > 10 ? width : 10,px(TOOL_HEIGHT-11),TRUE);
+    int width=client_width(), height=client_height();
+    int left=px(pane_left()+1), top=px(TOP+1), margin=px(PAD+1);
+    int pane_width=r.right-left-margin, pane_height=r.bottom-top-margin;
+    MoveWindow(content,left,top,pane_width>0?pane_width:0,pane_height>0?pane_height:0,TRUE);
+    if (pane_width>0 && pane_height>0) {
+        HRGN corners=CreateRoundRectRgn(0,0,pane_width+1,pane_height+1,px(20),px(20));
+        if (corners && !SetWindowRgn(content,corners,TRUE)) DeleteObject(corners);
+    }
+    int address_width=address_right(width)-address_left()-34;
+    MoveWindow(address,px(address_left()+29),px(14),px(address_width>10?address_width:10),px(21),TRUE);
+    if (home_edit) {
+        int field_width=home_width(width)-48;
+        MoveWindow(home_edit,px(home_left(width)+40),px(home_top(height)+110),
+            px(field_width>10?field_width:10),px(23),TRUE);
+    }
     if (target) {
         D2D1_SIZE_U size = {(UINT32)r.right,(UINT32)r.bottom};
         if (FAILED(ID2D1HwndRenderTarget_Resize(target,&size))) release_target();
@@ -366,10 +506,15 @@ static void layout(void) {
 }
 static void set_font(void) {
     HFONT old = edit_font;
+    HFONT old_hero = hero_font;
     edit_font = CreateFontW(-px(14),0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
         OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
+    hero_font = CreateFontW(-px(32),0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH,L"Segoe UI");
     SendMessageW(address,WM_SETFONT,(WPARAM)edit_font,TRUE);
+    if (home_edit) SendMessageW(home_edit,WM_SETFONT,(WPARAM)edit_font,TRUE);
     if (old) DeleteObject(old);
+    if (old_hero) DeleteObject(old_hero);
 }
 unsigned moon_shell_test_dpi(void) {
     RECT outer, parent, child;
@@ -378,7 +523,8 @@ unsigned moon_shell_test_dpi(void) {
     const UINT requested = original == 144 ? 192 : 144;
     SendMessageW(frame,WM_DPICHANGED,MAKELONG(requested,requested),(LPARAM)&outer);
     bool correct = dpi == requested && GetClientRect(frame,&parent) && GetClientRect(content,&child) &&
-        parent.right == child.right && parent.bottom - child.bottom == MulDiv(CHROME_HEIGHT,requested,96);
+        parent.right-child.right == px(pane_left()+1)+px(PAD+1) &&
+        parent.bottom-child.bottom == px(TOP+1)+px(PAD+1);
     SendMessageW(frame,WM_DPICHANGED,MAKELONG(original,original),(LPARAM)&outer);
     return correct ? requested : 0;
 }
@@ -391,6 +537,37 @@ void moon_shell_address(const char *value, bool force) {
 void moon_shell_status(const char *value) {
     moon_utf16(value,content_status,ARRAYSIZE(content_status));
     InvalidateRect(content,NULL,FALSE);
+}
+void moon_shell_show_home(bool visible) {
+    if (show_home==visible) return;
+    show_home=visible;
+    if (visible) SetWindowTextW(home_edit,L"");
+    ShowWindow(content,visible?SW_HIDE:SW_SHOWNA);
+    ShowWindow(home_edit,visible?SW_SHOWNA:SW_HIDE);
+    InvalidateRect(frame,NULL,FALSE);
+}
+void moon_shell_toggle_sidebar(void) {
+    focus_mode=!focus_mode;
+    layout();
+}
+static void refresh_theme(void) {
+    HBRUSH old=address_brush;
+    address_brush=CreateSolidBrush(rgb(theme->field));
+    if (old) DeleteObject(old);
+    InvalidateRect(frame,NULL,TRUE);
+    InvalidateRect(address,NULL,TRUE);
+    InvalidateRect(home_edit,NULL,TRUE);
+    InvalidateRect(content,NULL,TRUE);
+}
+static bool theme_path(char *path,size_t size) {
+    int written=snprintf(path,size,"%s\\chrome-theme",moon_profile_dir());
+    return written>0 && (size_t)written<size;
+}
+void moon_shell_toggle_theme(void) {
+    theme=theme==&light?&dark:&light;
+    char path[4096];
+    if (theme_path(path,sizeof(path))) moon_write_text(path,theme==&dark?"dark":"light");
+    refresh_theme();
 }
 void moon_shell_refresh(void) { clamp_tab_strip(true); InvalidateRect(frame,NULL,FALSE); }
 void moon_shell_info(const char *title, const char *body) {
@@ -427,70 +604,203 @@ void moon_engine_test_fallback(bool value) {
     if (value) release_target();
     if (frame) InvalidateRect(frame,NULL,FALSE);
 }
+
+static void open_palette(void);
 static void menu(HWND hwnd) {
-    HMENU popup = CreatePopupMenu();
+    HMENU popup=CreatePopupMenu();
     if (!popup) return;
-    AppendMenuW(popup,MF_STRING,MENU_ADD,L"New tab\tCtrl+T");
-    AppendMenuW(popup,MF_STRING,MENU_DIAG,L"Memory & diagnostics\tCtrl+Shift+M");
-    size_t count = moon_plugin_count();
+    AppendMenuW(popup,MF_STRING,MENU_ADD,L"\u65b0\u5efa\u6807\u7b7e\u9875\tCtrl+T");
+    AppendMenuW(popup,MF_STRING,MENU_PALETTE,L"\u547d\u4ee4\u9762\u677f\tCtrl+K");
+    AppendMenuW(popup,MF_STRING,MENU_DIAG,L"\u5185\u5b58\u8bca\u65ad\tCtrl+Shift+M");
+    AppendMenuW(popup,MF_STRING,MENU_UPDATES,L"\u7248\u672c\u4e0e\u66f4\u65b0");
+    AppendMenuW(popup,MF_STRING|(theme==&dark?MF_CHECKED:0),MENU_THEME,L"\u6df1\u8272\u4e3b\u9898\tCtrl+Shift+L");
+    AppendMenuW(popup,MF_STRING|(focus_mode?MF_CHECKED:0),MENU_FOCUS,L"\u4e13\u6ce8\u6a21\u5f0f\tCtrl+B");
+    size_t count=moon_plugin_count();
     if (count) AppendMenuW(popup,MF_SEPARATOR,0,NULL);
-    for (size_t i=0;i<count;++i) {
-        wchar_t name[256], action[256];
-        if (!moon_utf16(moon_plugin_label(i),name,ARRAYSIZE(name))) continue;
-        if (!moon_utf16(moon_plugin_action(i),action,ARRAYSIZE(action))) continue;
-        HMENU sub = CreatePopupMenu();
-        unsigned flags = moon_plugin_flags(i), id = MENU_PLUGIN_BASE + (unsigned)i*3;
-        AppendMenuW(sub,MF_STRING | (flags & 1 ? MF_CHECKED : 0),id,L"Enable local executable");
-        AppendMenuW(sub,MF_STRING | (flags & 2 ? MF_CHECKED : 0),id+1,L"Share active tab title and URL");
-        AppendMenuW(sub,MF_STRING | (flags & 1 ? 0 : MF_GRAYED),id+2,action);
+    for(size_t i=0;i<count;++i) {
+        wchar_t name[256],action[256];
+        if (!moon_utf16(moon_plugin_label(i),name,ARRAYSIZE(name)) ||
+            !moon_utf16(moon_plugin_action(i),action,ARRAYSIZE(action))) continue;
+        HMENU sub=CreatePopupMenu();
+        if (!sub) continue;
+        unsigned flags=moon_plugin_flags(i), id=MENU_PLUGIN_BASE+(unsigned)i*3;
+        AppendMenuW(sub,MF_STRING|(flags&1?MF_CHECKED:0),id,L"\u542f\u7528\u672c\u5730\u63d2\u4ef6");
+        AppendMenuW(sub,MF_STRING|(flags&2?MF_CHECKED:0),id+1,L"\u5141\u8bb8\u8bfb\u53d6\u6807\u9898\u548c\u7f51\u5740");
+        AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+2,action);
         AppendMenuW(popup,MF_POPUP,(UINT_PTR)sub,name);
     }
-    RECT r;
-    GetClientRect(hwnd,&r);
-    POINT anchor = {r.right-px(13),px(83)};
+    POINT anchor={px(client_width()-142),px(TOP-4)};
     ClientToScreen(hwnd,&anchor);
-    UINT command = TrackPopupMenu(popup,TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_NONOTIFY,
-        anchor.x,anchor.y,0,hwnd,NULL);
+    UINT command=TrackPopupMenu(popup,TPM_RETURNCMD|TPM_RIGHTALIGN|TPM_NONOTIFY,anchor.x,anchor.y,0,hwnd,NULL);
     DestroyMenu(popup);
-    if (command == MENU_DIAG) moon_command(MOON_DIAGNOSTICS,0,NULL);
-    else if (command == MENU_ADD) moon_command(MOON_NEW,0,NULL);
-    else if (command >= MENU_PLUGIN_BASE) {
-        unsigned value = command - MENU_PLUGIN_BASE;
-        const int actions[] = {MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_PLUGIN_COMMAND};
-        moon_command(actions[value % 3],value / 3,NULL);
+    if (command==MENU_DIAG) moon_command(MOON_DIAGNOSTICS,0,NULL);
+    else if (command==MENU_ADD) moon_command(MOON_NEW,0,NULL);
+    else if (command==MENU_THEME) moon_shell_toggle_theme();
+    else if (command==MENU_FOCUS) moon_shell_toggle_sidebar();
+    else if (command==MENU_PALETTE) open_palette();
+    else if (command==MENU_UPDATES) moon_command(MOON_UPDATES,0,NULL);
+    else if (command>=MENU_PLUGIN_BASE) {
+        unsigned value=command-MENU_PLUGIN_BASE;
+        const int actions[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_COMMAND};
+        moon_command(actions[value%3],value/3,NULL);
+        moon_shell_refresh();
     }
 }
-static void click(HWND hwnd,int x,int y) {
-    if (y >= px(TAB_Y) && y < px(TAB_Y+TAB_HEIGHT)) {
-        if (x >= px(add_position()) && x < px(add_position()+30)) {
-            moon_command(MOON_NEW,0,NULL);
+void moon_shell_open_plugins(void) { menu(frame); }
+
+static void palette_row(const wchar_t *name,LPARAM data) {
+    LRESULT row=SendMessageW(palette_list,LB_ADDSTRING,0,(LPARAM)name);
+    if (row>=0) SendMessageW(palette_list,LB_SETITEMDATA,(WPARAM)row,data);
+}
+static void filter_palette(void) {
+    if (!palette_list || !palette_input) return;
+    wchar_t query[4096], name[512];
+    GetWindowTextW(palette_input,query,ARRAYSIZE(query));
+    bool url_like=wcspbrk(query,L"./:")!=NULL;
+    SendMessageW(palette_list,WM_SETREDRAW,FALSE,0);
+    SendMessageW(palette_list,LB_RESETCONTENT,0,0);
+    if (url_like) palette_row(L"\u6253\u5f00\u6216\u641c\u7d22\u8f93\u5165\u5185\u5bb9",-2);
+    for(size_t i=0;i<moon_action_count(false);++i) {
+        if (moon_utf16(moon_action_label(i,false),name,ARRAYSIZE(name)) && (!*query || StrStrIW(name,query)))
+            palette_row(name,(LPARAM)i);
+    }
+    for(size_t i=0;i<moon_tab_count();++i) {
+        if (moon_utf16(moon_tab_label(i),name,ARRAYSIZE(name)) && (!*query || StrStrIW(name,query)))
+            palette_row(name,PALETTE_TAB_OFFSET+(LPARAM)i);
+    }
+    if (*query && !url_like) palette_row(L"\u6253\u5f00\u6216\u641c\u7d22\u8f93\u5165\u5185\u5bb9",-2);
+    SendMessageW(palette_list,LB_SETCURSEL,0,0);
+    SendMessageW(palette_list,WM_SETREDRAW,TRUE,0);
+    InvalidateRect(palette_list,NULL,TRUE);
+}
+static void run_palette(void) {
+    LRESULT row=SendMessageW(palette_list,LB_GETCURSEL,0,0);
+    if (row==LB_ERR) return;
+    LRESULT action=SendMessageW(palette_list,LB_GETITEMDATA,(WPARAM)row,0);
+    wchar_t query[4096];
+    char value[16384];
+    GetWindowTextW(palette_input,query,ARRAYSIZE(query));
+    DestroyWindow(palette);
+    if (action==-2 && moon_utf8(query,value,sizeof(value))) moon_command(MOON_ADDRESS,0,value);
+    else if (action>=PALETTE_TAB_OFFSET) moon_command(MOON_SELECT,(uint64_t)(action-PALETTE_TAB_OFFSET),NULL);
+    else if (action>=0) moon_action_run((size_t)action,false);
+}
+static LRESULT CALLBACK palette_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
+    if (msg==WM_COMMAND) {
+        if (LOWORD(wp)==PALETTE_INPUT && HIWORD(wp)==EN_CHANGE) filter_palette();
+        if (LOWORD(wp)==PALETTE_LIST && HIWORD(wp)==LBN_DBLCLK) run_palette();
+        return 0;
+    }
+    if (msg==WM_SIZE) {
+        RECT r;
+        GetClientRect(hwnd,&r);
+        if (palette_input) MoveWindow(palette_input,px(12),px(12),r.right-px(24),px(27),TRUE);
+        if (palette_list) MoveWindow(palette_list,px(12),px(47),r.right-px(24),r.bottom-px(59),TRUE);
+        return 0;
+    }
+    if (msg==WM_DESTROY) {
+        palette=NULL; palette_input=NULL; palette_list=NULL;
+        return 0;
+    }
+    if (msg==WM_CTLCOLOREDIT || msg==WM_CTLCOLORLISTBOX) {
+        SetBkColor((HDC)wp,rgb(theme->field));
+        SetTextColor((HDC)wp,rgb(theme->text));
+        return (LRESULT)address_brush;
+    }
+    return DefWindowProcW(hwnd,msg,wp,lp);
+}
+static void open_palette(void) {
+    if (palette) { SetFocus(palette_input); return; }
+    RECT owner;
+    GetWindowRect(frame,&owner);
+    int width=px(client_width()<740?450:540);
+    HINSTANCE instance=GetModuleHandleW(NULL);
+    palette=CreateWindowExW(WS_EX_TOOLWINDOW,L"MoonPalette",L"\u547d\u4ee4\u9762\u677f",
+        WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_CLIPCHILDREN,
+        owner.left+(owner.right-owner.left-width)/2,owner.top+px(62),width,px(312),frame,NULL,instance,NULL);
+    if (!palette) return;
+    palette_input=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",NULL,WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,
+        0,0,0,0,palette,(HMENU)PALETTE_INPUT,instance,NULL);
+    palette_list=CreateWindowExW(WS_EX_CLIENTEDGE,L"LISTBOX",NULL,
+        WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_TABSTOP|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,
+        0,0,0,0,palette,(HMENU)PALETTE_LIST,instance,NULL);
+    if (!palette_input || !palette_list) { DestroyWindow(palette); return; }
+    SendMessageW(palette_input,WM_SETFONT,(WPARAM)edit_font,TRUE);
+    SendMessageW(palette_list,WM_SETFONT,(WPARAM)edit_font,TRUE);
+    SendMessageW(palette_input,EM_SETLIMITTEXT,4095,0);
+    SendMessageW(palette_input,EM_SETCUEBANNER,TRUE,(LPARAM)L"\u641c\u7d22\u6807\u7b7e\u9875\u3001\u547d\u4ee4\uff0c\u6216\u8f93\u5165\u7f51\u5740");
+    SendMessageW(palette,WM_SIZE,0,0);
+    filter_palette();
+    ShowWindow(palette,SW_SHOW);
+    SetFocus(palette_input);
+}
+static bool palette_key(const MSG *msg) {
+    switch(msg->wParam) {
+        case VK_ESCAPE: DestroyWindow(palette); return true;
+        case VK_RETURN: run_palette(); return true;
+        case VK_UP: case VK_DOWN: {
+            LRESULT selected=SendMessageW(palette_list,LB_GETCURSEL,0,0);
+            LRESULT count=SendMessageW(palette_list,LB_GETCOUNT,0,0);
+            if (count>0) {
+                selected += msg->wParam==VK_UP?-1:1;
+                if (selected<0) selected=count-1;
+                if (selected>=count) selected=0;
+                SendMessageW(palette_list,LB_SETCURSEL,(WPARAM)selected,0);
+            }
+            return true;
+        }
+        default: return false;
+    }
+}
+static bool within(int x,int y,int left,int top,int w,int h) {
+    return x>=left && x<left+w && y>=top && y<top+h;
+}
+static void click(HWND hwnd,int psx,int psy) {
+    int x=MulDiv(psx,96,dpi), y=MulDiv(psy,96,dpi);
+    int width=client_width(), height=client_height(), left=pane_left();
+    if (y<TOP) {
+        if (x>=width-50) { PostMessageW(hwnd,WM_SYSCOMMAND,SC_CLOSE,0); return; }
+        if (x>=width-94) { ShowWindow(hwnd,IsZoomed(hwnd)?SW_RESTORE:SW_MAXIMIZE); return; }
+        if (x>=width-138) { ShowWindow(hwnd,SW_MINIMIZE); return; }
+        if (x>=width-175) { menu(hwnd); return; }
+        if (x>=width-213) {
+            moon_shell_toggle_sidebar();
             return;
         }
-        int width = client_width();
-        if (moon_tab_count() > tab_capacity() && x >= px(width-66)) {
-            if (x < px(width-39)) { if (first_tab) --first_tab; }
-            else ++first_tab;
-            clamp_tab_strip(false);
-            InvalidateRect(hwnd,NULL,FALSE);
-            return;
+        if (x>=left && x<left+31) moon_command(MOON_BACK,0,NULL);
+        else if (x>=left+34 && x<left+65) moon_command(MOON_FORWARD,0,NULL);
+        else if (x>=left+68 && x<left+99) moon_command(MOON_RELOAD,0,NULL);
+        else if (x>=address_left() && x<address_right(width)) moon_shell_focus_address();
+        return;
+    }
+    if (!focus_mode && x<left) {
+        if (within(x,y,12,50,SIDEBAR-8,34)) open_palette();
+        else if (within(x,y,SIDEBAR-28,92,40,29)) moon_command(MOON_NEW,0,NULL);
+        else if (y>=TAB_START && y<height-FOOTER) {
+            size_t slot=(size_t)(y-TAB_START)/ROW, index=first_tab+slot;
+            if (slot<tab_capacity() && index<moon_tab_count()) {
+                moon_command(x>=SIDEBAR-26 ? MOON_CLOSE : MOON_SELECT,index,NULL);
+            }
+        } else if (y>=height-FOOTER) {
+            if (x<49) moon_shell_open_plugins();
+            else if (x<86) moon_command(MOON_DIAGNOSTICS,0,NULL);
+            else if (x<125) menu(hwnd);
         }
-        if (x >= px(12)) {
-            int local = MulDiv(x,96,dpi)-12, span = tab_span();
-            if ((size_t)(local/span) < tab_capacity()) {
-                size_t index = first_tab + (size_t)(local/span);
-                if (index < moon_tab_count())
-                    moon_command(local%span >= span-28 ? MOON_CLOSE : MOON_SELECT,index,NULL);
+        return;
+    }
+    if (show_home) {
+        int home_x=home_left(width), search=home_top(height)+98;
+        if (within(x,y,home_x,search,home_width(width),44)) { SetFocus(home_edit); return; }
+        int tile=tile_width(width), top=search+94;
+        for(size_t i=0;i<3 && i<moon_action_count(true);++i) {
+            if (within(x,y,home_x+(int)i*(tile+10),top,tile,61) && height-search>=145) {
+                moon_action_run(i,true);
+                return;
             }
         }
     }
-    if (y >= px(TOOL_Y) && y < px(TOOL_Y+TOOL_HEIGHT)) {
-        if (x > px(client_width()-47)) menu(hwnd);
-        else if (x < px(39)) moon_command(MOON_BACK,0,NULL);
-        else if (x < px(70)) moon_command(MOON_FORWARD,0,NULL);
-        else if (x < px(104)) moon_command(MOON_RELOAD,0,NULL);
-        else moon_shell_focus_address();
-    }
 }
+
 static LRESULT CALLBACK content_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     if (msg == WM_SIZE) {
         HWND view = GetWindow(hwnd,GW_CHILD);
@@ -507,11 +817,11 @@ static LRESULT CALLBACK content_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) 
         HDC dc = BeginPaint(hwnd,&paint);
         RECT r;
         GetClientRect(hwnd,&r);
-        HBRUSH background = CreateSolidBrush(rgb(0x101218));
+        HBRUSH background = CreateSolidBrush(rgb(theme->panel));
         FillRect(dc,&paint.rcPaint,background);
         DeleteObject(background);
         SetBkMode(dc,TRANSPARENT);
-        SetTextColor(dc,rgb(0xc7d3e9));
+        SetTextColor(dc,rgb(theme->muted));
         HFONT old = SelectObject(dc,edit_font);
         DrawTextW(dc,content_status,-1,&r,DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
         SelectObject(dc,old);
@@ -532,6 +842,34 @@ static LRESULT CALLBACK info_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
 }
 static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     switch (msg) {
+        case WM_NCCALCSIZE:
+            if (wp) {
+                if (IsZoomed(hwnd)) {
+                    MONITORINFO area={.cbSize=sizeof(area)};
+                    NCCALCSIZE_PARAMS *client=(NCCALCSIZE_PARAMS *)lp;
+                    if (GetMonitorInfoW(MonitorFromRect(&client->rgrc[0],MONITOR_DEFAULTTONEAREST),&area))
+                        client->rgrc[0]=area.rcWork;
+                }
+                return 0;
+            }
+            break;
+        case WM_NCHITTEST: {
+            POINT point={(short)LOWORD(lp),(short)HIWORD(lp)};
+            RECT bounds;
+            GetWindowRect(hwnd,&bounds);
+            if (!IsZoomed(hwnd)) {
+                int edge=px(6);
+                bool left=point.x<bounds.left+edge, right=point.x>=bounds.right-edge;
+                bool top=point.y<bounds.top+edge, bottom=point.y>=bounds.bottom-edge;
+                if (top) return left?HTTOPLEFT:right?HTTOPRIGHT:HTTOP;
+                if (bottom) return left?HTBOTTOMLEFT:right?HTBOTTOMRIGHT:HTBOTTOM;
+                if (left || right) return left?HTLEFT:HTRIGHT;
+            }
+            ScreenToClient(hwnd,&point);
+            if ((!focus_mode && point.y<px(TOP) && point.x<px(pane_left())) ||
+                (point.y>=px(TOP-6) && point.y<px(TOP) && point.x<px(client_width()-140))) return HTCAPTION;
+            return HTCLIENT;
+        }
         case WM_SIZE: if (content && address) layout(); return 0;
         case WM_DPICHANGED: {
             dpi = LOWORD(wp);
@@ -546,18 +884,34 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         }
         case WM_GETMINMAXINFO: {
             MINMAXINFO *bounds = (MINMAXINFO *)lp;
-            bounds->ptMinTrackSize = (POINT){px(570),px(270)};
+            bounds->ptMinTrackSize = (POINT){px(690),px(360)};
             return 0;
         }
         case WM_ERASEBKGND: return 1;
         case WM_PAINT: chrome_frame(hwnd); return 0;
         case WM_CTLCOLOREDIT:
-            SetBkColor((HDC)wp,rgb(0x242b3a));
-            SetTextColor((HDC)wp,rgb(0xf0f3ff));
+            SetBkColor((HDC)wp,rgb(theme->field));
+            SetTextColor((HDC)wp,rgb(theme->text));
             return (LRESULT)address_brush;
+        case WM_COMMAND:
+            if (HIWORD(wp)==EN_SETFOCUS || HIWORD(wp)==EN_KILLFOCUS) InvalidateRect(hwnd,NULL,FALSE);
+            return 0;
+        case WM_MOUSEMOVE:
+            hover=(POINT){MulDiv((short)LOWORD(lp),96,dpi),MulDiv((short)HIWORD(lp),96,dpi)};
+            if (!tracking_mouse) {
+                TRACKMOUSEEVENT tracking={sizeof(tracking),TME_LEAVE,hwnd,0};
+                tracking_mouse=TrackMouseEvent(&tracking);
+            }
+            InvalidateRect(hwnd,NULL,FALSE);
+            return 0;
+        case WM_MOUSELEAVE:
+            hover=(POINT){-1,-1};
+            tracking_mouse=false;
+            InvalidateRect(hwnd,NULL,FALSE);
+            return 0;
         case WM_LBUTTONUP: click(hwnd,(short)LOWORD(lp),(short)HIWORD(lp)); return 0;
         case WM_MOUSEWHEEL:
-            if (moon_tab_count() > tab_capacity()) {
+            if (!focus_mode && moon_tab_count() > tab_capacity()) {
                 if (GET_WHEEL_DELTA_WPARAM(wp) < 0) ++first_tab;
                 else if (first_tab) --first_tab;
                 clamp_tab_strip(false);
@@ -569,17 +923,27 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
+static bool composing(HWND input) {
+    HIMC context=ImmGetContext(input);
+    if (!context) return false;
+    bool active=ImmGetCompositionStringW(context,GCS_COMPSTR,NULL,0)>0;
+    ImmReleaseContext(input,context);
+    return active;
+}
 static bool keyboard(MSG *msg) {
     bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0;
     bool alt = (msg->lParam & (1L<<29)) != 0;
-    if (msg->hwnd == address && msg->wParam == VK_RETURN && !ctrl && !alt) {
+    if ((msg->hwnd==address || msg->hwnd==home_edit) && msg->wParam==VK_RETURN && !ctrl && !alt && !composing(msg->hwnd)) {
         wchar_t wide[4096];
         char value[16384];
-        GetWindowTextW(address,wide,ARRAYSIZE(wide));
+        GetWindowTextW(msg->hwnd,wide,ARRAYSIZE(wide));
         if (moon_utf8(wide,value,sizeof(value))) moon_command(MOON_ADDRESS,0,value);
         return true;
     }
+    if (ctrl && shift && msg->wParam == 'L') { moon_shell_toggle_theme(); return true; }
     if ((ctrl && msg->wParam == 'L') || msg->wParam == VK_F6) { moon_shell_focus_address(); return true; }
+    if (ctrl && msg->wParam == 'K') { open_palette(); return true; }
+    if (ctrl && msg->wParam == 'B') { moon_shell_toggle_sidebar(); return true; }
     if (ctrl && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
     if (ctrl && msg->wParam == 'W') { moon_command(MOON_CLOSE,moon_active_index(),NULL); return true; }
     if (ctrl && msg->wParam == VK_TAB) { moon_command(shift ? MOON_KEY_PREV : MOON_KEY_NEXT,0,NULL); return true; }
@@ -608,6 +972,8 @@ static void init_graphics(void) {
         DWRITE_FONT_STRETCH_NORMAL,13.0f,L"zh-CN",&font_left);
     IDWriteFactory_CreateTextFormat(writing,L"Segoe UI",NULL,DWRITE_FONT_WEIGHT_MEDIUM,DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL,16.0f,L"zh-CN",&font_center);
+    IDWriteFactory_CreateTextFormat(writing,L"Segoe UI",NULL,DWRITE_FONT_WEIGHT_SEMI_BOLD,DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL,32.0f,L"zh-CN",&font_hero);
     if (font_left) {
         IDWriteTextFormat_SetParagraphAlignment(font_left,DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         IDWriteTextFormat_SetWordWrapping(font_left,DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -617,6 +983,10 @@ static void init_graphics(void) {
         IDWriteTextFormat_SetTextAlignment(font_center,DWRITE_TEXT_ALIGNMENT_CENTER);
         IDWriteTextFormat_SetWordWrapping(font_center,DWRITE_WORD_WRAPPING_NO_WRAP);
     }
+    if (font_hero) {
+        IDWriteTextFormat_SetParagraphAlignment(font_hero,DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        IDWriteTextFormat_SetWordWrapping(font_hero,DWRITE_WORD_WRAPPING_NO_WRAP);
+    }
 }
 int moon_shell_run(void) {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_USER_DIRS);
@@ -625,7 +995,12 @@ int moon_shell_run(void) {
         MessageBoxW(NULL,L"Cannot open the Moon Browser profile.",L"Moon Browser",MB_ICONERROR);
         return 1;
     }
+    char appearance[4096], preference[8];
+    if (theme_path(appearance,sizeof(appearance)) && moon_read_text(appearance,preference,sizeof(preference)) &&
+        strcmp(preference,"dark")==0) theme=&dark;
     OleInitialize(NULL);
+    INITCOMMONCONTROLSEX controls={sizeof(controls),ICC_STANDARD_CLASSES};
+    InitCommonControlsEx(&controls);
     init_graphics();
     low_memory = CreateMemoryResourceNotification(LowMemoryResourceNotification);
     HINSTANCE instance = GetModuleHandleW(NULL);
@@ -638,18 +1013,26 @@ int moon_shell_run(void) {
     class.lpfnWndProc = info_message;
     class.lpszClassName = L"MoonInfo";
     if (!RegisterClassW(&class)) return 1;
+    class.lpfnWndProc = palette_message;
+    class.lpszClassName = L"MoonPalette";
+    class.hbrBackground=(HBRUSH)(COLOR_WINDOW+1);
+    if (!RegisterClassW(&class)) return 1;
     frame = CreateWindowExW(0,L"MoonBrowserWindow",L"Moon Browser",WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT,CW_USEDEFAULT,1120,760,NULL,NULL,instance,NULL);
     if (!frame) return 1;
     dpi = GetDpiForWindow(frame);
-    address_brush = CreateSolidBrush(rgb(0x242b3a));
+    address_brush = CreateSolidBrush(rgb(theme->field));
     content = CreateWindowExW(0,L"MoonContent",NULL,WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
         0,0,0,0,frame,NULL,instance,NULL);
     address = CreateWindowExW(0,L"EDIT",NULL,WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-        0,0,0,0,frame,NULL,instance,NULL);
-    if (!address || !content) return 1;
+        0,0,0,0,frame,(HMENU)ADDRESS_CONTROL,instance,NULL);
+    home_edit = CreateWindowExW(0,L"EDIT",NULL,WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL,
+        0,0,0,0,frame,(HMENU)HOME_CONTROL,instance,NULL);
+    if (!address || !home_edit || !content) return 1;
     SendMessageW(address,EM_SETLIMITTEXT,4095,0);
-    SendMessageW(address,EM_SETCUEBANNER,TRUE,(LPARAM)L"Search or enter an address");
+    SendMessageW(address,EM_SETCUEBANNER,TRUE,(LPARAM)L"搜索或输入网址");
+    SendMessageW(home_edit,EM_SETLIMITTEXT,4095,0);
+    SendMessageW(home_edit,EM_SETCUEBANNER,TRUE,(LPARAM)L"搜索或输入网址");
     set_font();
     layout();
     ShowWindow(frame,SW_SHOW);
@@ -663,6 +1046,8 @@ int moon_shell_run(void) {
     MSG msg = {0};
     BOOL next;
     while ((next=GetMessageW(&msg,NULL,0,0)) > 0) {
+        if (palette && (msg.hwnd==palette || IsChild(palette,msg.hwnd)) && msg.message==WM_KEYDOWN &&
+            !composing(msg.hwnd) && palette_key(&msg)) continue;
         if ((msg.hwnd==frame || IsChild(frame,msg.hwnd)) &&
             (msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) && keyboard(&msg)) continue;
         if (IsChild(content,msg.hwnd) && page_input(msg.message,msg.wParam))
@@ -673,10 +1058,12 @@ int moon_shell_run(void) {
     release_target();
     if (font_left) IDWriteTextFormat_Release(font_left);
     if (font_center) IDWriteTextFormat_Release(font_center);
+    if (font_hero) IDWriteTextFormat_Release(font_hero);
     if (drawing) ID2D1Factory_Release(drawing);
     if (writing) IDWriteFactory_Release(writing);
     if (address_brush) DeleteObject(address_brush);
     if (edit_font) DeleteObject(edit_font);
+    if (hero_font) DeleteObject(hero_font);
     if (low_memory) CloseHandle(low_memory);
     if (gdiplus) GdiplusShutdown(gdiplus);
     OleUninitialize();

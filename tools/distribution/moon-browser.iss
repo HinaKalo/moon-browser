@@ -18,7 +18,7 @@ Compression=lzma2
 SolidCompression=yes
 ArchiveExtraction=full
 OutputBaseFilename=MoonBrowser-Installer-win-x64
-VersionInfoVersion=0.1.0.0
+VersionInfoVersion={#WindowsVersion}
 WizardStyle=modern
 
 [Files]

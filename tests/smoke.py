@@ -127,6 +127,9 @@ def run_win32(exe, base, root):
     user.GetDpiForWindow.argtypes = [wt.HWND]
     user.GetDpiForWindow.restype = wt.UINT
     user.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+    user.GetDlgItem.argtypes = [wt.HWND, ctypes.c_int]
+    user.GetDlgItem.restype = wt.HWND
+    user.IsWindowVisible.argtypes = [wt.HWND]
     user.SetWindowPos.argtypes = [wt.HWND, wt.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wt.UINT]
     user.SetThreadDpiAwarenessContext.argtypes = [wt.HANDLE]
     user.SetThreadDpiAwarenessContext(wt.HANDLE(-4))
@@ -149,9 +152,10 @@ def run_win32(exe, base, root):
             sleep(0.1)
         if not frame:
             raise RuntimeError("Win32 shell not found")
-        edit = user.FindWindowExW(frame, None, "Edit", None)
+        edit = user.GetDlgItem(frame, 1001)
+        home = user.GetDlgItem(frame, 1002)
         content = user.FindWindowExW(frame, None, "MoonContent", None)
-        if not edit or not content:
+        if not edit or not home or not content:
             raise RuntimeError("Missing native Win32 children")
         dpi = user.GetDpiForWindow(frame)
         user.SetWindowPos(frame, None, 0, 0, 840, 590, 0x0016)
@@ -159,14 +163,61 @@ def run_win32(exe, base, root):
         client, pane = wt.RECT(), wt.RECT()
         user.GetClientRect(frame, ctypes.byref(client))
         user.GetClientRect(content, ctypes.byref(pane))
-        expected_chrome = (89 * dpi + 48) // 96
-        if pane.right != client.right or client.bottom - pane.bottom != expected_chrome:
+        def px(value):
+            return (value * dpi + 48) // 96
+
+        side = px(281) + px(9)
+        expected_chrome = px(49) + px(9)
+        if client.right - pane.right != side or client.bottom - pane.bottom != expected_chrome:
             raise RuntimeError(f"Incorrect DPI layout at {dpi} DPI")
+
+        def click(x, y):
+            user.PostMessageW(frame, 0x0202, 0, y << 16 | x)  # WM_LBUTTONUP
+
+        def find_palette():
+            deadline = monotonic() + 4
+            while monotonic() < deadline:
+                candidate = None
+                while candidate := user.FindWindowExW(None, candidate, "MoonPalette", None):
+                    owner = wt.DWORD()
+                    user.GetWindowThreadProcessId(candidate, ctypes.byref(owner))
+                    if owner.value == proc.pid:
+                        return candidate
+                sleep(0.05)
+            raise RuntimeError("Native command palette did not open")
+
+        if not user.IsWindowVisible(home) or user.IsWindowVisible(content):
+            raise RuntimeError("The native new-tab view did not open")
+        click(px(70), px(65))
+        palette = find_palette()
+        actions = user.GetDlgItem(palette, 1004)
+        rows = user.SendMessageW(actions, 0x018B, 0, 0)  # LB_GETCOUNT
+        if rows < 7:
+            raise RuntimeError("Missing built-in command or tab entries")
+        user.PostMessageW(user.GetDlgItem(palette, 1003), 0x0100, 0x0D, 1)
+        sleep(0.2)
+        click(px(70), px(65))
+        palette = find_palette()
+        if user.SendMessageW(user.GetDlgItem(palette, 1004), 0x018B, 0, 0) != rows + 1:
+            raise RuntimeError("The command palette did not create a tab")
+        user.PostMessageW(user.GetDlgItem(palette, 1003), 0x0100, 0x1B, 1)
+        sleep(0.2)
+        click(client.right - px(197), px(25))
+        sleep(0.2)
+        user.GetClientRect(content, ctypes.byref(pane))
+        if client.right - pane.right != 2 * px(9):
+            raise RuntimeError("The native sidebar did not collapse")
+        click(client.right - px(197), px(25))
+        sleep(0.2)
+        print("native_home=ok command_palette=ok sidebar_focus_mode=ok")
+
         address = ctypes.create_unicode_buffer(base + "/page/中文")
-        user.SendMessageW(edit, 0x000C, 0, ctypes.addressof(address))  # WM_SETTEXT
-        user.PostMessageW(edit, 0x0100, 0x0D, 1)  # WM_KEYDOWN / Enter
+        user.SendMessageW(home, 0x000C, 0, ctypes.addressof(address))  # WM_SETTEXT
+        user.PostMessageW(home, 0x0100, 0x0D, 1)  # WM_KEYDOWN / Enter
         if not Fixture.seen_unicode.wait(15):
             raise RuntimeError("Unicode address did not reach the loopback fixture")
+        if not user.IsWindowVisible(content) or user.IsWindowVisible(home):
+            raise RuntimeError("The WebKit view did not replace the native new-tab view")
         print(f"win32_unicode_address=ok resized_dpi={dpi} chrome_px={expected_chrome} fallback=GDI+")
     finally:
         if frame:

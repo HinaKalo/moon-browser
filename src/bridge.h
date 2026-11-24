@@ -7,7 +7,8 @@
 enum MoonCommand {
     MOON_NEW = 1, MOON_CLOSE, MOON_SELECT, MOON_BACK, MOON_FORWARD, MOON_RELOAD,
     MOON_ADDRESS, MOON_TICK, MOON_INPUT, MOON_DIAGNOSTICS, MOON_PLUGIN_COMMAND,
-    MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV
+    MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
+    MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES
 };
 enum MoonEngineEvent {
     MOON_STARTED = 1, MOON_COMMITTED, MOON_FINISHED, MOON_FAILED, MOON_CHANGED,
@@ -23,8 +24,12 @@ int moon_shell_run(void);
 unsigned moon_shell_test_dpi(void);
 void moon_shell_address(const char *value, bool replace_focused);
 void moon_shell_status(const char *value);
+void moon_shell_show_home(bool visible);
 void moon_shell_refresh(void);
 void moon_shell_focus_address(void);
+void moon_shell_toggle_sidebar(void);
+void moon_shell_toggle_theme(void);
+void moon_shell_open_plugins(void);
 void moon_shell_info(const char *title, const char *body);
 void moon_shell_error(const char *body);
 bool moon_shell_confirm(const char *title, const char *body);
@@ -83,5 +88,13 @@ size_t moon_plugin_count(void);
 const char *moon_plugin_label(size_t index);
 const char *moon_plugin_action(size_t index);
 unsigned moon_plugin_flags(size_t index);
+size_t moon_action_count(bool home);
+const char *moon_action_label(size_t index, bool home);
+void moon_action_run(size_t index, bool home);
 void moon_plugin_worker(void *task);
+bool moon_update_thread(void);
+void moon_update_worker(void);
+int moon_update_read(const char *path, char *buffer, size_t capacity, size_t *length);
+bool moon_update_download(const char *path, bool portable, uint64_t size, const uint8_t *hash);
+bool moon_update_open(bool portable, uint64_t size, const uint8_t *hash);
 #endif

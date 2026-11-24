@@ -6,7 +6,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
-$version = '0.1.0-preview.1'
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$version = Get-Content -LiteralPath (Join-Path $repo 'src\version.json') -Raw | ConvertFrom-Json
 $portable = Join-Path $Artifact 'MoonBrowser-Portable-win-x64.zip'
 $installer = Join-Path $Artifact 'MoonBrowser-Installer-win-x64.exe'
 if ([IO.File]::Exists($portable) -and [IO.File]::Exists($installer)) {
@@ -24,6 +25,7 @@ $payload = [IO.Directory]::CreateDirectory((Join-Path $Work 'public-payload')).F
 foreach ($name in 'MoonBrowser.exe','README.md','THIRD-PARTY.md','engine.json','licenses','plugins') {
     Copy-Item -LiteralPath (Join-Path $Artifact $name) -Destination $payload -Recurse
 }
+[IO.File]::WriteAllText((Join-Path $payload 'release-mode'),'installer')
 
 # Fetch the vendor's portable compiler into the managed build scratch directory.
 $compilerSetup = Join-Path $Work 'innosetup-6.7.4.exe'
@@ -38,13 +40,14 @@ $compilerInstall = Start-Process -FilePath $compilerSetup -ArgumentList @('/PORT
     '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('/DIR="{0}"' -f $compilerRoot)) -WindowStyle Hidden -PassThru -Wait
 if ($compilerInstall.ExitCode) { throw "Portable compiler setup failed (exit $($compilerInstall.ExitCode))." }
 $iscc = Join-Path $compilerRoot 'ISCC.exe'
-& $iscc ('/DReleaseVersion=' + $version) ('/DPayloadDir=' + $payload) ('/DEngineUrl=' + $url.AbsoluteUri) `
+& $iscc ('/DReleaseVersion=' + $version.name) ('/DWindowsVersion=' + $version.windows_version) ('/DPayloadDir=' + $payload) ('/DEngineUrl=' + $url.AbsoluteUri) `
     ('/DEngineHash=' + $engine.sha256) ('/DEngineBytes=' + $engine.archive_bytes) "/O$Work" (Join-Path $PSScriptRoot 'moon-browser.iss')
 
 foreach ($name in 'Start-MoonBrowser.cmd','Install-Engine.ps1') {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $payload
 }
 [IO.File]::WriteAllText((Join-Path $payload 'portable.flag'),'Moon Browser portable profile')
+[IO.File]::WriteAllText((Join-Path $payload 'release-mode'),'portable')
 $stagedZip = Join-Path $Work 'public-portable.zip'
 [IO.Compression.ZipFile]::CreateFromDirectory($payload,$stagedZip,[IO.Compression.CompressionLevel]::Optimal,$false)
 [IO.File]::Move($stagedZip,$portable,$true)
