@@ -63,7 +63,7 @@
     X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
     X(WKPageCopySessionState) X(WKPageRestoreFromSessionState) X(WKPageGetProcessIdentifier) X(WKPageGetMediaState) \
     X(WKNavigationActionCopyRequest) X(WKNavigationActionShouldPerformDownload) \
-    X(WKNavigationActionGetNavigationType) \
+    X(WKNavigationActionGetNavigationType) X(WKNavigationActionHasUnconsumedUserGesture) \
     X(WKNavigationResponseCopyResponse) X(WKNavigationResponseCanShowMIMEType) \
     X(WKFramePolicyListenerUse) X(WKFramePolicyListenerIgnore) X(WKFramePolicyListenerDownload) \
     X(WKErrorCopyLocalizedDescription) X(WKDownloadGetOriginatingPage) \
@@ -146,8 +146,10 @@ static void navigation_action(WKPageRef page, WKNavigationActionRef action, WKFr
             wk.WKFramePolicyListenerUse(listener);
         } else {
             const char *docs = "https://docs.browser.moonl.cloud/";
-            if (!strcmp(view->extension_address,"moon://market/") && !strncmp(url,docs,strlen(docs)) &&
-                wk.WKNavigationActionGetNavigationType(action)==kWKFrameNavigationTypeLinkClicked && safe_method(request))
+            bool market_link = !strcmp(view->extension_address,"moon://market/") && !strncmp(url,docs,strlen(docs));
+            bool plugin_link = view->extension_id[0] && supported_scheme(request) &&
+                wk.WKNavigationActionHasUnconsumedUserGesture(action);
+            if ((market_link || plugin_link) && wk.WKNavigationActionGetNavigationType(action)==kWKFrameNavigationTypeLinkClicked && safe_method(request))
                 emit(client,MOON_POPUP,url);
             wk.WKFramePolicyListenerIgnore(listener);
         }
@@ -178,6 +180,10 @@ static void committed(WKPageRef page, WKNavigationRef nav, WKTypeRef user, const
 }
 static void finished(WKPageRef page, WKNavigationRef nav, WKTypeRef user, const void *client) {
     emit(client, MOON_FINISHED, NULL);
+}
+static void same_document(WKPageRef page, WKNavigationRef nav, WKSameDocumentNavigationType type,
+                          WKTypeRef user, const void *client) {
+    emit(client, MOON_SAME_DOCUMENT, NULL);
 }
 static void failed(WKPageRef page, WKNavigationRef nav, WKErrorRef error, WKTypeRef user, const void *client) {
     char description[512];
@@ -320,23 +326,30 @@ void moon_engine_shutdown(void) {
     // WK's run loop can have posted completion callbacks. Let Windows unload
     // the DLL on process exit after the UI message pump has stopped.
 }
-static void settings_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context) {
+static void extension_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context, bool settings) {
     if (!reply) return;
     const uintptr_t serial = (uintptr_t)context;
     const MoonView *view = views;
     while (view && view->extension_serial != serial) view = view->next;
-    char request[8192], response[8192];
+    char request[8192], response[32*1024];
     const WKTypeRef data = wk.WKScriptMessageGetBody(message);
     const WKFrameInfoRef frame = wk.WKScriptMessageGetFrameInfo(message);
     bool ok = false;
     if (view && frame && wk.WKFrameInfoGetIsMainFrame(frame) && data && wk.WKGetTypeID(data) == wk.WKStringGetTypeID()) {
         size_t bytes = wk.WKStringGetUTF8CString((WKStringRef)data,request,sizeof(request));
         if (bytes && bytes < sizeof(request) && strlen(request)+1 == bytes)
-            ok = moon_extension_settings(view->extension_id,request,response,sizeof(response));
+            ok = settings ? moon_extension_settings(view->extension_id,request,response,sizeof(response)) :
+                moon_extension_request(view->extension_id,request,response,sizeof(response));
     }
     WKStringRef value = wk.WKStringCreateWithUTF8CString(ok ? response : "{\"ok\":false}");
     wk.WKCompletionListenerComplete(reply,value);
     release(value);
+}
+static void settings_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context) {
+    extension_message(message,reply,context,true);
+}
+static void plugin_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context) {
+    extension_message(message,reply,context,false);
 }
 
 static MoonView *open_view(uint64_t token, const char *extension_id, const char *address) {
@@ -366,6 +379,11 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
             wk.WKUserContentControllerAddScriptMessageHandler(view->extension_controller,channel,settings_message,
                 (const void *)view->extension_serial);
             release(channel);
+            channel = wk.WKStringCreateWithUTF8CString("moonHost");
+            if (!channel) goto fail;
+            wk.WKUserContentControllerAddScriptMessageHandler(view->extension_controller,channel,plugin_message,
+                (const void *)view->extension_serial);
+            release(channel);
             wk.WKPageConfigurationSetUserContentController(config,view->extension_controller);
         }
     } else {
@@ -391,6 +409,7 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
         .decidePolicyForNavigationAction=navigation_action,.decidePolicyForNavigationResponse=navigation_response,
         .didStartProvisionalNavigation=started,.didFailProvisionalNavigation=failed,
         .didCommitNavigation=committed,.didFinishNavigation=finished,.didFailNavigation=failed,
+        .didSameDocumentNavigation=same_document,
         .renderingProgressDidChange=rendering,.webProcessDidTerminate=terminated };
     WKPageStateClientV0 state = { .base={0,view},.didChangeTitle=changed,.didChangeActiveURL=changed,
         .didChangeCanGoBack=changed,.didChangeCanGoForward=changed };
@@ -418,13 +437,14 @@ MoonView *moon_engine_open_extension(uint64_t token, const char *plugin_id, cons
 }
 bool moon_engine_load_extension(MoonView *view, const char *html) {
     if (!view->extension_address) return false;
-    static const char policy[] = "<!doctype html><meta charset=utf-8><meta http-equiv=\"Content-Security-Policy\" "
+    static const char policy[] = "<meta charset=utf-8><meta http-equiv=\"Content-Security-Policy\" "
         "content=\"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; "
         "connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'\">";
-    size_t size = sizeof(policy)+strlen(html);
+    const char *theme = moon_shell_dark_mode() ? "<!doctype html><html data-moon-theme=dark>" : "<!doctype html><html data-moon-theme=light>";
+    size_t size = sizeof(policy)+strlen(theme)+strlen(html);
     char *document = malloc(size);
     if (!document) return false;
-    snprintf(document,size,"%s%s",policy,html);
+    snprintf(document,size,"%s%s%s",theme,policy,html);
     WKStringRef source = wk.WKStringCreateWithUTF8CString(document);
     WKURLRef base = wk.WKURLCreateWithUTF8CString(view->extension_address);
     free(document);
@@ -433,6 +453,12 @@ bool moon_engine_load_extension(MoonView *view, const char *html) {
     release(source);
     release(base);
     return ok;
+}
+void moon_engine_refresh_extension_theme(void) {
+    const char *script = moon_shell_dark_mode() ? "document.documentElement.dataset.moonTheme='dark'" :
+        "document.documentElement.dataset.moonTheme='light'";
+    for (MoonView *view=views; view; view=view->next)
+        if (view->extension_address) moon_engine_apply_dom(view,script);
 }
 void moon_engine_close(MoonView *view) {
     MoonView **link = &views;

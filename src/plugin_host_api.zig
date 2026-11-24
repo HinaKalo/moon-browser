@@ -4,6 +4,7 @@ const sdk = @import("moon_plugin");
 const updater = @import("updater.zig");
 const userscripts = @import("userscripts.zig");
 const settings = @import("extension_settings.zig");
+const history = @import("history.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
 pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8 };
@@ -13,15 +14,18 @@ pub const Context = struct {
     target_tab_id: u64,
     tab: ?*const Snapshot,
     consent: userscripts.Consent,
+    from_page: bool = false,
+    user_command: bool = false,
 };
 
 pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
     return switch (method) {
-        .@"host.getInfo", .@"settings.read", .@"settings.write" => null,
+        .@"host.getInfo", .@"settings.read", .@"settings.write", .@"ui.openPage" => null,
         .@"tabs.getActive" => .@"tabs.read",
         .@"lua.scripts.list", .@"lua.scripts.install", .@"lua.scripts.setEnabled", .@"lua.scripts.remove" => .@"lua.scripts.manage",
         .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive" => .@"lua.scripts.manage",
         .@"devtools.open" => .@"page.inspect",
+        .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
     };
 }
 
@@ -72,13 +76,17 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     const method_name = sdk.string(object.get("method")) orelse return sdk.failure(output, id, .InvalidRequest);
     if (object.contains("result") or object.contains("error")) return sdk.failure(output, id, .InvalidRequest);
     const method = std.meta.stringToEnum(sdk.Method, method_name) orelse return sdk.failure(output, id, .MethodNotFound);
+    if (context.from_page) switch (method) {
+        .@"history.list", .@"history.remove", .@"history.clear" => {},
+        else => return sdk.failure(output,id,.MethodNotFound),
+    };
     if (!context.consent.valid(context.consent.context)) return sdk.failure(output, id, .Cancelled);
     if (permissionFor(method)) |permission| {
         if (!context.grants.contains(permission)) return sdk.failure(output, id, .PermissionDenied);
     }
     const params = object.get("params");
     switch (method) {
-        .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read" => {
+        .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -162,6 +170,26 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"devtools.open" => inspect: {
             const value = decode(struct { panel: sdk.InspectorPanel },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             break :inspect sdk.result(output,id,native.moon_devtools_open(@intCast(@intFromEnum(value.panel)),context.target_tab_id));
+        },
+        .@"ui.openPage" => open: {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            break :open sdk.result(output,id,native.moon_plugin_open_page(owner.ptr));
+        },
+        .@"history.list" => list: {
+            const options = decode(sdk.HistoryQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            var rows: [30]sdk.HistoryVisit = undefined;
+            const page = history.list(allocator,options,&rows) catch |err| return sdk.failure(output,id,if (err == error.InvalidParams) .InvalidParams else .InternalError);
+            break :list sdk.result(output,id,page);
+        },
+        .@"history.remove" => remove: {
+            const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            history.remove(value.id) catch |err| return sdk.failure(output,id,if (err == error.NotFound) .NotFound else .InternalError);
+            break :remove sdk.result(output,id,null);
+        },
+        .@"history.clear" => clear: {
+            history.clear() catch return sdk.failure(output,id,.InternalError);
+            break :clear sdk.result(output,id,null);
         },
     };
 }

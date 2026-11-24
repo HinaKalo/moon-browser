@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.history",
+      "name": "历史记录",
+      "description": "搜索、打开和移除最近的浏览记录，支持按日期浏览。",
+      "permission": "管理浏览历史",
+      "url": "https://docs.browser.moonl.cloud/history.html"
+    },
+    {
       "id": "moon.lua-manager",
       "name": "Lua 脚本管理器",
       "description": "导入用户脚本，查看并编辑源码，在匹配网页中应用修改。",

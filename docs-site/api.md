@@ -25,6 +25,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 
 将 `plugin.json` 和同目录 EXE 放进浏览器程序或配置目录下的 `plugins/<目录>`，重启后从工具栏菜单启用。命令在插件菜单与命令面板中使用同一 ID。每个插件可声明一到八条命令，ID 在插件内唯一。
 
+命令可选填 `shortcut`。当前支持 `Ctrl+H`、`F12`、`Ctrl+Shift+J`。同一组合键由第一个已启用且声明该组合键的插件处理，随浏览器分发的插件优先。
+
 插件启用与权限授权分别由用户确认。`tabs.read` 允许访问触发时的活动标签，`lua.scripts.manage` 允许管理已安装用户脚本。撤销权限后，后续调用失效。EXE 自身按当前 Windows 用户权限运行。
 
 ## 可调用方法
@@ -43,6 +45,10 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `settings.read` | 本插件 | 返回本插件的设置对象。 |
 | `settings.write` | 本插件 | 传入 `{ value }` 写入最多 4 KiB 的 JSON 对象。 |
 | `devtools.open` | `page.inspect` | 传入 `{ panel }`。可选 `inspector`、`console`、`resources`。返回是否已为触发命令的当前网页发起打开工具的请求。 |
+| `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
+| `history.list` | `history.manage` | 传入 `{ query?, before? }`。返回 `{ visits, next }`，每条访问记录为 `{ id, title, url, visitedAt }`。时间为 Unix 毫秒。使用 `next` 作为下一页的 `before`。 |
+| `history.remove` | `history.manage` | 传入 `{ id }` 移除单条记录，成功返回 `null`。 |
+| `history.clear` | `history.manage` | 清空当前配置文件的浏览历史，成功返回 `null`。 |
 
 脚本 ID 是 64 位小写十六进制字符组成的不透明标识。同一份源码重复导入返回 `ALREADY_EXISTS`。脚本内容或匹配范围改动后要重新导入，首次启用重新确认。管理接口负责导入和状态，网页导航触发运行，宿主 Lua VM 执行代码。
 

@@ -95,13 +95,13 @@ pub fn document(allocator: std.mem.Allocator) ![:0]u8 {
     try out.writeAll(
         \\<html lang=zh-CN><meta charset=utf-8><meta name=viewport content="width=device-width, initial-scale=1">
         \\<title>插件市场 · Moon Browser</title><style>
-        \\:root{color-scheme:light dark;color:#14161d;background:#f5f6f9;font:15px/1.55 system-ui,sans-serif}
+        \\:root{color-scheme:light;color:#14161d;background:#f5f6f9;font:15px/1.55 system-ui,sans-serif}
         \\main{max-width:62rem;margin:auto;padding:46px 24px;color:inherit}h1{font-size:2rem;margin:0}
         \\label{display:block;font-weight:600;margin-top:24px}input{box-sizing:border-box;width:min(100%,28rem);margin:6px 0 18px;padding:10px 12px;border:1px solid #d9dce6;border-radius:8px;font:inherit}
         \\section{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr));gap:14px}
         \\article{background:#fff;border:1px solid #d9dce6;border-radius:12px;padding:18px}h2{font-size:1.13rem;margin:0}
         \\p{margin:8px 0}small,p.intro{color:#51586a}a{color:#344db4}
-        \\@media(prefers-color-scheme:dark){:root{color:#e9ebf2;background:#191c23}article{background:#242630;border-color:#363b49}small,p.intro{color:#b9c1d4}a{color:#a7b4ff}}
+        \\:root[data-moon-theme=dark]{color-scheme:dark;color:#e9ebf2;background:#191c23}[data-moon-theme=dark] article{background:#242630;border-color:#363b49}[data-moon-theme=dark] :is(small,p.intro){color:#b9c1d4}[data-moon-theme=dark] a{color:#a7b4ff}
         \\</style><main><h1>插件市场</h1><p class=intro>Moon 插件目录。随浏览器提供的插件可在工具栏菜单中启用和授权。</p>
     );
     switch (state.load(.acquire)) {

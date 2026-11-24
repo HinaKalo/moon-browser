@@ -101,6 +101,7 @@ $sample = Join-Path $prefix 'bin\MoonExamplePlugin.exe'
 $contractClient = Join-Path $prefix 'bin\MoonPluginContractClient.exe'
 $luaManager = Join-Path $prefix 'bin\MoonLuaManager.exe'
 $devTools = Join-Path $prefix 'bin\MoonDevTools.exe'
+$history = Join-Path $prefix 'bin\MoonHistory.exe'
 $docs = @(
     $EngineLock
     (Join-Path $repo 'README.md')
@@ -110,12 +111,14 @@ $docs = @(
     (Join-Path $repo 'examples\lua-manager\plugin.json')
     (Join-Path $repo 'examples\lua-manager\settings.html')
     (Join-Path $repo 'examples\devtools\plugin.json')
+    (Join-Path $repo 'examples\history\plugin.json')
+    (Join-Path $repo 'examples\history\history.html')
 )
 if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $sample + $contractClient + $luaManager + $devTools + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $sample + $contractClient + $luaManager + $devTools + $history + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -141,6 +144,9 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $inspector = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\devtools')).FullName
     Copy-Item -LiteralPath $devTools -Destination $inspector
     Copy-Item -LiteralPath (Join-Path $repo 'examples\devtools\plugin.json') -Destination $inspector
+    $historyPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\history')).FullName
+    Copy-Item -LiteralPath $history -Destination $historyPackage
+    Copy-Item -LiteralPath (Join-Path $repo 'examples\history\plugin.json'),(Join-Path $repo 'examples\history\history.html') -Destination $historyPackage
     $fixtures = [IO.Directory]::CreateDirectory((Join-Path $stage 'tests')).FullName
     Copy-Item -LiteralPath $contractClient -Destination $fixtures
     $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $artifact))

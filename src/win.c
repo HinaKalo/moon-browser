@@ -48,7 +48,7 @@ static const Theme dark = {
 static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
-enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_PLUGIN_BASE = 100, MENU_PLUGIN_STRIDE = 13,
+enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_PLUGIN_BASE = 100, MENU_PLUGIN_STRIDE = 14,
        MENU_SCRIPTS_PICK = 400, MENU_SCRIPTS_BASE = 410 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        PALETTE_TAB_OFFSET = 1000 };
@@ -103,6 +103,12 @@ const char *moon_app_dir(void) { return app_dir; }
 HWND moon_shell_window(void) { return frame; }
 HWND moon_shell_content(void) { return content; }
 uint64_t moon_clock(void) { return GetTickCount64(); }
+uint64_t moon_wall_ms(void) {
+    FILETIME time;
+    GetSystemTimeAsFileTime(&time);
+    ULARGE_INTEGER ticks = { .LowPart=time.dwLowDateTime, .HighPart=time.dwHighDateTime };
+    return ticks.QuadPart / 10000 - UINT64_C(11644473600000);
+}
 uint64_t moon_perf_us(void) {
     LARGE_INTEGER now, frequency;
     QueryPerformanceCounter(&now);
@@ -599,6 +605,7 @@ void moon_shell_toggle_theme(void) {
     char path[4096];
     if (theme_path(path,sizeof(path))) moon_write_text(path,theme==&dark?"dark":"light");
     refresh_theme();
+    moon_engine_refresh_extension_theme();
 }
 void moon_shell_refresh(void) { clamp_tab_strip(true); InvalidateRect(frame,NULL,FALSE); }
 void moon_quit(int status) {
@@ -660,7 +667,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     size_t count=moon_plugin_count();
     if (count) AppendMenuW(popup,MF_SEPARATOR,0,NULL);
     for(size_t i=0;i<count;++i) {
-        wchar_t name[256],action[256];
+        wchar_t name[256],action[300];
         if (!moon_utf16(moon_plugin_label(i),name,ARRAYSIZE(name))) continue;
         HMENU sub=CreatePopupMenu();
         if (!sub) continue;
@@ -670,9 +677,16 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
         if (flags&8) AppendMenuW(sub,MF_STRING|(flags&4?MF_CHECKED:0),id+2,L"允许管理 Lua 用户脚本");
         if (moon_plugin_has_settings(i)) AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+3,L"配置页面");
         if (flags&32) AppendMenuW(sub,MF_STRING|(flags&16?MF_CHECKED:0),id+4,L"允许打开网页开发者工具");
+        if (flags&128) AppendMenuW(sub,MF_STRING|(flags&64?MF_CHECKED:0),id+5,L"允许管理浏览历史");
         for(size_t j=0;j<moon_plugin_action_count(i);++j) {
-            if (moon_utf16(moon_plugin_action(i,j),action,ARRAYSIZE(action)))
-                AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+5+j,action);
+            if (!moon_utf16(moon_plugin_action(i,j),action,256)) continue;
+            const char *shortcut=moon_plugin_action_shortcut(i,j);
+            if (*shortcut) {
+                size_t end=wcslen(action);
+                action[end++]=L'\t';
+                if (!moon_utf16(shortcut,action+end,ARRAYSIZE(action)-end)) action[end-1]=0;
+            }
+            AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+6+j,action);
         }
         AppendMenuW(popup,MF_POPUP,(UINT_PTR)sub,name);
     }
@@ -699,9 +713,9 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     else if (command>=MENU_PLUGIN_BASE) {
         unsigned value=command-MENU_PLUGIN_BASE;
         const unsigned offset=value%MENU_PLUGIN_STRIDE, plugin=value/MENU_PLUGIN_STRIDE;
-        const int grants[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_GRANT_LUA,MOON_PLUGIN_SETTINGS,MOON_PLUGIN_GRANT_INSPECT};
+        const int grants[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_GRANT_LUA,MOON_PLUGIN_SETTINGS,MOON_PLUGIN_GRANT_INSPECT,MOON_PLUGIN_GRANT_HISTORY};
         if (offset<ARRAYSIZE(grants)) moon_command(grants[offset],plugin,NULL);
-        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-5),NULL);
+        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-6),NULL);
         moon_shell_refresh();
     }
 }
@@ -1000,6 +1014,9 @@ static bool keyboard(MSG *msg) {
     if (ctrl && shift && msg->wParam == 'L') { moon_shell_toggle_theme(); return true; }
     if ((ctrl && msg->wParam == 'L') || msg->wParam == VK_F6) { moon_shell_focus_address(); return true; }
     if (ctrl && msg->wParam == 'K') { open_palette(); return true; }
+    if (ctrl && !shift && !alt && msg->wParam == 'H' && moon_plugin_shortcut("Ctrl+H")) return true;
+    if (!ctrl && !shift && !alt && msg->wParam == VK_F12 && moon_plugin_shortcut("F12")) return true;
+    if (ctrl && shift && !alt && msg->wParam == 'J' && moon_plugin_shortcut("Ctrl+Shift+J")) return true;
     if (ctrl && msg->wParam == 'B') { moon_shell_toggle_sidebar(); return true; }
     if (ctrl && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
     if (ctrl && msg->wParam == 'W') { moon_command(MOON_CLOSE,moon_active_index(),NULL); return true; }

@@ -11,9 +11,11 @@ pub const Permission = enum {
     @"tabs.read",
     @"lua.scripts.manage",
     @"page.inspect",
+    @"history.manage",
 };
 pub const Event = enum { @"tabs.changed" };
-pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false };
+pub const Shortcut = enum { @"Ctrl+H", F12, @"Ctrl+Shift+J" };
+pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false, shortcut: ?Shortcut = null };
 pub const Manifest = struct {
     id: []const u8,
     name: []const u8,
@@ -44,6 +46,9 @@ pub const ScriptSource = struct { sourceBase64: []const u8 };
 pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
 pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
 pub const InspectorPanel = enum { inspector, console, resources };
+pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
+pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
+pub const HistoryPage = struct { visits: []const HistoryVisit, next: ?u32 };
 pub const CommandResult = struct { message: ?[]const u8 = null };
 
 pub const Method = enum {
@@ -59,6 +64,10 @@ pub const Method = enum {
     @"settings.read",
     @"settings.write",
     @"devtools.open",
+    @"ui.openPage",
+    @"history.list",
+    @"history.remove",
+    @"history.clear",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

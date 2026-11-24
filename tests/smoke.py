@@ -1,5 +1,6 @@
 """Exercise the packaged Windows host and real WebKit processes over loopback."""
 import argparse
+from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from hashlib import sha256
 import json
@@ -7,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -270,6 +272,7 @@ def run_win32(exe, base, root):
     profile = Path(preview_env(root)["MOON_BROWSER_PROFILE_DIR"])
     manager = exe.parent / "plugins" / "lua-manager" / "MoonLuaManager.exe"
     devtools = exe.parent / "plugins" / "devtools" / "MoonDevTools.exe"
+    history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
     if manager.exists():
         fixture = profile / "plugins" / "settings"
         fixture.mkdir(parents=True)
@@ -277,6 +280,7 @@ def run_win32(exe, base, root):
             {"id": "moon.lua-manager", "enabled": True, "tabs_read": False, "lua_scripts_manage": True},
             {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
             {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
+            {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
@@ -289,6 +293,9 @@ def run_win32(exe, base, root):
             'const call=async op=>JSON.parse(await api.postMessage(JSON.stringify(op)));'
             'const forged=await call({op:"write",value:{bad:true},pluginId:"moon.lua-manager"});'
             'if(forged.ok)return;'
+            + ('const denied=await window.webkit.messageHandlers.moonHost.postMessage('
+               'JSON.stringify({jsonrpc:"2.0",id:"1",method:"history.list",params:{}}));'
+               'if(JSON.parse(denied).error?.code!==-32001)return;' if history.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -302,6 +309,48 @@ def run_win32(exe, base, root):
         )
         (profile / "lua-userscripts.json").write_text(
             json.dumps([{"source": lua_source, "enabled": True}]), encoding="utf-8")
+    if history.exists():
+        fixture = profile / "plugins" / "history-contract"
+        fixture.mkdir(parents=True)
+        (fixture / "plugin.json").write_text(json.dumps({
+            "id": "moon.history-fixture", "name": "History API fixture", "version": "1.0.0",
+            "apiVersion": 2, "runtime": "native", "entry": "Unused.exe", "settingsPage": "history.html",
+            "permissions": ["history.manage"],
+            "contributes": {"commands": [{"id": "open", "label": "History fixture"}]},
+        }), encoding="utf-8")
+        bundled_page = (history.parent / "history.html").read_text(encoding="utf-8")
+        contract = (
+            '<script>(async()=>{'
+            'const api=window.webkit.messageHandlers;let id=0;'
+            'const call=async(method,params={})=>JSON.parse(await api.moonHost.postMessage('
+            'JSON.stringify({jsonrpc:"2.0",id:String(++id),method,params})));'
+            'const waitFor=async predicate=>{for(let i=0;i<60;i++){const el=predicate();'
+            'if(el)return el;await new Promise(resolve=>setTimeout(resolve,50));}throw new Error("UI timeout");};'
+            'try{const first=await call("history.list",{query:"HISTORY-contract"});'
+            'const row=first.result?.visits?.[0];'
+            'if(!row?.url.endsWith("/page/history-contract") || !row.title.includes("history-contract"))throw new Error("list");'
+            'const excluded=await call("history.list",{query:"history-contract",before:row.id});'
+            'if(excluded.result?.visits?.length!==0)throw new Error("cursor");'
+            'if((await call("tabs.getActive")).error?.code!==-32601)throw new Error("scope");'
+            'const search=document.getElementById("query");'
+            'search.value="HISTORY-contract";search.dispatchEvent(new Event("input"));'
+            'const link=await waitFor(()=>document.querySelector("#results li a[href$=\'/page/history-contract\']"));'
+            'await waitFor(()=>document.querySelectorAll("#results li").length===1);'
+            'link.closest("li").querySelector("button").click();'
+            'await waitFor(()=>document.getElementById("status").textContent==="没有匹配的浏览记录。");'
+            'if((await call("history.remove",{id:row.id})).error?.code!==-32004)throw new Error("remove");'
+            'const clear=document.getElementById("clear");clear.click();'
+            'const dialog=document.getElementById("confirm-clear");'
+            'if(!dialog.open)throw new Error("confirm dialog");document.getElementById("cancel").click();'
+            'if(dialog.open||!(await call("history.list")).result?.visits?.length)throw new Error("clear cancel");'
+            'clear.click();document.getElementById("confirm").click();'
+            'await waitFor(()=>!dialog.open);'
+            'if((await call("history.list")).result?.visits?.length!==0)throw new Error("clear");'
+            'await api.moonSettings.postMessage(JSON.stringify({op:"write",value:{passed:true}}));'
+            '}catch(error){await api.moonSettings.postMessage(JSON.stringify({op:"write",value:{error:String(error)}}));}'
+            '})();</script>'
+        )
+        (fixture / "history.html").write_text(bundled_page.replace("</html>", contract + "</html>"), encoding="utf-8")
     proc = subprocess.Popen([str(exe), "--gdi"], env=preview_env(root))
     frame = None
     try:
@@ -444,6 +493,11 @@ def run_win32(exe, base, root):
             set_control(query_edit, query)
             user.PostMessageW(query_edit, 0x0100, 0x0D, 1)
 
+        def read_address():
+            address = ctypes.create_unicode_buffer(4096)
+            user.SendMessageW(edit, 0x000D, len(address), ctypes.addressof(address))
+            return address.value
+
         invoke("版本与更新")
         popup = wait_for(lambda: owned_window("#32770", "版本与更新"), "Compact update dialog did not open")
         popup_rect = wt.RECT()
@@ -508,14 +562,47 @@ def run_win32(exe, base, root):
             inspector = wait_for(inspector_window,"The system plugin did not open the WebKit inspector",20)
             user.PostMessageW(inspector,0x0010,0,0)
             wait_for(lambda: not inspector_window(),"Web Inspector did not close")
+            if history.exists():
+                user.PostMessageW(edit,0x0100,0x7B,1)  # F12 through the installed system plugin
+                inspector = wait_for(inspector_window,"F12 did not open the system inspector",20)
+                user.PostMessageW(inspector,0x0010,0,0)
+                wait_for(lambda: not inspector_window(),"Web Inspector opened via F12 did not close")
             print("devtools_system_plugin=ok", flush=True)
             invoke("插件市场")
-            def market_address():
-                address = ctypes.create_unicode_buffer(256)
-                user.SendMessageW(edit, 0x000D, len(address), ctypes.addressof(address))
-                return address.value == "moon://market/"
-            wait_for(market_address,"Browser did not open the built-in plugin market")
+            wait_for(lambda: read_address() == "moon://market/", "Browser did not open the built-in plugin market")
             print("plugin_market_entry=ok", flush=True)
+        if history.exists():
+            database = profile / "history.sqlite3"
+            target = base + "/page/history-contract"
+
+            def history_rows(query, params=()):
+                if not database.is_file():
+                    return []
+                try:
+                    with closing(sqlite3.connect(database, timeout=0.2)) as connection:
+                        return connection.execute(query, params).fetchall()
+                except sqlite3.OperationalError:
+                    return []
+
+            set_control(edit, target)
+            user.PostMessageW(edit, 0x0100, 0x0D, 1)
+            wait_for(lambda: history_rows("SELECT title FROM visits WHERE url=?", (target,)) == [("Moon fixture history-contract",)],
+                     "Successful navigation and its title did not reach the history database")
+            invoke("历史记录")
+            wait_for(lambda: read_address() == "extension://moon.history/history.html",
+                     "The history executable did not open its bundled page")
+            config = profile / f'extension-{sha256(b"moon.history-fixture").hexdigest()}.json'
+            set_control(edit, "extension://moon.history-fixture/history.html")
+            user.PostMessageW(edit, 0x0100, 0x0D, 1)
+            result = wait_for(lambda: config.exists() and json.loads(config.read_text(encoding="utf-8")),
+                              "History page API did not complete search and record removal", 15)
+            if not result.get("passed"):
+                raise RuntimeError("History contract failed: " + result.get("error", "Unknown error"))
+            if history_rows("SELECT title FROM visits WHERE url=?", (target,)):
+                raise RuntimeError("Removing a history record did not persist its deletion")
+            if history_rows("SELECT count(*) FROM visits") != [(0,)]:
+                raise RuntimeError("Clearing history left visits in the database")
+            print("history_system_plugin=ok history_page_contract=ok", flush=True)
     finally:
         if frame:
             user.PostMessageW(frame, 0x0010, 0, 0)

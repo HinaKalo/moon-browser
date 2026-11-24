@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>历史记录</title>
+<style>
+  :root {
+    color-scheme: light;
+    font: 14px/1.5 "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+    --bg: #f6f7fa;
+    --surface: #fff;
+    --text: #141820;
+    --quiet: #545d70;
+    --line: #dce0eb;
+    --hover: #eef1f8;
+    --accent: #4158bf;
+    --destructive: #a52937;
+    background: var(--bg);
+    color: var(--text);
+  }
+  :root[data-moon-theme="dark"] {
+    color-scheme: dark;
+    --bg: #171a22;
+    --surface: #202430;
+    --text: #edf0f7;
+    --quiet: #b8c0d2;
+    --line: #3a4359;
+    --hover: #292f41;
+    --accent: #a6b5ff;
+    --destructive: #ffadb6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { width: min(100%, 900px); padding: 44px clamp(20px, 5vw, 48px) 56px; margin: auto; }
+  h1 { font-size: 29px; letter-spacing: -.02em; margin: 0 0 22px; }
+  h2 { font-size: 14px; font-weight: 600; margin: 22px 0 8px; }
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; }
+  input, button { font: inherit; color: inherit; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+  input { min-width: 170px; flex: 1; padding: 9px 12px; }
+  button { padding: 8px 13px; cursor: pointer; }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button:disabled { opacity: .55; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #status { color: var(--quiet); }
+  #status:empty { display: none; }
+  ul { padding: 0; margin: 0; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+  li { min-width: 0; display: flex; align-items: center; gap: 8px; }
+  li + li { border-top: 1px solid var(--line); }
+  a { display: flex; align-items: center; gap: 12px; padding: 10px 12px; min-width: 0; flex: 1; color: inherit; text-decoration: none; border-radius: 8px; }
+  a:hover { background: var(--hover); }
+  .time { color: var(--quiet); font-variant-numeric: tabular-nums; flex: none; }
+  .details { min-width: 0; }
+  .details strong, .details small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .details strong { font-weight: 600; }
+  .details small { color: var(--quiet); }
+  li button { border-color: transparent; margin-right: 7px; color: var(--quiet); }
+  #more { margin-top: 16px; }
+  dialog { color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; width: min(400px, 90%); padding: 20px; }
+  dialog::backdrop { background: #161a3360; }
+  dialog h2 { margin-top: 0; font-size: 18px; }
+  dialog p { color: var(--quiet); }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+  #confirm { color: var(--destructive); }
+</style>
+<main>
+  <h1>历史记录</h1>
+  <div class="toolbar">
+    <input id="query" type="search" placeholder="搜索标题或网址" aria-label="搜索历史记录" maxlength="64" autocomplete="off">
+    <button id="clear" disabled>清空记录</button>
+  </div>
+  <p id="status" role="status">正在读取历史记录…</p>
+  <div id="results"></div>
+  <button id="more" hidden>加载更多</button>
+  <dialog id="confirm-clear" aria-labelledby="confirm-title">
+    <h2 id="confirm-title">清空浏览历史？</h2>
+    <p>此操作将移除当前浏览器配置文件中的所有浏览历史。</p>
+    <div class="dialog-actions">
+      <button id="cancel" autofocus>取消</button>
+      <button id="confirm">清空记录</button>
+    </div>
+  </dialog>
+</main>
+<script>
+  const query = document.getElementById('query');
+  const results = document.getElementById('results');
+  const status = document.getElementById('status');
+  const more = document.getElementById('more');
+  const clear = document.getElementById('clear');
+  const confirm = document.getElementById('confirm-clear');
+  const dateFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'long' });
+  const timeFormat = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  let sequence = 0;
+  let lastGroup;
+  let cursor = null;
+  let searchTimer;
+
+  async function host(method, params = {}) {
+    const id = 'history:' + ++sequence;
+    const message = await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+    const reply = JSON.parse(message);
+    if (reply.id !== id) throw new Error('INVALID_RESPONSE');
+    if (reply.error) throw new Error(reply.error.message);
+    return reply.result;
+  }
+
+  function append(visit) {
+    const date = new Date(visit.visitedAt);
+    const label = dateFormat.format(date);
+    if (!lastGroup || lastGroup.label !== label) {
+      const heading = document.createElement('h2');
+      heading.textContent = label;
+      const list = document.createElement('ul');
+      list.setAttribute('aria-label', label);
+      results.append(heading, list);
+      lastGroup = { label, list };
+    }
+    const item = document.createElement('li');
+    item.dataset.visit = visit.id;
+    const link = document.createElement('a');
+    link.href = visit.url;
+    const time = document.createElement('time');
+    time.className = 'time';
+    time.dateTime = date.toISOString();
+    time.textContent = timeFormat.format(date);
+    const details = document.createElement('span');
+    details.className = 'details';
+    const title = document.createElement('strong');
+    title.textContent = visit.title || visit.url;
+    const url = document.createElement('small');
+    url.textContent = visit.url;
+    details.append(title, url);
+    link.append(time, details);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = '移除';
+    remove.setAttribute('aria-label', '移除 ' + title.textContent);
+    remove.onclick = async () => {
+      remove.disabled = true;
+      try {
+        await host('history.remove', { id: visit.id });
+        const following = item.nextElementSibling?.dataset.visit;
+        await load();
+        (results.querySelector('li[data-visit="' + following + '"] a') ?? query).focus();
+      } catch {
+        remove.disabled = false;
+        status.textContent = '无法移除此记录。';
+      }
+    };
+    item.append(link, remove);
+    lastGroup.list.append(item);
+  }
+
+  let loadVersion = 0;
+  async function load(appendMore = false) {
+    const version = ++loadVersion;
+    more.disabled = true;
+    try {
+      const text = query.value.trim();
+      const page = await host('history.list', { query: text, before: appendMore ? cursor : null });
+      if (version !== loadVersion) return;
+      if (!appendMore) {
+        results.replaceChildren();
+        lastGroup = null;
+      }
+      page.visits.forEach(append);
+      cursor = page.next;
+      more.hidden = cursor === null;
+      if (results.children.length) status.textContent = '';
+      else status.textContent = text ? '没有匹配的浏览记录。' : '浏览过的网页会显示在这里。';
+      if (!text) clear.disabled = page.visits.length === 0;
+    } catch (error) {
+      if (version !== loadVersion) return;
+      clear.disabled = true;
+      more.hidden = true;
+      results.replaceChildren();
+      status.textContent = error.message === 'PERMISSION_DENIED' ? '请在插件菜单允许管理浏览历史。' : '无法读取历史记录。';
+    } finally {
+      if (version === loadVersion) more.disabled = false;
+    }
+  }
+  query.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => load(), 120);
+  });
+  more.onclick = () => load(true);
+  clear.onclick = () => confirm.showModal();
+  document.getElementById('cancel').onclick = () => confirm.close();
+  document.getElementById('confirm').onclick = async event => {
+    event.target.disabled = true;
+    try {
+      await host('history.clear');
+      confirm.close();
+      query.value = '';
+      await load();
+      query.focus();
+    } catch {
+      confirm.close();
+      status.textContent = '无法清空历史记录。';
+    } finally { event.target.disabled = false; }
+  };
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
+  load();
+</script>
+</html>

@@ -17,7 +17,7 @@ const LegacyManifest = struct {
     permissions: []const []const u8 = &.{},
     events: []const []const u8 = &.{},
 };
-const Grant = struct { id: []const u8, enabled: bool, tabs_read: bool, lua_scripts_manage: bool = false, page_inspect: bool = false };
+const Grant = struct { id: []const u8, enabled: bool, tabs_read: bool, lua_scripts_manage: bool = false, page_inspect: bool = false, history_manage: bool = false };
 const Outcome = enum { ok, failed, timed_out, crashed };
 const Trigger = enum { command, changed, timeout_test, crash_test };
 const CallState = enum(u8) { idle, queued, serving, ready };
@@ -46,7 +46,7 @@ const Task = struct {
     outcome: Outcome = .failed,
     message: [512:0]u8 = @splat(0),
 };
-const Command = struct { id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false };
+const Command = struct { id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false, shortcut: ?sdk.Shortcut = null };
 const Plugin = struct {
     id: [96:0]u8,
     label: [256:0]u8,
@@ -56,6 +56,7 @@ const Plugin = struct {
     settings_page: [96:0]u8 = @splat(0),
     protocol: Protocol,
     requests: Permissions,
+    default_grants: Permissions = .empty,
     subscribes: bool,
     enabled: bool = false,
     grants: Permissions = .empty,
@@ -92,7 +93,7 @@ fn contains(items: []const []const u8, value: []const u8) bool {
     return false;
 }
 
-fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []const u8, entry: []const u8, settings_page: ?[]const u8, commands: []const sdk.Command, requests: Permissions, subscribes: bool, protocol: Protocol) void {
+fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []const u8, entry: []const u8, settings_page: ?[]const u8, commands: []const sdk.Command, requests: Permissions, subscribes: bool, protocol: Protocol, bundled: bool) void {
     if (!validComponent(id) or !validComponent(entry) or !std.ascii.endsWithIgnoreCase(entry, ".exe") or
         name.len == 0 or commands.len == 0 or commands.len > sdk.command_limit) return;
     if (protocol == .v2 and std.mem.indexOfScalar(u8, id, '.') == null) return;
@@ -114,12 +115,24 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         for (commands[0..index]) |prior| if (std.mem.eql(u8, prior.id, item.id)) return;
         plugin.actions[index] = .{};
         plugin.actions[index].interactive = item.interactive;
+        plugin.actions[index].shortcut = item.shortcut;
         if (!copy(&plugin.actions[index].id, item.id) or !copy(&plugin.actions[index].label, item.label)) return;
+    }
+    if (bundled) {
+        const default_permission: ?sdk.Permission = if (std.mem.eql(u8,id,"moon.history")) .@"history.manage"
+            else if (std.mem.eql(u8,id,"moon.devtools")) .@"page.inspect" else null;
+        if (default_permission) |scope| {
+            if (requests.contains(scope)) {
+                plugin.enabled = true;
+                plugin.default_grants = .initOne(scope);
+                plugin.grants = plugin.default_grants;
+            }
+        }
     }
     len += 1;
 }
 
-fn discover(root: []const u8) void {
+fn discover(root: []const u8, bundled: bool) void {
     var c_path: [4096]u8 = undefined;
     const directory = std.fmt.bufPrintSentinel(&c_path, "{s}\\plugins", .{root}, 0) catch return;
     var names: [32][256]u8 = undefined;
@@ -141,7 +154,7 @@ fn discover(root: []const u8) void {
             for (manifest.permissions) |permission| requested.insert(permission);
             const subscribes = std.mem.indexOfScalar(sdk.Event, manifest.events, .@"tabs.changed") != null;
             if (subscribes and !requested.contains(.@"tabs.read")) continue;
-            addManifest(directory, sub, manifest.id, manifest.name, manifest.entry, manifest.settingsPage, manifest.contributes.commands, requested, subscribes, .v2);
+            addManifest(directory, sub, manifest.id, manifest.name, manifest.entry, manifest.settingsPage, manifest.contributes.commands, requested, subscribes, .v2, bundled);
         } else |_| {
             const parsed = std.json.parseFromSlice(LegacyManifest, allocator, bytes, .{}) catch continue;
             defer parsed.deinit();
@@ -150,14 +163,14 @@ fn discover(root: []const u8) void {
             var requested = Permissions.empty;
             if (contains(manifest.permissions, "tabs.read")) requested.insert(.@"tabs.read");
             addManifest(directory, sub, manifest.id, manifest.name, manifest.executable, null, &.{.{ .id = "run", .label = manifest.command }},
-                requested, contains(manifest.events, "tabs.changed"), .legacy);
+                requested, contains(manifest.events, "tabs.changed"), .legacy, bundled);
         }
     }
 }
 
 pub fn init(app: []const u8, profile: []const u8) void {
-    discover(app);
-    discover(profile);
+    discover(app,true);
+    discover(profile,false);
     _ = std.fmt.bufPrintSentinel(&file_path, "{s}\\plugin-state.json", .{profile}, 0) catch return;
     var raw: [16384]u8 = undefined;
     if (!native.moon_read_text(&file_path, &raw, raw.len)) return;
@@ -166,9 +179,11 @@ pub fn init(app: []const u8, profile: []const u8) void {
     for (all[0..len]) |*plugin| for (saved.value) |grant| {
         if (!std.mem.eql(u8, grant.id, std.mem.sliceTo(&plugin.id, 0))) continue;
         plugin.enabled = grant.enabled;
+        plugin.grants = .empty;
         if (grant.enabled and grant.tabs_read and plugin.requests.contains(.@"tabs.read")) plugin.grants.insert(.@"tabs.read");
         if (grant.enabled and grant.lua_scripts_manage and plugin.requests.contains(.@"lua.scripts.manage")) plugin.grants.insert(.@"lua.scripts.manage");
         if (grant.enabled and grant.page_inspect and plugin.requests.contains(.@"page.inspect")) plugin.grants.insert(.@"page.inspect");
+        if (grant.enabled and grant.history_manage and plugin.requests.contains(.@"history.manage")) plugin.grants.insert(.@"history.manage");
         break;
     };
 }
@@ -181,6 +196,7 @@ fn persist() bool {
         .tabs_read = plugin.grants.contains(.@"tabs.read"),
         .lua_scripts_manage = plugin.grants.contains(.@"lua.scripts.manage"),
         .page_inspect = plugin.grants.contains(.@"page.inspect"),
+        .history_manage = plugin.grants.contains(.@"history.manage"),
     };
     const bytes = std.json.Stringify.valueAlloc(allocator, items[0..len], .{}) catch return false;
     defer allocator.free(bytes);
@@ -205,6 +221,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"tabs.read" => "此插件可读取触发时的活动标签标题和网址。",
                 .@"lua.scripts.manage" => "此插件可导入、停用或移除 Lua 用户脚本。新脚本首次启用时，浏览器会单独确认网站范围。",
                 .@"page.inspect" => "此插件可为触发命令时的网页打开开发者工具。控制台和站点存储可在工具中查看。",
+                .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
             plugin.grants.insert(scope);
@@ -212,7 +229,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
     } else {
         if (!enabled and !native.moon_shell_confirm("启用本地插件？", &plugin.executable)) return;
         plugin.enabled = !plugin.enabled;
-        if (!plugin.enabled) plugin.grants = .empty;
+        plugin.grants = if (plugin.enabled) plugin.default_grants else .empty;
     }
     if (!persist()) {
         plugin.enabled = enabled;
@@ -242,6 +259,9 @@ pub fn actionCount(index: usize) usize {
 pub fn action(index: usize, command_index: usize) [*:0]const u8 {
     return &all[index].actions[command_index].label;
 }
+pub fn actionShortcut(index: usize, command_index: usize) ?sdk.Shortcut {
+    return all[index].actions[command_index].shortcut;
+}
 pub fn flags(index: usize) c_uint {
     const plugin = &all[index];
     return @as(c_uint, @intFromBool(plugin.enabled)) |
@@ -249,7 +269,9 @@ pub fn flags(index: usize) c_uint {
         (@as(c_uint, @intFromBool(plugin.grants.contains(.@"lua.scripts.manage"))) << 2) |
         (@as(c_uint, @intFromBool(plugin.requests.contains(.@"lua.scripts.manage"))) << 3) |
         (@as(c_uint, @intFromBool(plugin.grants.contains(.@"page.inspect"))) << 4) |
-        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"page.inspect"))) << 5);
+        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"page.inspect"))) << 5) |
+        (@as(c_uint, @intFromBool(plugin.grants.contains(.@"history.manage"))) << 6) |
+        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"history.manage"))) << 7);
 }
 
 pub fn hasSettings(index: usize) bool {
@@ -262,11 +284,25 @@ pub fn settingsAddress(index: usize, buffer: []u8) ?[:0]u8 {
     return std.fmt.bufPrintSentinel(buffer,"extension://{s}/{s}",.{ std.mem.sliceTo(&plugin.id,0),std.mem.sliceTo(&plugin.settings_page,0) },0) catch null;
 }
 
-pub fn canUseSettings(id: []const u8) bool {
+pub fn pageGrants(id: []const u8) ?Permissions {
     for (all[0..len]) |*plugin| {
-        if (plugin.enabled and plugin.settings_page[0] != 0 and std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),id)) return true;
+        if (plugin.enabled and plugin.settings_page[0] != 0 and std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),id)) return plugin.grants;
+    }
+    return null;
+}
+
+pub fn historyEnabled() bool {
+    for (all[0..len]) |*plugin| {
+        if (plugin.default_grants.contains(.@"history.manage")) return plugin.enabled and plugin.grants.contains(.@"history.manage");
     }
     return false;
+}
+
+pub fn addressForId(id: []const u8, buffer: []u8) ?[:0]u8 {
+    for (all[0..len],0..) |*plugin,index| {
+        if (std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),id)) return settingsAddress(index,buffer);
+    }
+    return null;
 }
 
 pub fn readSettingsPage(address: []const u8, body: []u8) ?[:0]const u8 {
@@ -328,6 +364,19 @@ pub fn command(index: usize, command_index: usize, snapshot: ?Snapshot) void {
     if (!launch(index, command_index, .command, snapshot))
         native.moon_shell_info("Plugin", "This plugin is disabled, busy, or could not start.");
 }
+
+pub fn shortcut(key: sdk.Shortcut, snapshot: ?Snapshot) bool {
+    for (all[0..len],0..) |*plugin,index| {
+        if (!plugin.enabled) continue;
+        for (plugin.actions[0..plugin.action_count],0..) |action_entry,command_index| {
+            if (action_entry.shortcut != key) continue;
+            // Repeated shortcuts should not interrupt a plugin that's still opening its page.
+            if (plugin.work == null) command(index,command_index,snapshot);
+            return true;
+        }
+    }
+    return false;
+}
 pub fn changed(snapshot: ?Snapshot) void {
     for (all[0..len], 0..) |*plugin, index| {
         if (!plugin.enabled or !plugin.subscribes) continue;
@@ -354,6 +403,7 @@ fn serviceRpc(task: *Task, rpc: *Rpc) void {
         .target_tab_id = task.target_tab_id,
         .tab = if (task.snapshot) |*snapshot| snapshot else null,
         .consent = .{ .context = task, .valid = invocationActive },
+        .user_command = task.trigger == .command,
     }) catch {
         rpc.size = 0;
         return;

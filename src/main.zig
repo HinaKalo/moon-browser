@@ -4,6 +4,9 @@ const policy = @import("policy.zig");
 const plugins = @import("plugins.zig");
 const userscripts = @import("userscripts.zig");
 const extension_settings = @import("extension_settings.zig");
+const api = @import("plugin_host_api.zig");
+const sdk = @import("moon_plugin");
+const history = @import("history.zig");
 const market = @import("market.zig");
 const updater = @import("updater.zig");
 
@@ -25,6 +28,8 @@ const Tab = struct {
     loaded: bool = false,
     has_document: bool = false,
     extension: bool = false,
+    restoring_history: bool = false,
+    history_visit: ?u32 = null,
     download_count: usize = 0,
     activity: bool = false,
     opening: Opening = .none,
@@ -237,6 +242,7 @@ fn detach(tab: *Tab) void {
     const view = tab.view orelse return;
     tab.view = null;
     tab.loaded = false;
+    tab.history_visit = null;
     if (!stopped) watchRetirement(native.moon_engine_pid(view));
     native.moon_engine_close(view);
 }
@@ -372,6 +378,7 @@ fn restore(tab: *Tab) void {
         return;
     }
     if (delayOpening(tab, .restore)) return;
+    tab.restoring_history = true;
     tab.opening = .none;
     if (tab.session) |session| {
         if (openView(tab)) {
@@ -445,8 +452,13 @@ fn sync(tab: *Tab) void {
     var url: [4096:0]u8 = @splat(0);
     var title: [512:0]u8 = @splat(0);
     native.moon_engine_read(view, &title, title.len, &url, url.len);
-    if (title[0] != 0) tab.title = title;
     if (!tab.extension and url[0] != 0 and !equals(slice(&url), "about:blank")) tab.url = url;
+    if (title[0] != 0 and !equals(slice(&tab.title),slice(&title))) {
+        tab.title = title;
+        if (tab.history_visit) |visit| {
+            if (plugins.historyEnabled()) history.updateTitle(visit,slice(&tab.url),slice(&title));
+        }
+    }
 }
 fn protected(tab: *const Tab) bool {
     return tab.loading or !tab.loaded or tab.dirty or tab.unsafe_history or tab.download_count != 0 or
@@ -596,6 +608,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     updater.configure(app, native.moon_clock());
     applySettings(profile);
     plugins.init(app, profile);
+    history.init(profile);
     userscripts.init(profile);
     var first_url: ?[:0]u8 = null;
     defer if (first_url) |allocated| allocator.free(allocated);
@@ -661,6 +674,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
     if (stopped) return;
     if (command == native.MOON_SHUTDOWN) {
         stopped = true;
+        history.close();
         for (tabs[0..count]) |*tab| {
             detach(tab);
             forgetSession(tab);
@@ -680,6 +694,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_KEY_NEXT => chooseTab((active + 1) % count, true),
         native.MOON_KEY_PREV => chooseTab((active + count - 1) % count, true),
         native.MOON_ADDRESS => {
+            tab.restoring_history = false;
             var buffer: [4096]u8 = undefined;
             if (normalize(slice(c_text), &buffer)) |url| {
                 navigate(tab, url);
@@ -705,6 +720,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_PLUGIN_GRANT => plugins.toggleGrant(index, .@"tabs.read"),
         native.MOON_PLUGIN_GRANT_LUA => plugins.toggleGrant(index, .@"lua.scripts.manage"),
         native.MOON_PLUGIN_GRANT_INSPECT => plugins.toggleGrant(index, .@"page.inspect"),
+        native.MOON_PLUGIN_GRANT_HISTORY => plugins.toggleGrant(index, .@"history.manage"),
         native.MOON_PLUGIN_SETTINGS => {
             var address: [256]u8 = undefined;
             if (plugins.settingsAddress(index,&address)) |url| addTab(url,false);
@@ -730,6 +746,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         native.MOON_STARTED => {
             tab.loading = true;
             tab.loaded = false;
+            tab.history_visit = null;
         },
         native.MOON_COMMITTED => {
             tab.dirty = false;
@@ -745,6 +762,8 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             tab.deadline = 0;
             sync(tab);
             if (!tab.extension) {
+                if (!tab.restoring_history and plugins.historyEnabled()) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
+                tab.restoring_history = false;
                 storeSession(tab);
                 if (tab.view) |view| userscripts.apply(view);
             }
@@ -763,6 +782,10 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             }
         },
         native.MOON_CHANGED => sync(tab),
+        native.MOON_SAME_DOCUMENT => {
+            sync(tab);
+            if (!tab.extension and !tab.restoring_history and plugins.historyEnabled()) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
+        },
         native.MOON_TERMINATED => {
             tab.phase = .crashed;
             tab.loading = false;
@@ -837,6 +860,9 @@ export fn moon_plugin_action_count(index: usize) usize {
 export fn moon_plugin_action(index: usize, command: usize) [*:0]const u8 {
     return plugins.action(index, command);
 }
+export fn moon_plugin_action_shortcut(index: usize, command: usize) [*:0]const u8 {
+    return if (plugins.actionShortcut(index,command)) |key| @tagName(key) else "";
+}
 export fn moon_plugin_flags(index: usize) c_uint {
     return plugins.flags(index);
 }
@@ -844,8 +870,45 @@ export fn moon_plugin_has_settings(index: usize) bool {
     return plugins.hasSettings(index);
 }
 export fn moon_extension_settings(id: [*c]const u8, request: [*c]const u8, result: [*c]u8, cap: usize) bool {
-    if (stopped or !plugins.canUseSettings(slice(id))) return false;
+    if (stopped or plugins.pageGrants(slice(id)) == null) return false;
     return extension_settings.pageReply(slice(id),slice(request),result[0..cap]);
+}
+
+fn pageActive(_: ?*const anyopaque) callconv(.c) bool {
+    return !stopped;
+}
+
+export fn moon_extension_request(id: [*c]const u8, request: [*c]const u8, result: [*c]u8, cap: usize) bool {
+    if (stopped) return false;
+    const grants = plugins.pageGrants(slice(id)) orelse return false;
+    const allocator = std.heap.page_allocator;
+    const reply = api.dispatch(allocator,slice(request),.{
+        .grants=grants,.plugin_id=slice(id),.target_tab_id=0,.tab=null,
+        .consent=.{ .context=&stopped,.valid=pageActive },.from_page=true,
+    }) catch return false;
+    defer allocator.free(reply);
+    return copy(result[0..cap],reply);
+}
+
+export fn moon_plugin_open_page(id: [*c]const u8) bool {
+    if (stopped or count == 0) return false;
+    var buffer: [256]u8 = undefined;
+    const address = plugins.addressForId(slice(id),&buffer) orelse return false;
+    for (tabs[0..count],0..) |*tab,index| {
+        if (!tab.extension or !equals(slice(&tab.url),address)) continue;
+        chooseTab(index,true);
+        if (tab.phase == .crashed or tab.phase == .failed) navigate(tab,address);
+        return true;
+    }
+    if (count == tabs.len) return false;
+    addTab(address,true);
+    return true;
+}
+
+export fn moon_plugin_shortcut(shortcut: [*c]const u8) bool {
+    if (stopped or count == 0) return false;
+    const key = std.meta.stringToEnum(sdk.Shortcut,slice(shortcut)) orelse return false;
+    return plugins.shortcut(key,tabSnapshot());
 }
 
 const Action = union(enum) { built_in: ShellAction, plugin: struct { index: usize, command: usize } };

@@ -1,0 +1,13 @@
+{
+  "id": "moon.history",
+  "name": "历史记录",
+  "version": "0.1.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonHistory.exe",
+  "settingsPage": "history.html",
+  "contributes": {
+    "commands": [{ "id": "open", "label": "历史记录", "shortcut": "Ctrl+H" }]
+  },
+  "permissions": ["history.manage"]
+}

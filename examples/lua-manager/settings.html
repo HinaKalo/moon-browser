@@ -4,7 +4,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lua 脚本管理器设置</title>
 <style>
-  :root { color-scheme: light dark; font: 15px/1.6 system-ui, sans-serif; color: #14161d; background: #f5f6f9; }
+  :root { color-scheme: light; font: 15px/1.6 system-ui, sans-serif; color: #14161d; background: #f5f6f9; }
   main { max-width: 42rem; margin: 0 auto; padding: 48px 24px; }
   h1 { margin: 0 0 24px; font-size: 29px; }
   section { background: #fff; border: 1px solid #d9dce6; border-radius: 12px; padding: 20px; }
@@ -12,11 +12,9 @@
   p { margin: 8px 0 16px; color: #51586a; }
   button { border: 0; border-radius: 7px; padding: 8px 16px; background: #4359c5; color: #fff; cursor: pointer; }
   [role=status] { margin-left: 12px; }
-  @media (prefers-color-scheme: dark) {
-    :root { color: #e9ebf2; background: #191c23; }
-    section { background: #1f222a; border-color: #363b49; }
-    p { color: #b9c1d4; }
-  }
+  :root[data-moon-theme="dark"] { color-scheme: dark; color: #e9ebf2; background: #191c23; }
+  [data-moon-theme="dark"] section { background: #1f222a; border-color: #363b49; }
+  [data-moon-theme="dark"] p { color: #b9c1d4; }
 </style>
 <main>
   <h1>Lua 脚本管理器设置</h1>

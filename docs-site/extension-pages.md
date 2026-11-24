@@ -25,3 +25,9 @@ await callSettings('write', { ...current, refreshOnSave: true });
 宿主根据页面所属的插件 ID 决定读写范围。EXE 插件用 `settings.read`、`settings.write` 读取和保存同一个对象。插件停用后，该页面的调用会被拒绝。网页、子框架及插件市场没有此设置通道。配置页禁止发起网络请求、嵌入框架以及加载外部脚本和样式。
 
 [Lua 管理器配置页源码](https://github.com/HinaKalo/moon-browser/blob/main/examples/lua-manager/settings.html) · [插件 API](./api)
+
+## 调用宿主 API
+
+0.1.0-preview.8 起，声明的插件页面可通过 `window.webkit.messageHandlers.moonHost.postMessage()` 收发 UTF-8 JSON-RPC 2.0 字符串。当前开放 `history.list`、`history.remove`、`history.clear`，每次调用都检查 `history.manage`。浏览器从页面所在的隔离视图识别插件。请求中无需填写插件 ID。
+
+宿主在文档根节点设置 `data-moon-theme="light"` 或 `data-moon-theme="dark"`，切换浏览器主题时同步更新。页面可使用 CSS 属性选择器适配。
