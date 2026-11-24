@@ -1,0 +1,9 @@
+{
+  "api_version": 1,
+  "id": "moon.example",
+  "name": "Active Tab Example",
+  "executable": "MoonExamplePlugin.exe",
+  "command": "Inspect active tab",
+  "permissions": ["tabs.read"],
+  "events": ["tabs.changed"]
+}

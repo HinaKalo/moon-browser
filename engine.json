@@ -1,0 +1,7 @@
+{
+  "id": "playwright-webkit-2388-skia-x64",
+  "backend": "Skia",
+  "revision": "5b391e6d3b14d549908dad2c6695999291313f30",
+  "url": "https://cdn.playwright.dev/dbazure/download/playwright/builds/webkit/2388/webkit-win64.zip",
+  "sha256": "0b390661995316d8f90fe0f7a0498f3a88c451c097fc8e4047342e1fbd36548b"
+}

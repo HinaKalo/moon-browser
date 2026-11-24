@@ -1,0 +1,5 @@
+/.planning/
+/.zig-cache/
+/zig-out/
+/out/
+*.user
