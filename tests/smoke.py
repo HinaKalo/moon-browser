@@ -2662,19 +2662,26 @@ def run_win32(exe, base, root):
             bounds = wt.RECT()
             user.GetClientRect(frame,ctypes.byref(bounds))
             capacity = (round(bounds.bottom*96/dpi)-134-48-6)//37
+            click(px(110),px(148+37*2))
+            wait_for(lambda: user.IsWindowVisible(home),"The first regular tab did not become active")
+            edge = closed_page("order-edge")
+            before = palette_rows()
             for _ in range(capacity+4):
                 click(px(253),px(105))
             wait_for(lambda: user.IsWindowVisible(home),"Could not open enough tabs to scroll the sidebar")
-            edge = closed_page("order-edge")
-            user.PostMessageW(frame,0x0201,1,sidebar_point(148+37*(capacity-1)))
-            user.PostMessageW(frame,0x0200,1,sidebar_point(138))
+            if palette_rows()!=before+capacity+4:
+                raise RuntimeError("The sidebar did not open all tabs for its scroll fixture")
+            for _ in range(capacity+4):
+                user.PostMessageW(frame,0x020A,120<<16,0)  # Scroll back up while leaving the last tab active.
+            user.PostMessageW(frame,0x0201,1,sidebar_point(148+37*2))
+            lower_edge = sidebar_point(163+37*(capacity-1))
+            user.PostMessageW(frame,0x0200,1,lower_edge)
             sleep(1.45)
-            user.PostMessageW(frame,0x0200,1,sidebar_point(143+37*2))
-            user.PostMessageW(frame,0x0202,0,sidebar_point(143+37*2))
+            user.PostMessageW(frame,0x0202,0,lower_edge)
             sleep(0.35)
-            click(px(110),px(148))
-            wait_for(lambda: read_address()==keep,"Dragging near the top edge did not scroll to the pinned rows")
-            click(px(110),px(148+37*2))
+            if not user.IsWindowVisible(home):
+                raise RuntimeError("Auto-scrolling a background drag changed the active tab")
+            click(px(110),px(148+37*(capacity-1)))
             wait_for(lambda: read_address()==edge,"Dropping after auto-scroll did not use the visible target")
             proc,frame = restart_tabs()
             edit = user.GetDlgItem(frame,1001)
