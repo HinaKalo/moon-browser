@@ -204,6 +204,9 @@ enum MoonSiteDataAction { MOON_SITE_REFRESH, MOON_SITE_INSPECTOR, MOON_SITE_CATA
 bool moon_site_data_action(uint64_t panel, const char *id, int action);
 bool moon_site_data_update(uint64_t panel, const char *id, bool session, uint32_t entry, uint64_t generation,
     const char *value, size_t length);
+bool moon_site_data_create(uint64_t panel, const char *id, bool session, uint64_t generation,
+    const char *key, size_t key_length, const char *value, size_t value_length);
+int moon_site_data_clear(uint64_t panel, const char *id, bool session, uint64_t generation);
 void moon_site_data_result(uint64_t source, uint64_t request, const char *snapshot, bool catalog);
 bool moon_plugin_open_page(const char *id);
 enum MoonPluginMenu {

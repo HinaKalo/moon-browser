@@ -887,6 +887,7 @@ static bool site_menu(HWND hwnd) {
     if (!popup) return false;
     AppendMenuW(popup,MF_STRING|MF_GRAYED,0,origin);
     if (!strncmp(site.origin,"http://",7)) AppendMenuW(popup,MF_STRING|MF_GRAYED,0,L"HTTP · 未加密");
+    if (!strncmp(site.origin,"https://",8)) AppendMenuW(popup,MF_STRING|MF_GRAYED,0,L"HTTPS · 证书详情不可用");
 
     const int header=GetMenuItemCount(popup);
     for (size_t i=0;i<moon_plugin_count();++i)

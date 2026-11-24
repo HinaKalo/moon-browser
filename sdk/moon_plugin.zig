@@ -173,7 +173,8 @@ pub const SiteDataFailure = enum {
     engineUnavailable, frameUnavailable, sourceChanged, worldUnavailable, contextUnavailable,
     evaluationFailed, conversionFailed, invalidResult, timedOut,
 };
-pub const SiteDataMutation = enum { saved, removed, conflict, failed };
+pub const SiteDataMutation = enum { saved, removed, cleared, conflict, failed };
+pub const SiteDataClearStart = enum(c_int) { started, cancelled, unavailable };
 pub const SiteDataStatus = struct {
     state: SiteDataState, origin: []const u8, generation: u64,
     failure: ?SiteDataFailure = null, mutation: ?SiteDataMutation = null, writable: bool = false,
@@ -191,7 +192,10 @@ pub const SiteStorageCatalog = struct {
     cacheStorage: ?struct { entries: []const SiteCache, more: bool } = null,
 };
 pub const site_data_value_limit = 1024;
+pub const site_data_key_limit = 512;
 pub const SiteDataUpdate = struct { group: SiteDataGroup, id: u32, generation: u64, value: ?[]const u8 };
+pub const SiteDataCreate = struct { group: SiteDataGroup, generation: u64, key: []const u8, value: []const u8 };
+pub const SiteDataClear = struct { group: SiteDataGroup, generation: u64 };
 pub const ZoomAction = enum { increase, decrease, reset };
 pub const NetworkFilterStatus = struct { preferred: bool, active: bool, exceptions: []const []const u8 };
 pub const NetworkFilterSite = struct { host: []const u8, enabled: bool };
@@ -257,6 +261,8 @@ pub const Method = enum {
     @"siteData.refresh",
     @"siteData.openInspector",
     @"siteData.update",
+    @"siteData.create",
+    @"siteData.clear",
     @"reading.find",
     @"reading.zoom",
     @"window.toggleFullscreen",

@@ -87,6 +87,7 @@ static const char snapshot_script[] =
         "if(globalThis.__moonSiteDataRevision!==update.revision)return JSON.stringify('sourceChanged');"
         "try{const store=update.group==='local'?localStorage:update.group==='session'?sessionStorage:null;"
             "if(!store)mutation='failed';"
+            "else if(update.clear){store.clear();mutation='cleared';}"
             "else if(store.getItem(update.key)!==update.previous)mutation='conflict';"
             "else if(update.replacement===null){store.removeItem(update.key);mutation='removed';}"
             "else{store.setItem(update.key,update.replacement);mutation='saved';}"

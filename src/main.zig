@@ -66,6 +66,7 @@ const PageSaveJob = struct {
 };
 var page_save_job: ?PageSaveJob = null;
 var page_save_serial: u64 = 0;
+var site_clear_confirming = false;
 var next_id: u64 = 1;
 var pins_path: [4096:0]u8 = @splat(0);
 var pins_save_at: ?u64 = null;
@@ -1901,17 +1902,53 @@ export fn moon_site_data_action(panel: u64, id: [*c]const u8, action: c_int) boo
     return native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.resources),false);
 }
 
+fn siteWriteView(panel: u64, owner: []const u8) ?*native.MoonView {
+    if (stopped or count==0 or tabs[active].id!=panel or
+        !plugins.hasGrant(owner,.@"siteData.read") or !plugins.hasGrant(owner,.@"siteData.write")) return null;
+    const source = site_data.selected(panel,owner) orelse return null;
+    const tab = &tabs[tabIndex(source) orelse return null];
+    if (!hasSite(tab) or tab.loading or !tab.loaded) return null;
+    return tab.view;
+}
+
 export fn moon_site_data_update(panel: u64, id: [*c]const u8, session: bool, entry: u32, generation: u64,
-    value: [*c]const u8, length: usize) bool
-{
-    if (stopped or count==0 or tabs[active].id!=panel) return false;
+    value: [*c]const u8, length: usize) bool {
+    if (site_clear_confirming) return false;
     const owner = slice(id);
-    const source = site_data.selected(panel,owner) orelse return false;
-    const tab = &tabs[tabIndex(source) orelse return false];
-    const view = tab.view orelse return false;
-    if (tab.extension or tab.loading or !tab.loaded) return false;
+    const view = siteWriteView(panel,owner) orelse return false;
     const target: sdk.SiteDataItem = .{ .group=if (session) .session else .local, .id=entry, .generation=generation };
     return site_data.update(view,panel,owner,target,if (value!=null) value[0..length] else null);
+}
+
+export fn moon_site_data_create(panel: u64, id: [*c]const u8, session: bool, generation: u64,
+    key: [*c]const u8, key_length: usize, value: [*c]const u8, value_length: usize) bool {
+    if (site_clear_confirming) return false;
+    const owner = slice(id);
+    const view = siteWriteView(panel,owner) orelse return false;
+    return site_data.create(view,panel,owner,.{
+        .group=if (session) .session else .local,.generation=generation,
+        .key=key[0..key_length],.value=value[0..value_length],
+    });
+}
+
+export fn moon_site_data_clear(panel: u64, id: [*c]const u8, session: bool, generation: u64) c_int {
+    return @intFromEnum(clearSiteStorage(panel,slice(id),session,generation));
+}
+
+fn clearSiteStorage(panel: u64, owner: []const u8, session: bool, generation: u64) sdk.SiteDataClearStart {
+    const group: sdk.SiteDataGroup = if (session) .session else .local;
+    if (site_clear_confirming or siteWriteView(panel,owner)==null or
+        !site_data.canMutate(panel,owner,group,generation)) return .unavailable;
+    var body: [640]u8 = undefined;
+    const message = std.fmt.bufPrintSentinel(&body,"清空 {s} 的{s}全部条目？\n此操作也会移除筛选结果之外的条目。",.{
+        site_data.status(panel,owner,true).origin,
+        if (session) "当前标签 Session Storage " else " Local Storage ",
+    },0) catch return .unavailable;
+    site_clear_confirming = true;
+    defer site_clear_confirming = false;
+    if (!native.moon_shell_confirm("清空站点存储？",message.ptr)) return .cancelled;
+    const view = siteWriteView(panel,owner) orelse return .unavailable;
+    return if (site_data.clear(view,panel,owner,group,generation)) .started else .unavailable;
 }
 
 export fn moon_site_data_result(source: u64, request: u64, snapshot: [*c]const u8, catalog: bool) void {

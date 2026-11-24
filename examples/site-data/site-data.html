@@ -33,6 +33,8 @@
   #editor { margin-top:16px; padding:14px; background:var(--surface); border:1px solid var(--line); border-radius:9px; }
   #editor-title { margin:0 0 8px; font-size:16px; overflow-wrap:anywhere; }
   #editor textarea { display:block; width:100%; resize:vertical; min-height:90px; font-family:Consolas,monospace; }
+  #editor-key { margin-bottom:9px; }
+  #key { width:100%; }
   #editor-actions { display:flex; gap:8px; margin-top:10px; }
   #feedback:empty { display:none; }
 </style>
@@ -51,11 +53,18 @@
       <button data-group="cacheStorage" aria-pressed="false">Cache Storage</button>
     </div>
     <input class="search" id="search" type="search" aria-label="按名称筛选" placeholder="按名称筛选">
+    <div id="storage-actions" hidden>
+      <button id="create">新增条目</button> <button id="clear-storage">清空此类</button>
+    </div>
   </div>
   <p id="status" role="status">正在连接浏览器…</p>
   <p id="feedback" role="status"></p>
   <form id="editor" aria-labelledby="editor-title" hidden>
     <h2 id="editor-title"></h2>
+    <div id="editor-key" hidden>
+      <label for="key" class="caption">名称</label>
+      <input id="key" maxlength="128" spellcheck="false">
+    </div>
     <div id="editor-value">
       <label for="new-value" class="caption">存储值</label>
       <textarea id="new-value" spellcheck="false"></textarea>
@@ -74,7 +83,9 @@
   const status = el('status'), details = el('details'), rows = el('results'), search = el('search');
   const buttons = [...document.querySelectorAll('[data-group]')];
   const editor=el('editor'), feedback=el('feedback'), newValue=el('new-value'), commit=el('commit');
+  const newKey=el('key'), storageActions=el('storage-actions'), clearStorage=el('clear-storage');
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
+  let clearing=false;
   const isCatalog=() => group==='indexedDB' || group==='cacheStorage';
   async function host(method,params={}) {
     const id='sites:' + ++seq;
@@ -85,11 +96,12 @@
   function closeEditor(refocus=false) {
     const previous=draft;
     draft=undefined;
+    newKey.value='';
     newValue.value='';
     editor.hidden=true;
     if (refocus && previous?.button.isConnected) previous.button.focus();
   }
-  function clear() { rows.replaceChildren(); rows.hidden=true; page=catalog=undefined; closeEditor(); }
+  function clear() { rows.replaceChildren(); rows.hidden=true; page=catalog=undefined; storageActions.hidden=true; closeEditor(); }
   function lengthHint() {
     const length=new TextEncoder().encode(newValue.value).length;
     el('bytes').textContent=length + ' / 1024 字节';
@@ -106,6 +118,7 @@
     if (current!==page || document.hidden || !button.isConnected) return;
     feedback.textContent='';
     el('editor-title').textContent=(remove?'删除条目「':'编辑条目「') + (item.name || '空名称') + '」';
+    el('editor-key').hidden=true;
     el('editor-value').hidden=remove;
     commit.textContent=remove?'确认删除':'保存';
     newValue.value=value;
@@ -114,20 +127,52 @@
     editor.hidden=false;
     (remove ? el('cancel') : newValue).focus();
   }
+  el('create').onclick=() => {
+    if (!page?.available || storageActions.hidden || clearing) return;
+    closeEditor();
+    feedback.textContent='';
+    el('editor-title').textContent='新增条目';
+    el('editor-key').hidden=el('editor-value').hidden=false;
+    commit.textContent='新增';
+    draft={target:{group,generation:page.generation},create:true,button:el('create')};
+    lengthHint();
+    editor.hidden=false;
+    newKey.focus();
+  };
+  clearStorage.onclick=async () => {
+    if (!page?.available || storageActions.hidden || clearing) return;
+    const current=page;
+    const currentGroup=group;
+    clearing=true;
+    clearStorage.disabled=el('create').disabled=true;
+    feedback.textContent='';
+    try {
+      const result=await host('siteData.clear',{group:currentGroup,generation:current.generation});
+      if (result==='started') { closeEditor(); await update(); }
+      else if (currentGroup===group) feedback.textContent=result==='cancelled' ? '已取消。' : '存储已变化，请刷新。';
+    } catch {
+      if (currentGroup===group) feedback.textContent='无法清空此类存储，请刷新后重试。';
+    } finally {
+      clearing=false;
+      renderStorageActions();
+      if (!storageActions.hidden && !clearStorage.disabled) clearStorage.focus();
+    }
+  };
   newValue.oninput=lengthHint;
   el('cancel').onclick=() => closeEditor(true);
   editor.onsubmit=async event => {
     event.preventDefault();
     if (!draft || commit.disabled) return;
-    const {target,remove,initial}=draft;
-    if (!remove && newValue.value===initial) {
+    const {target,remove,initial,create}=draft;
+    if (!create && !remove && newValue.value===initial) {
       closeEditor(true);
       feedback.textContent='没有修改。';
       return;
     }
     commit.disabled=true;
     try {
-      await host('siteData.update',{...target,value:remove ? null : newValue.value});
+      if (create) await host('siteData.create',{...target,key:newKey.value,value:newValue.value});
+      else await host('siteData.update',{...target,value:remove ? null : newValue.value});
       closeEditor();
       await update();
     } catch {
@@ -135,7 +180,13 @@
       feedback.textContent='操作未提交，请刷新后重试。';
     }
   };
+  function renderStorageActions() {
+    storageActions.hidden=!(writable && page?.available && (group==='local' || group==='session'));
+    el('create').disabled=clearing;
+    clearStorage.disabled=clearing || !(page?.entries.length || page?.more);
+  }
   function render() {
+    renderStorageActions();
     if (isCatalog()) { renderCatalog(); return; }
     rows.replaceChildren();
     if (!page?.available) {
@@ -249,7 +300,7 @@
     unavailable:'WebKit 暂时无法读取此网页的数据。'
   };
   const messages={
-    saved:'已保存。', removed:'已删除。', conflict:'网页已修改此条目，已刷新为当前值。',
+    saved:'已保存。', removed:'已删除。', cleared:'已清空此类存储。', conflict:'名称已存在或条目已变更，已刷新为当前值。',
     failed:'此网页的存储不可写，修改未保存。'
   };
   async function update() {

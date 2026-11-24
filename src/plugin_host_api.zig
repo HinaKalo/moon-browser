@@ -67,7 +67,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
-        .@"siteData.update" => .@"siteData.write",
+        .@"siteData.update", .@"siteData.create", .@"siteData.clear" => .@"siteData.write",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"window.toggleFullscreen" => .@"window.fullscreen",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
@@ -188,6 +188,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
+        .@"siteData.create", .@"siteData.clear" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
@@ -511,6 +512,26 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                 options.id,options.generation,if (options.value!=null) value.ptr else null,value.len);
             if (!ok) return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,true);
+        },
+        .@"siteData.create" => {
+            if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(sdk.SiteDataCreate,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (options.group==.cookies) return sdk.failure(output,id,.InvalidParams);
+            if (options.key.len>sdk.site_data_key_limit or options.value.len>sdk.site_data_value_limit)
+                return sdk.failure(output,id,.LimitExceeded);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (!native.moon_site_data_create(context.target_tab_id,owner.ptr,options.group==.session,
+                options.generation,options.key.ptr,options.key.len,options.value.ptr,options.value.len))
+                return sdk.failure(output,id,.NotFound);
+            return sdk.result(output,id,true);
+        },
+        .@"siteData.clear" => {
+            if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(sdk.SiteDataClear,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (options.group==.cookies) return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const outcome = native.moon_site_data_clear(context.target_tab_id,owner.ptr,options.group==.session,options.generation);
+            return sdk.result(output,id,std.enums.fromInt(sdk.SiteDataClearStart,outcome) orelse .unavailable);
         },
         .@"siteData.refresh", .@"siteData.openInspector" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);

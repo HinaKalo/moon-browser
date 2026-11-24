@@ -110,7 +110,7 @@ pub fn request(view: *native.MoonView) bool {
 }
 
 pub fn update(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteDataItem, replacement: ?[]const u8) bool {
-    if (!owns(tab,id) or received!=.ready or target.generation!=sequence or target.group==.cookies) return false;
+    if (!canMutate(tab,id,target.group,target.generation)) return false;
     if (replacement) |bytes| {
         if (bytes.len>sdk.site_data_value_limit or !std.unicode.utf8ValidateSlice(bytes)) return false;
     }
@@ -118,11 +118,39 @@ pub fn update(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.Site
     if (target.id>=group.entries.len) return false;
     const entry = group.entries[target.id];
     if (entry.shortened) return false;
+    return mutate(view,.{ .group=target.group,.key=entry.name,.previous=entry.value,.replacement=replacement });
+}
+
+pub fn canMutate(tab: u64, id: []const u8, group: sdk.SiteDataGroup, generation: u64) bool {
+    return owns(tab,id) and received==.ready and generation==sequence and group!=.cookies and resolve(group)!=null;
+}
+
+pub fn create(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteDataCreate) bool {
+    if (!canMutate(tab,id,target.group,target.generation)) return false;
+    if (target.key.len>sdk.site_data_key_limit or target.value.len>sdk.site_data_value_limit or
+        !std.unicode.utf8ValidateSlice(target.key) or !std.unicode.utf8ValidateSlice(target.value)) return false;
+    return mutate(view,.{ .group=target.group,.key=target.key,.replacement=target.value });
+}
+
+pub fn clear(view: *native.MoonView, tab: u64, id: []const u8, group: sdk.SiteDataGroup, generation: u64) bool {
+    if (!canMutate(tab,id,group,generation)) return false;
+    return mutate(view,.{ .group=group,.clear=true });
+}
+
+const Mutation = struct {
+    revision: []const u8 = "",
+    group: sdk.SiteDataGroup,
+    key: []const u8 = "",
+    previous: ?[]const u8 = null,
+    replacement: ?[]const u8 = null,
+    clear: bool = false,
+};
+
+fn mutate(view: *native.MoonView, change: Mutation) bool {
     var number: [24]u8 = undefined;
-    const bytes = std.json.Stringify.valueAlloc(allocator,.{
-        .revision=std.fmt.bufPrint(&number,"{d}",.{sequence}) catch unreachable,
-        .group=target.group, .key=entry.name, .previous=entry.value, .replacement=replacement,
-    },.{}) catch return false;
+    var payload_data = change;
+    payload_data.revision = std.fmt.bufPrint(&number,"{d}",.{sequence}) catch unreachable;
+    const bytes = std.json.Stringify.valueAlloc(allocator,payload_data,.{}) catch return false;
     defer allocator.free(bytes);
     const payload = allocator.dupeSentinel(u8,bytes,0) catch return false;
     defer allocator.free(payload);

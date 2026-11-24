@@ -55,6 +55,7 @@ class Fixture(BaseHTTPRequestHandler):
     change_site_data_entry = Event()
     site_data_entry_changed = Event()
     site_data_catalog_ready = Event()
+    site_data_local_preserved = Event()
     change_page_source = Event()
     change_page_save = Event()
     navigate_from_site_menu = Event()
@@ -147,6 +148,9 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"ok", "text/plain"
         elif path == "/site-data-catalog-ready":
             self.site_data_catalog_ready.set()
+            data, content_type = b"ok", "text/plain"
+        elif path == "/site-data-local-preserved":
+            self.site_data_local_preserved.set()
             data, content_type = b"ok", "text/plain"
         elif path == "/page-source-navigation":
             data, content_type = (b"change" if self.change_page_source.is_set() else b"wait"), "text/plain"
@@ -267,8 +271,12 @@ class Fixture(BaseHTTPRequestHandler):
                     'let changed=false;setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
                     'const action=await r.text();if(action==="change")location.replace("/page/site-data-changed");'
                     'if(action==="overwrite"&&!changed){changed=true;localStorage.setItem("moon-local","page-change");'
+                    'for(let i=0;i<40;i++)sessionStorage.setItem("bulk-"+i,"extra");'
                     'fetch("/site-data-entry-changed",{cache:"no-store"});}},400);</script>'
                 )
+            if name == "site-data-changed":
+                demo = ('<script>if(localStorage.getItem("月亮")==="新数据")'
+                        'fetch("/site-data-local-preserved",{cache:"no-store"});</script>')
             if name in ("popup-default", "popup-allow", "popup-private"):
                 stage = name.removeprefix("popup-")
                 demo = (
@@ -987,10 +995,38 @@ def run_win32(exe, base, root):
             'await changed("conflict",removed.generation);'
             'const final=await host("siteData.list",{group:"local"});'
             'if(await host("siteData.value",{...target,generation:final.generation})!=="page-change")throw Error("conflict wrote value");'
+            'const bulk=!!el("clear-storage");'
+            'if(bulk){document.querySelector("[data-group=local]").click();'
+            'await wait(()=>!el("storage-actions").hidden,"bulk toolbar");el("create").click();'
+            'el("key").value="月亮";el("new-value").value="新数据";el("editor").requestSubmit();'
+            'const added=await changed("saved",final.generation);'
+            'if(!await host("siteData.create",{group:"local",generation:added.generation,key:"月亮",value:"overwrite"}))throw Error("duplicate rejected before evaluation");'
+            'const conflict=await changed("conflict",added.generation);'
+            'const checked=await host("siteData.list",{group:"local"});const preserved=checked.entries.find(e=>e.name==="月亮");'
+            'if(!preserved||await host("siteData.value",{group:"local",id:preserved.id,generation:checked.generation})!=="新数据")throw Error("duplicate changed value");'
+            'if(!await host("siteData.create",{group:"session",generation:conflict.generation,key:"session-keep",value:"keep-value"}))throw Error("seed session");'
+            'const seeded=await changed("saved",conflict.generation);'
+            'const capped=await host("siteData.list",{group:"session"});if(!capped.more||capped.entries.length!==32)throw Error("entries beyond preview");'
+            'if(await host("siteData.clear",{group:"session",generation:added.generation})!=="unavailable")throw Error("stale generation");'
+            'document.querySelector("[data-group=session]").click();'
+            'await wait(()=>!el("storage-actions").hidden&&!el("clear-storage").disabled&&page.generation===seeded.generation,"bulk confirmation action");'
+            'el("search").value="bulk-1";el("search").dispatchEvent(new Event("input"));'
+            'await emit({clearStage:"cancel"});el("clear-storage").click();'
+            'await wait(()=>el("feedback").textContent==="已取消。","clear cancel")'
+            '.catch(()=>{throw Error("clear cancel feedback: "+el("feedback").textContent);});'
+            'if((await host("siteData.status")).generation!==seeded.generation)throw Error("clear after cancel");'
+            'await emit({clearStage:"confirm"});el("clear-storage").click();'
+            'const cleared=await changed("cleared",seeded.generation);'
+            'const empty=await host("siteData.list",{group:"session"});if(empty.entries.length||empty.more)throw Error("did not clear all session storage");'
+            'const retained=await host("siteData.list",{group:"local"});const kept=retained.entries.find(e=>e.name==="月亮");'
+            'if(!kept||await host("siteData.value",{group:"local",id:kept.id,generation:retained.generation})!=="新数据")throw Error("cleared different group");'
+            'await emit({ready:true,clearStage:"stale"});'
+            'if(await host("siteData.clear",{group:"local",generation:cleared.generation})!=="unavailable")throw Error("late confirmation");'
+            '}else{'
             'if(!await host("siteData.refresh"))throw Error("refresh request");'
             'await wait(async()=>{const data=await host("siteData.status");'
             'return data.state==="ready"&&data.generation>result.generation;},"new generation");'
-            'await emit({ready:true});'
+            'await emit({ready:true});}'
             'await wait(async()=>(await host("siteData.status")).state==="stale","navigation cleanup");'
             'await wait(()=>!document.querySelector("#results li"),"clear rows");'
             'let rejected=false;try{await host("siteData.value",{group:"cookies",id:0,generation:result.generation});}'
@@ -1812,10 +1848,34 @@ def run_win32(exe, base, root):
             signal = config.with_suffix(".signal")
             signal.write_text('{"conflictReady":true}',encoding="utf-8")
             signal.replace(config)
+            bulk_storage = 'id="clear-storage"' in (site_data.parent / "site-data.html").read_text(encoding="utf-8")
+            if bulk_storage:
+                def storage_dialog(stage):
+                    phase = wait_for(lambda: (current := read_settings(config)) and
+                                     (current.get("clearStage")==stage or current.get("error")) and current,
+                                     f"Storage cleanup did not reach {stage}",15)
+                    if phase.get("error"):
+                        raise RuntimeError(f"Site storage at {stage}: {phase['error']}")
+                    def confirmation():
+                        current = read_settings(config)
+                        if current.get("error"):
+                            raise RuntimeError(f"Site storage: {current['error']}")
+                        return owned_window("#32770","清空站点存储？")
+                    return wait_for(confirmation,f"Storage cleanup did not display confirmation for {stage}")
+
+                for stage,button in (("cancel",7),("confirm",6)):
+                    question = storage_dialog(stage)
+                    user.PostMessageW(question,0x0111,button,0)
+                    wait_for(lambda: not user.IsWindow(question),"The storage question did not close")
+                question = storage_dialog("stale")
+                Fixture.change_site_data_source.set()
+                if not Fixture.site_data_local_preserved.wait(10):
+                    raise RuntimeError("A navigation during confirmation did not retain the local data")
+                user.PostMessageW(question,0x0111,6,0)
             phase = wait_for(lambda: (current := read_settings(config)) and
-                             (current.get("ready") or current.get("error")) and current,
+                             (current.get("ready") or current.get("passed") or current.get("error")) and current,
                              "The site data contract reported no initial result",15)
-            if not phase.get("ready"):
+            if not (phase.get("ready") or phase.get("passed")):
                 raise RuntimeError(f"Site data fixture: {phase}")
             Fixture.change_site_data_source.set()
             result = wait_for(lambda: (current := read_settings(config)) and not current.get("ready") and current,
@@ -1825,6 +1885,8 @@ def run_win32(exe, base, root):
             if has_catalog:
                 print("site_catalog=ok indexeddb_version=ok cache_limit=ok isolated_apis=ok catalog_search=ok stale_catalog=ok",flush=True)
             print("site_data_system_plugin=ok isolated_storage=ok storage_edit=ok storage_remove=ok stale_write_rejected=ok conflict_preserved=ok site_data_navigation_cleanup=ok",flush=True)
+            if bulk_storage:
+                print("site_storage_create=ok duplicate_conflict=ok full_group_clear=ok other_group_kept=ok cancel=ok stale_confirmation=ok",flush=True)
         if page_source.exists():
             target = base + "/page/source-contract"
             set_control(edit,target)
