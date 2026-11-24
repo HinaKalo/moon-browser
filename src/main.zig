@@ -583,6 +583,48 @@ fn moveTab(from: usize, to: usize) void {
     active = tabIndex(active_id).?;
 }
 
+fn dropPosition(drop: *const native.MoonTabDrop) ?struct { from: usize, to: usize } {
+    if (stopped or drop.source == drop.anchor) return null;
+    const from = tabIndex(drop.source) orelse return null;
+    const anchor = tabIndex(drop.anchor) orelse return null;
+    if (tabs[from].pinned != tabs[anchor].pinned) return null;
+    const to = if (drop.after) anchor+@intFromBool(from>anchor) else anchor-@intFromBool(from<anchor);
+    return if (from==to) null else .{ .from=from, .to=to };
+}
+
+export fn moon_tab_drop_enabled() bool {
+    return !stopped and count>1 and plugins.tabDropProvider()!=null;
+}
+
+export fn moon_tab_drop_valid(drop: *const native.MoonTabDrop) bool {
+    return dropPosition(drop)!=null;
+}
+
+export fn moon_tab_drop_run(drop: *const native.MoonTabDrop) void {
+    const position = dropPosition(drop) orelse return;
+    if (!plugins.tabDropCommand(drop.*,snapshotFor(&tabs[position.from])))
+        native.moon_shell_toast("标签管理","排序插件暂不可用，请重试。");
+}
+
+export fn moon_tab_nudge(down: bool) void {
+    if (!moon_tab_drop_enabled()) return;
+    if ((down and active+1==count) or (!down and active==0)) return;
+    const anchor = if (down) active+1 else active-1;
+    moon_tab_drop_run(&.{ .source=tabs[active].id,.anchor=tabs[anchor].id,.after=down });
+}
+
+export fn moon_tabs_reorder(drop: *const native.MoonTabDrop) c_int {
+    const position = dropPosition(drop) orelse return @intFromEnum(sdk.TabReorder.unavailable);
+    const pinned = tabs[position.from].pinned;
+    moveTab(position.from,position.to);
+    if (pinned and !savePinnedTabs()) {
+        moveTab(position.to,position.from);
+        return @intFromEnum(sdk.TabReorder.saveFailed);
+    }
+    native.moon_shell_refresh_tab_order(tabs[active].id==drop.source);
+    return @intFromEnum(sdk.TabReorder.moved);
+}
+
 fn pinnedCount() usize {
     for (tabs[0..count],0..) |*entry,position| if (!entry.pinned) return position;
     return count;
@@ -1406,8 +1448,8 @@ export fn moon_plugin_link_action(index: usize, command: usize) c_uint {
     return if (plugins.linkAction(index,command)) |operation| @intFromEnum(operation) else 0;
 }
 
-export fn moon_plugin_link_only(index: usize, command: usize) bool {
-    return plugins.linkOnly(index,command);
+export fn moon_plugin_bound_action(index: usize, command: usize) bool {
+    return plugins.boundOnly(index,command);
 }
 
 export fn moon_link_menu_run(link: *const native.MoonLinkContext, index: usize, command: usize) void {
@@ -1480,7 +1522,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"privacy.clear" => "允许在确认后清除浏览数据",
         .@"taskManager.manage" => "允许查看和管理标签与进程",
         .@"ui.commands" => "允许添加菜单入口和注册快捷键",
-        .@"tabs.organize" => "允许固定标签和切换标签静音",
+        .@"tabs.organize" => "允许固定、静音和排序标签",
         .@"privacy.privateWindow" => "允许打开隐私浏览窗口",
         .@"tabs.manage" => "允许复制和批量关闭标签",
         .@"search.manage" => "允许调整浏览器搜索引擎",
@@ -1918,7 +1960,7 @@ fn actionAt(index: usize, home: bool) ?Action {
     for (0..plugins.count()) |plugin| {
         if (!plugins.isEnabled(plugin)) continue;
         for (0..plugins.actionCount(plugin)) |command| {
-            if (plugins.linkOnly(plugin,command)) continue;
+            if (plugins.boundOnly(plugin,command)) continue;
             if (remaining==0) return .{ .plugin = .{ .index=plugin,.command=command } };
             remaining -= 1;
         }
@@ -1931,7 +1973,7 @@ export fn moon_action_count(home: bool) usize {
     for (shell_actions) |action| actions += @intFromBool(shellActionVisible(action,home));
     for (0..plugins.count()) |plugin| {
         if (!plugins.isEnabled(plugin)) continue;
-        for (0..plugins.actionCount(plugin)) |command| actions += @intFromBool(!plugins.linkOnly(plugin,command));
+        for (0..plugins.actionCount(plugin)) |command| actions += @intFromBool(!plugins.boundOnly(plugin,command));
     }
     return actions;
 }

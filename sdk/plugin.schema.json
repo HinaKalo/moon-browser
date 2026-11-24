@@ -29,16 +29,23 @@
         "commands": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 8,
+          "maxItems": 12,
+          "contains": { "required": ["tabDrop"], "properties": { "tabDrop": { "const": true } } },
+          "minContains": 0,
+          "maxContains": 1,
           "items": {
             "type": "object",
             "additionalProperties": false,
             "required": ["id", "label"],
-            "if": { "required": ["linkMenu"] },
+            "if": { "anyOf": [
+              { "required": ["linkMenu"] },
+              { "required": ["tabDrop"], "properties": { "tabDrop": { "const": true } } }
+            ] },
             "then": { "not": { "anyOf": [
               { "required": ["menu"] },
               { "required": ["shortcut"] },
-              { "required": ["siteMenu"], "properties": { "siteMenu": { "const": true } } }
+              { "required": ["siteMenu"], "properties": { "siteMenu": { "const": true } } },
+              { "required": ["linkMenu", "tabDrop"], "properties": { "tabDrop": { "const": true } } }
             ] } },
             "properties": {
               "id": { "type": "string", "maxLength": 63, "pattern": "^[A-Za-z0-9_-](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?$" },
@@ -47,6 +54,7 @@
               "menu": { "enum": ["page", "library", "privacy", "developer", "extensions"] },
               "siteMenu": { "type": "boolean", "default": false },
               "linkMenu": { "enum": ["open", "copy", "bookmark"] },
+              "tabDrop": { "type": "boolean", "default": false },
               "shortcut": { "enum": ["Ctrl+H", "F11", "F12", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+Shift+T", "Ctrl+Shift+Delete", "Ctrl+Shift+M", "Ctrl+Shift+N", "Ctrl+U"] }
             }
           }

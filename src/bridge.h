@@ -210,9 +210,16 @@ typedef struct { uint64_t tab_id, navigation; char url[4096], label[512]; } Moon
 bool moon_link_capture(MoonLinkContext *link, uint64_t tab);
 bool moon_link_current(const MoonLinkContext *link);
 unsigned moon_plugin_link_action(size_t index, size_t command);
-bool moon_plugin_link_only(size_t index, size_t command);
+bool moon_plugin_bound_action(size_t index, size_t command);
 void moon_link_menu_run(const MoonLinkContext *link, size_t index, size_t command);
 unsigned moon_link_open(const MoonLinkContext *link);
+typedef struct { uint64_t source, anchor; bool after; } MoonTabDrop;
+bool moon_tab_drop_enabled(void);
+bool moon_tab_drop_valid(const MoonTabDrop *drop);
+void moon_tab_drop_run(const MoonTabDrop *drop);
+void moon_tab_nudge(bool down);
+int moon_tabs_reorder(const MoonTabDrop *drop);
+void moon_shell_refresh_tab_order(bool reveal_active);
 bool moon_plugin_key(unsigned modifiers, unsigned key, bool repeated);
 bool moon_plugin_global_key(unsigned id, unsigned modifiers, unsigned key);
 bool moon_shell_register_hotkey(unsigned id, unsigned modifiers, unsigned key);

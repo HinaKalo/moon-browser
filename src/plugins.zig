@@ -69,6 +69,7 @@ const Task = struct {
     grants: Permissions,
     rpc: ?*Rpc = null,
     link: ?*api.LinkInvocation = null,
+    drop: ?api.TabDropInvocation = null,
     outcome: Outcome = .failed,
     message: [512:0]u8 = @splat(0),
     toast: bool = false,
@@ -82,8 +83,12 @@ const Command = struct {
     menu_group: ?sdk.MenuGroup = null,
     site_menu: bool = false,
     link_menu: ?sdk.LinkMenuAction = null,
+    tab_drop: bool = false,
     menu_override: MenuOverride = .default,
     user_shortcut: ?Hotkey = null,
+    fn bound(self: *const Command) bool {
+        return self.link_menu!=null or self.tab_drop;
+    }
 };
 const Hotkey = struct {
     action: usize, mods: c_uint, key: c_uint, scope: sdk.ShortcutScope,
@@ -110,6 +115,7 @@ const Plugin = struct {
     work: ?*Task = null,
     queued_change: bool = false,
     pending_shortcut: ?PendingShortcut = null,
+    pending_drop: ?native.MoonTabDrop = null,
     hotkey: ?Hotkey = null,
 };
 
@@ -166,9 +172,14 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     if (!copy(&plugin.id, id) or !copy(&plugin.label, name) or !copy(&plugin.executable, executable)) return;
     if (!copy(&plugin.settings_page,settings_page orelse "")) return;
     if (!copy(&plugin.network_rules,network_rules orelse "")) return;
+    var has_tab_drop = false;
     for (commands, 0..) |item, index| {
         if (!validComponent(item.id) or item.label.len == 0) return;
-        if (item.linkMenu != null and (item.shortcut != null or item.siteMenu or item.menu != null)) return;
+        if ((item.linkMenu != null or item.tabDrop) and (item.shortcut != null or item.siteMenu or item.menu != null)) return;
+        if (item.tabDrop) {
+            if (has_tab_drop or item.linkMenu!=null or !requests.contains(.@"tabs.organize")) return;
+            has_tab_drop = true;
+        }
         for (commands[0..index]) |prior| if (std.mem.eql(u8, prior.id, item.id)) return;
         plugin.actions[index] = .{};
         plugin.actions[index].interactive = item.interactive;
@@ -176,6 +187,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         plugin.actions[index].menu_group = item.menu;
         plugin.actions[index].site_menu = item.siteMenu;
         plugin.actions[index].link_menu = item.linkMenu;
+        plugin.actions[index].tab_drop = item.tabDrop;
         if (!copy(&plugin.actions[index].id, item.id) or !copy(&plugin.actions[index].label, item.label)) return;
     }
     if (bundled) {
@@ -320,13 +332,13 @@ pub fn init(app: []const u8, profile: []const u8) void {
             for (grant.menu_items) |id| {
                 if (menuSize()==menu_limit) break;
                 if (findAction(plugin,id)) |index| {
-                    if (plugin.actions[index].link_menu==null) plugin.actions[index].menu_override = .pinned;
+                    if (!plugin.actions[index].bound()) plugin.actions[index].menu_override = .pinned;
                 }
             }
             if (grant.hotkey) |saved_key| {
                 if (findAction(plugin,saved_key.id)) |index| {
                     if (parseHotkey(index,saved_key.shortcut,saved_key.scope)) |key| {
-                        if (plugin.actions[index].link_menu==null and !hotkeyReserved(key) and !hotkeyConflict(key,plugin)) plugin.hotkey = key;
+                        if (!plugin.actions[index].bound() and !hotkeyReserved(key) and !hotkeyConflict(key,plugin)) plugin.hotkey = key;
                     }
                 }
             }
@@ -435,7 +447,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"privacy.clear" => "此插件可以请求清除所选浏览数据。浏览器会在删除前单独确认。",
                 .@"taskManager.manage" => "此插件可查看标签标题和浏览器进程内存，以及切换标签和卸载可回收的后台标签。",
                 .@"ui.commands" => "此插件可为已声明的命令添加菜单入口，并设置一个快捷键。链接操作由右键菜单发起，全局快捷键仍需单独确认。",
-                .@"tabs.organize" => "此插件可固定或取消固定触发命令的标签，也可切换该标签的音频静音。",
+                .@"tabs.organize" => "此插件可固定或取消固定触发命令的标签，也可切换标签静音或响应用户的标签排序操作。",
                 .@"tabs.manage" => "此插件可复制触发命令的标签或将网址写入剪贴板，也可关闭未固定且未受保护的其他标签。",
                 .@"search.manage" => "此插件可查看和修改默认搜索引擎、搜索网址和关键词。修改会影响之后主动提交的搜索。",
                 .@"tabs.session.manage" => "此插件可恢复上次正常退出时的普通网页、修改启动选项或清除已保存的会话。",
@@ -480,6 +492,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
     _ = plugin.epoch.fetchAdd(1, .acq_rel);
     plugin.queued_change = false;
     plugin.pending_shortcut = null;
+    plugin.pending_drop = null;
     return .saved;
 }
 
@@ -618,6 +631,25 @@ pub fn linkOnly(index: usize, command_index: usize) bool {
     return all[index].actions[command_index].link_menu != null;
 }
 
+pub fn tabDropOnly(index: usize, command_index: usize) bool {
+    return all[index].actions[command_index].tab_drop;
+}
+
+pub fn boundOnly(index: usize, command_index: usize) bool {
+    return all[index].actions[command_index].bound();
+}
+
+pub fn tabDropProvider() ?struct { plugin: usize, command: usize } {
+    for (all[0..len],0..) |*plugin,index| {
+        if (!plugin.enabled or !plugin.grants.contains(.@"tabs.organize") or
+            (!plugin.bundled and !canContribute(plugin))) continue;
+        for (plugin.actions[0..plugin.action_count],0..) |entry,command_index| {
+            if (entry.tab_drop) return .{ .plugin=index,.command=command_index };
+        }
+    }
+    return null;
+}
+
 pub fn linkAction(index: usize, command_index: usize) ?sdk.LinkMenuAction {
     if (index>=len) return null;
     const plugin = &all[index];
@@ -633,7 +665,7 @@ pub fn setMenu(owner: []const u8, id: []const u8, add: bool) sdk.UiRegistration 
     const plugin = &all[index];
     const command_index = findAction(plugin,id) orelse return .notFound;
     const entry = &plugin.actions[command_index];
-    if (entry.link_menu!=null) return .unavailable;
+    if (entry.bound()) return .unavailable;
     const before = entry.menu_override;
     const after: MenuOverride = if (add) .pinned else if (entry.menu_group!=null) .hidden else .default;
     if (before==after) return .saved;
@@ -706,7 +738,7 @@ fn loadUserShortcuts() void {
     for (saved.value) |item| {
         const plugin = &all[indexOf(item.plugin) orelse continue];
         const action_index = findAction(plugin,item.command) orelse continue;
-        if (plugin.actions[action_index].user_shortcut != null or plugin.actions[action_index].link_menu!=null) continue;
+        if (plugin.actions[action_index].user_shortcut != null or plugin.actions[action_index].bound()) continue;
         const key = parseHotkey(action_index,item.shortcut,.browser) orelse continue;
         if (hotkeyReserved(key) or userShortcutConflict(plugin,key)) continue;
         plugin.actions[action_index].user_shortcut = key;
@@ -736,7 +768,7 @@ pub fn setUserShortcut(index: usize, id: []const u8, text: ?[]const u8) sdk.UiRe
     if (!plugin.enabled) return .unavailable;
     const action_index = findAction(plugin,id) orelse return .notFound;
     const entry = &plugin.actions[action_index];
-    if (entry.link_menu!=null) return .unavailable;
+    if (entry.bound()) return .unavailable;
     const previous = entry.user_shortcut;
     const key: ?Hotkey = if (text) |value| blk: {
         const candidate = parseHotkey(action_index,value,.browser) orelse return .invalidShortcut;
@@ -757,7 +789,7 @@ pub fn setHotkey(owner: []const u8, id: []const u8, text: ?[]const u8, scope: sd
     const index = contributor(owner) orelse return .unavailable;
     const plugin = &all[index];
     const command_index = findAction(plugin,id) orelse return .notFound;
-    if (plugin.actions[command_index].link_menu!=null) return .unavailable;
+    if (plugin.actions[command_index].bound()) return .unavailable;
     const previous = plugin.hotkey;
     const old_slot = if (previous) |key| key.slot else null;
     var replacement: ?Hotkey = null;
@@ -929,14 +961,15 @@ pub fn readSettingsPage(address: []const u8, body: []u8) ?[:0]const u8 {
 }
 
 fn launch(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot) bool {
-    return launchBound(index,command_index,trigger,snapshot,null);
+    return launchBound(index,command_index,trigger,snapshot,null,null);
 }
 
-fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot, link: ?*api.LinkInvocation) bool {
+fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot, link: ?*api.LinkInvocation,
+    drop: ?api.TabDropInvocation) bool {
     if (index >= len) return false;
     const plugin = &all[index];
     if (!plugin.enabled or plugin.work != null or command_index >= plugin.action_count) return false;
-    if (linkOnly(index,command_index) != (link!=null)) return false;
+    if (linkOnly(index,command_index) != (link!=null) or tabDropOnly(index,command_index) != (drop!=null)) return false;
     const task = allocator.create(Task) catch return false;
     const rpc = if (plugin.protocol == .v2) allocator.create(Rpc) catch {
         allocator.destroy(task);
@@ -960,6 +993,7 @@ fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?
         .grants = plugin.grants,
         .rpc = rpc,
         .link = link,
+        .drop = drop,
     };
     plugin.work = task;
     if (!native.moon_plugin_thread(task)) {
@@ -975,7 +1009,17 @@ pub fn linkCommand(index: usize, command_index: usize, snapshot: ?Snapshot, cont
     const operation = linkAction(index,command_index) orelse return;
     const invocation = allocator.create(api.LinkInvocation) catch return;
     invocation.* = .{ .context=context.*, .operation=operation };
-    if (!launchBound(index,command_index,.command,snapshot,invocation)) allocator.destroy(invocation);
+    if (!launchBound(index,command_index,.command,snapshot,invocation,null)) allocator.destroy(invocation);
+}
+
+pub fn tabDropCommand(drop: native.MoonTabDrop, snapshot: Snapshot) bool {
+    const provider = tabDropProvider() orelse return false;
+    const plugin = &all[provider.plugin];
+    if (plugin.work!=null) {
+        plugin.pending_drop = drop;
+        return true;
+    }
+    return launchBound(provider.plugin,provider.command,.command,snapshot,null,.{ .context=drop });
 }
 
 pub fn command(index: usize, command_index: usize, snapshot: ?Snapshot) void {
@@ -1021,6 +1065,7 @@ fn serviceRpc(task: *Task, rpc: *Rpc) void {
         .consent = .{ .context = task, .valid = invocationActive },
         .user_command = task.trigger == .command,
         .link = task.link,
+        .drop = if (task.drop) |*drop| drop else null,
     }) catch {
         rpc.size = 0;
         return;
@@ -1053,6 +1098,11 @@ pub fn tick(snapshot: ?Snapshot, smoking: bool) void {
         if (task.rpc) |rpc| allocator.destroy(rpc);
         if (task.link) |link| allocator.destroy(link);
         allocator.destroy(task);
+        if (plugin.pending_drop) |drop| {
+            plugin.pending_drop = null;
+            native.moon_tab_drop_run(&drop);
+            if (plugin.work!=null) continue;
+        }
         if (plugin.pending_shortcut) |pending| {
             plugin.pending_shortcut = null;
             if (snapshot) |tab| {

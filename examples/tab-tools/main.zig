@@ -12,7 +12,7 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params != .object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
-    const Action = enum { pin, mute, duplicate, copyAddress, closeOthers, closeBelow, openLink, copyLink };
+    const Action = enum { pin, mute, duplicate, copyAddress, closeOthers, closeBelow, openLink, copyLink, reorder };
     const operation = std.meta.stringToEnum(Action,action) orelse return error.InvalidCommand;
     const message = switch (operation) {
         .pin => try organize(&client,.@"tabs.togglePinned"),
@@ -23,8 +23,19 @@ pub fn main() !void {
         .closeBelow => try close(&client,.below),
         .openLink => try link(&client,.@"tabs.openLink"),
         .copyLink => try link(&client,.@"tabs.copyLink"),
+        .reorder => try reorder(&client),
     };
     try client.reply(id, sdk.CommandResult{ .message = message, .toast = true });
+}
+
+fn reorder(client: *sdk.Client) !?[]const u8 {
+    const response = try client.call(.@"tabs.reorder",.{});
+    const result = std.meta.stringToEnum(sdk.TabReorder,sdk.string(response.get("result")) orelse "") orelse .unavailable;
+    return switch (result) {
+        .moved => null,
+        .saveFailed => "无法保存固定标签顺序。请检查浏览器配置目录。",
+        .unavailable => "标签顺序已变化，请重试。",
+    };
 }
 
 fn link(client: *sdk.Client, method: sdk.Method) !?[]const u8 {

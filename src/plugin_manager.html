@@ -290,7 +290,8 @@
         if (command.shortcut) tools.append(make('kbd', command.shortcut));
         if (command.globalShortcut) tools.append(make('kbd', '全局 ' + command.globalShortcut));
         if (command.linkMenu) tools.append(make('small', '链接右键菜单'));
-        if (data.enabled && !command.linkMenu) {
+        if (command.tabDrop) tools.append(make('small', '标签排序'));
+        if (data.enabled && !command.linkMenu && !command.tabDrop) {
           const trigger = make('button', command.shortcut ? '修改' : '添加', 'action');
           trigger.id = 'shortcut-' + command.id;
           trigger.setAttribute('aria-label', '设置「' + command.label + '」的浏览器快捷键');

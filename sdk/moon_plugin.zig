@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const api_version = 2;
 pub const frame_limit = 32 * 1024;
-pub const command_limit = 8;
+pub const command_limit = 12;
 pub const request_limit = 24;
 pub const lua_source_limit = 16 * 1024;
 pub const rpc_version = "2.0";
@@ -54,6 +54,7 @@ pub const Command = struct {
     menu: ?MenuGroup = null,
     siteMenu: bool = false,
     linkMenu: ?LinkMenuAction = null,
+    tabDrop: bool = false,
 };
 pub const ShortcutScope = enum { browser, global };
 pub const RegisteredShortcut = struct { id: []const u8, shortcut: []const u8, scope: ShortcutScope = .browser };
@@ -106,6 +107,7 @@ pub const TabOrganization = enum(c_int) {
 };
 pub const TabCloseScope = enum { others, below };
 pub const TabCloseResult = struct { closed: u32, kept: u32 };
+pub const TabReorder = enum(c_int) { moved, unavailable, saveFailed };
 pub const search_custom_limit = 5;
 pub const SearchEngine = struct { alias: []const u8, name: []const u8, template: []const u8 };
 pub const SearchConfig = struct { preferred: []const u8 = "g", custom: []const SearchEngine = &.{} };
@@ -266,6 +268,7 @@ pub const Method = enum {
     @"tabs.openLink",
     @"tabs.copyLink",
     @"tabs.closeGroup",
+    @"tabs.reorder",
     @"privacy.clear",
     @"privacy.status",
     @"privacy.openPrivateWindow",

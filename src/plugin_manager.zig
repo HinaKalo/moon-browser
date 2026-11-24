@@ -25,6 +25,7 @@ const Command = struct {
     custom: bool,
     globalShortcut: ?[]const u8,
     linkMenu: bool,
+    tabDrop: bool,
 };
 
 pub fn reply(allocator: std.mem.Allocator, output: []u8, data: anytype) bool {
@@ -74,6 +75,7 @@ pub fn details(allocator: std.mem.Allocator, output: []u8, index: usize) bool {
             .custom = user != null,
             .globalShortcut = if (global) |key| std.mem.span(key) else null,
             .linkMenu = plugins.linkOnly(index,i),
+            .tabDrop = plugins.tabDropOnly(index,i),
         };
     }
     return reply(allocator, output, .{

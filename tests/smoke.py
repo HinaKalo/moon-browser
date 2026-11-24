@@ -296,7 +296,7 @@ class Fixture(BaseHTTPRequestHandler):
                 )
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
                         "pinned-first", "pinned-second", "session-first", "session-second", "session-pinned", "session-private",
-                        "session-external"):
+                        "session-external", "order-last"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "chrome-window":
                 demo = (
@@ -1309,7 +1309,7 @@ def run_win32(exe, base, root):
 
         def library_result(plugin):
             config = profile / f'extension-{sha256(plugin.encode()).hexdigest()}.json'
-            result = wait_for(lambda: config.exists() and json.loads(config.read_text(encoding="utf-8")),
+            result = wait_for(lambda: read_settings(config),
                               f"No contract result from {plugin}",15)
             if not result.get("passed"):
                 raise RuntimeError(f"{plugin}: {result.get('error')}")
@@ -1355,7 +1355,7 @@ def run_win32(exe, base, root):
             set_control(edit, extension_address)
             user.PostMessageW(edit, 0x0100, 0x0D, 1)
             config = profile / f'extension-{sha256(b"moon.settings-fixture").hexdigest()}.json'
-            wait_for(lambda: config.exists() and json.loads(config.read_text(encoding="utf-8")).get("passed"),
+            wait_for(lambda: read_settings(config).get("passed"),
                      "Extension page did not complete its scoped settings round trip", 15)
             foreign = profile / f'extension-{sha256(b"moon.lua-manager").hexdigest()}.json'
             if foreign.exists() or Fixture.seen_extension_network.is_set():
@@ -2609,6 +2609,74 @@ def run_win32(exe, base, root):
             click(px(110),px(185))
             wait_for(lambda: read_address()==second,"The protected edited tab was not retained")
             print("tab_batch_tools=ok duplicate_target=ok duplicate_history=ok close_below=ok pinned_kept=ok edited_tab_kept=ok",flush=True)
+
+            def sidebar_point(y):
+                return ((px(y)&0xFFFF)<<16) | (px(110)&0xFFFF)
+
+            def drag_tab(source, anchor, *, after=False, cancel=False):
+                start = sidebar_point(148+37*source)
+                destination = sidebar_point((163 if after else 143)+37*anchor)
+                user.PostMessageW(frame,0x0201,1,start)  # WM_LBUTTONDOWN
+                user.PostMessageW(frame,0x0200,1,destination)  # WM_MOUSEMOVE
+                if cancel:
+                    user.PostMessageW(frame,0x0100,0x1B,1)  # Escape
+                user.PostMessageW(frame,0x0202,0,destination)  # WM_LBUTTONUP
+
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Opening a tab for drag sorting failed")
+            last = closed_page("order-last")
+            drag_tab(2,3,after=True)
+            sleep(0.35)
+            if read_address()!=last:
+                raise RuntimeError("Dragging a background tab activated it")
+            click(px(110),px(148+37*3))
+            wait_for(lambda: read_address()==keep,"A drag did not move the background tab after its target")
+            drag_tab(3,2,cancel=True)
+            sleep(0.35)
+            if read_address()!=keep:
+                raise RuntimeError("Escape followed by release unexpectedly selected another tab")
+            click(px(110),px(148+37*2))
+            wait_for(lambda: read_address()==last,"Escape did not cancel the pending reorder")
+            drag_tab(0,2,after=True)
+            sleep(0.35)
+            if "取消固定标签" not in tab_menu(0) or read_address()!=last:
+                raise RuntimeError("A drag moved a pinned tab across partitions")
+            tab_menu(3,"固定标签")
+            wait_for(lambda: [item["url"] for item in read_settings(pins)]==[second,keep],
+                     "Could not add the second fixed tab")
+            drag_tab(1,0)
+            wait_for(lambda: [item["url"] for item in read_settings(pins)]==[keep,second],
+                     "Dragging fixed tabs did not write the new pin order")
+            if read_address()!=last:
+                raise RuntimeError("Reordering fixed tabs changed the active page")
+
+            proc,frame = restart_tabs()
+            edit = user.GetDlgItem(frame,1001)
+            home = user.GetDlgItem(frame,1002)
+            wait_for(lambda: user.IsWindowVisible(home),"Restarted shell did not show its new-tab page")
+            click(px(110),px(148))
+            wait_for(lambda: read_address()==keep,"Restart did not restore the new order of fixed tabs")
+            bounds = wt.RECT()
+            user.GetClientRect(frame,ctypes.byref(bounds))
+            capacity = (round(bounds.bottom*96/dpi)-134-48-6)//37
+            for _ in range(capacity+4):
+                click(px(253),px(105))
+            wait_for(lambda: user.IsWindowVisible(home),"Could not open enough tabs to scroll the sidebar")
+            closed_page("order-last")
+            user.PostMessageW(frame,0x0201,1,sidebar_point(148+37*(capacity-1)))
+            user.PostMessageW(frame,0x0200,1,sidebar_point(138))
+            sleep(1.45)
+            user.PostMessageW(frame,0x0200,1,sidebar_point(143+37*2))
+            user.PostMessageW(frame,0x0202,0,sidebar_point(143+37*2))
+            sleep(0.35)
+            click(px(110),px(148))
+            wait_for(lambda: read_address()==keep,"Dragging near the top edge did not scroll to the pinned rows")
+            click(px(110),px(148+37*2))
+            wait_for(lambda: read_address()==last,"Dropping after auto-scroll did not use the visible target")
+            proc,frame = restart_tabs()
+            edit = user.GetDlgItem(frame,1001)
+            home = user.GetDlgItem(frame,1002)
+            print("tab_drag_system_plugin=ok background_target=ok escape_cancel=ok edge_scroll=ok pinned_boundary=ok pinned_order_restart=ok",flush=True)
         if private_window.exists():
             private_title = "Moon Browser · 隐私浏览"
             kernel = ctypes.WinDLL("kernel32",use_last_error=True)

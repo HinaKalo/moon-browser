@@ -19,6 +19,7 @@ const session = @import("session.zig");
 pub const Permissions = std.EnumSet(sdk.Permission);
 pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false, navigation: u64 = 0 };
 pub const LinkInvocation = struct { context: native.MoonLinkContext, operation: sdk.LinkMenuAction, consumed: bool = false };
+pub const TabDropInvocation = struct { context: native.MoonTabDrop, consumed: bool = false };
 pub const Context = struct {
     grants: Permissions,
     plugin_id: []const u8,
@@ -29,6 +30,7 @@ pub const Context = struct {
     from_page: bool = false,
     user_command: bool = false,
     link: ?*LinkInvocation = null,
+    drop: ?*TabDropInvocation = null,
 };
 
 fn applyLink(link: *LinkInvocation) sdk.LinkResult {
@@ -68,7 +70,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"window.toggleFullscreen" => .@"window.fullscreen",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
-        .@"tabs.togglePinned", .@"tabs.toggleMuted" => .@"tabs.organize",
+        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.reorder" => .@"tabs.organize",
         .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup" => .@"tabs.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
@@ -530,6 +532,15 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             };
             const outcome = native.moon_tabs_organize(context.target_tab_id,@intFromEnum(operation));
             return sdk.result(output,id,@as(sdk.TabOrganization,@enumFromInt(outcome)));
+        },
+        .@"tabs.reorder" => {
+            const drop = context.drop orelse return sdk.failure(output,id,.PermissionDenied);
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+            if (drop.consumed) return sdk.result(output,id,sdk.TabReorder.unavailable);
+            drop.consumed = true;
+            const outcome = native.moon_tabs_reorder(&drop.context);
+            return sdk.result(output,id,std.enums.fromInt(sdk.TabReorder,outcome) orelse .unavailable);
         },
         .@"tabs.closeGroup" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

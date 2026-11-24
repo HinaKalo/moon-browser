@@ -38,6 +38,15 @@ static ULONG_PTR gdiplus;
 static bool force_fallback, quitting, private_window;
 static bool show_home, focus_mode, tracking_mouse;
 static POINT hover = {-1,-1};
+static struct {
+    uint64_t source;
+    POINT start, pointer;
+    MoonTabDrop target;
+    int guide;
+    bool active;
+} tab_drag;
+static bool ignore_tab_release;
+static void cancel_tab_drag(void);
 
 typedef struct Theme {
     unsigned frame, panel, field, hover, line, outline, text, muted, accent, soft, danger, loading;
@@ -53,7 +62,7 @@ static const Theme dark = {
 static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
-enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, FULLSCREEN_HINT_TIMER = 3,
+enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, FULLSCREEN_HINT_TIMER = 3, TAB_DRAG_TIMER = 4,
        ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
 enum { MENU_ADD = 11, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_MANAGE_PLUGINS,
        MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 24, MENU_PLUGIN_STRIDE = 32,
@@ -446,7 +455,8 @@ static void paint_sidebar(Canvas c,int height) {
         int y=TAB_START+(int)i*ROW;
         bool selected=tab==active, hot=pointed(x,y,w,ROW-3);
         unsigned flags=moon_tab_flags(tab);
-        if (selected || hot) fill(c,x,y,w,ROW-3,selected?theme->panel:theme->hover,7);
+        const bool dragged=tab_drag.active && moon_tab_id(tab)==tab_drag.source;
+        if (selected || hot || dragged) fill(c,x,y,w,ROW-3,dragged?theme->soft:selected?theme->panel:theme->hover,7);
         if (selected) fill(c,x,y+6,3,ROW-15,theme->accent,2);
         unsigned tone=(flags&MOON_TAB_FAILED)?theme->danger:(flags&MOON_TAB_DORMANT)?theme->muted:(flags&MOON_TAB_LOADING)?theme->loading:theme->accent;
         fill(c,x+11,y+8,18,18,selected?theme->soft:theme->field,5);
@@ -464,6 +474,7 @@ static void paint_sidebar(Canvas c,int height) {
             text_at(c,L"\xd83d\xdd07",x+w-51,y+3,20,ROW-9,theme->muted,true);
         if ((selected || hot) && !(flags&MOON_TAB_PINNED)) icon_button(c,L"\xd7",x+w-29,y+3,25,ROW-9,true);
     }
+    if (tab_drag.target.anchor) fill(c,x+4,tab_drag.guide,w-8,3,theme->accent,2);
     if (count>capacity) {
         const int track=height-TAB_START-FOOTER-9, thumb=track*(int)capacity/(int)count;
         if (track>0) fill(c,SIDEBAR+3,TAB_START+track*(int)first_tab/(int)count,2,thumb>12?thumb:12,theme->outline,1);
@@ -617,7 +628,7 @@ static void layout(void) {
         D2D1_SIZE_U size = {(UINT32)r.right,(UINT32)r.bottom};
         if (FAILED(ID2D1HwndRenderTarget_Resize(target,&size))) release_target();
     }
-    clamp_tab_strip(true);
+    clamp_tab_strip(!tab_drag.active);
     InvalidateRect(frame,NULL,FALSE);
 }
 static bool fit_fullscreen(HMONITOR monitor) {
@@ -650,6 +661,7 @@ int moon_shell_toggle_fullscreen(void) {
         return 0;
     }
     if (!frame || show_home || IsIconic(frame)) return -1;
+    cancel_tab_drag();
     fullscreen_placement=(WINDOWPLACEMENT){.length=sizeof(fullscreen_placement)};
     if (!GetWindowPlacement(frame,&fullscreen_placement)) return -1;
     HMONITOR monitor=MonitorFromWindow(frame,MONITOR_DEFAULTTONEAREST);
@@ -716,6 +728,7 @@ void moon_shell_show_home(bool visible) {
     InvalidateRect(frame,NULL,FALSE);
 }
 void moon_shell_toggle_sidebar(void) {
+    cancel_tab_drag();
     focus_mode=!focus_mode;
     layout();
 }
@@ -742,7 +755,11 @@ void moon_shell_toggle_theme(void) {
     refresh_theme();
     moon_engine_refresh_extension_theme();
 }
-void moon_shell_refresh(void) { clamp_tab_strip(true); InvalidateRect(frame,NULL,FALSE); }
+void moon_shell_refresh_tab_order(bool reveal_active) {
+    clamp_tab_strip(reveal_active);
+    InvalidateRect(frame,NULL,FALSE);
+}
+void moon_shell_refresh(void) { moon_shell_refresh_tab_order(!tab_drag.active); }
 void moon_quit(int status) {
     if (quitting) return;
     quitting = true;
@@ -901,7 +918,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
                 AppendMenuW(sub,MF_STRING|(flags&2?MF_CHECKED:0)|(enabled?0:MF_GRAYED),id+2+j,action);
         }
         for(size_t j=0;j<moon_plugin_action_count(i);++j)
-            if (!moon_plugin_link_only(i,j)) plugin_menu_item(sub,i,j,enabled);
+            if (!moon_plugin_bound_action(i,j)) plugin_menu_item(sub,i,j,enabled);
         AppendMenuW(extensions,MF_POPUP,(UINT_PTR)sub,name);
     }
     MapWindowPoints(hwnd,NULL,(POINT *)&button,2);
@@ -1074,6 +1091,84 @@ static void tab_context_menu(HWND hwnd, POINT screen) {
     DestroyMenu(popup);
     if (command) moon_command((int)command,id,NULL);
 }
+static uint64_t tab_drag_row(POINT point) {
+    if (point.x<12 || point.x>=SIDEBAR+4 || point.y<TAB_START) return 0;
+    size_t row=(size_t)(point.y-TAB_START)/ROW;
+    return row<tab_capacity()?moon_tab_id(first_tab+row):0;
+}
+
+static void start_tab_drag(POINT pixel) {
+    ignore_tab_release=false;
+    if (fullscreen || focus_mode || !moon_tab_drop_enabled()) return;
+    POINT point={MulDiv(pixel.x,96,dpi),MulDiv(pixel.y,96,dpi)};
+    const uint64_t source=tab_drag_row(point);
+    if (!source) return;
+    const size_t index=first_tab+(size_t)(point.y-TAB_START)/ROW;
+    if (point.x>=SIDEBAR-26 && !(moon_tab_flags(index)&MOON_TAB_PINNED)) return;
+    SetCapture(frame);
+    if (GetCapture()!=frame) return;
+    tab_drag.source=source;
+    tab_drag.start=pixel;
+    tab_drag.pointer=point;
+}
+
+static void update_tab_drag_target(void) {
+    POINT point=tab_drag.pointer;
+    tab_drag.target=(MoonTabDrop){0};
+    const size_t count=moon_tab_count(), capacity=tab_capacity();
+    size_t visible=count>first_tab?count-first_tab:0;
+    if (visible>capacity) visible=capacity;
+    if (visible && point.y>=TAB_START-5 && point.y<client_height()-FOOTER) {
+        const int end=TAB_START+(int)visible*ROW;
+        if (point.y<TAB_START) point.y=TAB_START;
+        if (point.y>=end) point.y=end-1;
+        const int row=(point.y-TAB_START)/ROW;
+        const int top=TAB_START+row*ROW;
+        MoonTabDrop drop={.source=tab_drag.source,.anchor=tab_drag_row(point),.after=point.y-top>=ROW/2};
+        if (drop.anchor && moon_tab_drop_valid(&drop)) {
+            tab_drag.target=drop;
+            tab_drag.guide=top+(drop.after?ROW-3:-3);
+        }
+    }
+    SetCursor(LoadCursorW(NULL,tab_drag.target.anchor?IDC_SIZENS:IDC_NO));
+}
+
+static void track_tab_drag(POINT pixel, POINT point) {
+    tab_drag.pointer=point;
+    if (!tab_drag.active) {
+        if (abs(pixel.x-tab_drag.start.x)<GetSystemMetricsForDpi(SM_CXDRAG,dpi) &&
+            abs(pixel.y-tab_drag.start.y)<GetSystemMetricsForDpi(SM_CYDRAG,dpi)) return;
+        tab_drag.active=true;
+        SetTimer(frame,TAB_DRAG_TIMER,110,NULL);
+    }
+    update_tab_drag_target();
+}
+
+static void cancel_tab_drag(void) {
+    if (!tab_drag.source) return;
+    tab_drag.source=0;
+    tab_drag.target=(MoonTabDrop){0};
+    tab_drag.active=false;
+    ignore_tab_release=true;
+    KillTimer(frame,TAB_DRAG_TIMER);
+    if (GetCapture()==frame) ReleaseCapture();
+    SetCursor(LoadCursorW(NULL,IDC_ARROW));
+    InvalidateRect(frame,NULL,FALSE);
+}
+
+static void scroll_tab_drag(void) {
+    const POINT pointer=tab_drag.pointer;
+    if (!tab_drag.active || pointer.x<12 || pointer.x>=SIDEBAR+4) return;
+    const size_t prev=first_tab;
+    const int end=TAB_START+(int)tab_capacity()*ROW;
+    if (pointer.y>=TAB_START-5 && pointer.y<TAB_START+14 && first_tab) --first_tab;
+    else if (pointer.y>=end-15 && pointer.y<client_height()-FOOTER) ++first_tab;
+    clamp_tab_strip(false);
+    if (first_tab==prev) return;
+    update_tab_drag_target();
+    InvalidateRect(frame,NULL,FALSE);
+}
+
 static void click(HWND hwnd,int psx,int psy) {
     int x=MulDiv(psx,96,dpi), y=MulDiv(psy,96,dpi);
     int width=client_width(), height=client_height(), left=pane_left();
@@ -1208,6 +1303,7 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             queue_presentation(hwnd);
             break;
         case WM_DPICHANGED: {
+            cancel_tab_drag();
             dpi = LOWORD(wp);
             const RECT *r = (RECT *)lp;
             release_target();
@@ -1253,6 +1349,7 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
         }
         case WM_MOUSEMOVE:
             hover=(POINT){MulDiv((short)LOWORD(lp),96,dpi),MulDiv((short)HIWORD(lp),96,dpi)};
+            if (tab_drag.source) track_tab_drag((POINT){(short)LOWORD(lp),(short)HIWORD(lp)},hover);
             if (!tracking_mouse) {
                 TRACKMOUSEEVENT tracking={sizeof(tracking),TME_LEAVE,hwnd,0};
                 tracking_mouse=TrackMouseEvent(&tracking);
@@ -1264,9 +1361,28 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             tracking_mouse=false;
             InvalidateRect(hwnd,NULL,FALSE);
             return 0;
-        case WM_LBUTTONUP:
-            if (!fullscreen) click(hwnd,(short)LOWORD(lp),(short)HIWORD(lp));
+        case WM_LBUTTONDOWN:
+            start_tab_drag((POINT){(short)LOWORD(lp),(short)HIWORD(lp)});
             return 0;
+        case WM_LBUTTONUP: {
+            const POINT pixel={(short)LOWORD(lp),(short)HIWORD(lp)};
+            if (tab_drag.source) {
+                POINT point={MulDiv(pixel.x,96,dpi),MulDiv(pixel.y,96,dpi)};
+                track_tab_drag(pixel,point);
+                const MoonTabDrop drop=tab_drag.target;
+                const bool select=!tab_drag.active && tab_drag_row(point)==tab_drag.source;
+                cancel_tab_drag();
+                if (drop.anchor) moon_tab_drop_run(&drop);
+                else if (select) moon_command(MOON_SELECT,first_tab+(size_t)(point.y-TAB_START)/ROW,NULL);
+            } else if (!fullscreen && !ignore_tab_release) {
+                click(hwnd,pixel.x,pixel.y);
+            }
+            ignore_tab_release=false;
+            return 0;
+        }
+        case WM_CANCELMODE: case WM_CAPTURECHANGED:
+            cancel_tab_drag();
+            break;
         case WM_CONTEXTMENU:
             if (!fullscreen && (HWND)wp==hwnd && lp!=-1) tab_context_menu(hwnd,(POINT){(short)LOWORD(lp),(short)HIWORD(lp)});
             return 0;
@@ -1275,11 +1391,13 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 if (GET_WHEEL_DELTA_WPARAM(wp) < 0) ++first_tab;
                 else if (first_tab) --first_tab;
                 clamp_tab_strip(false);
+                if (tab_drag.active) update_tab_drag_target();
                 InvalidateRect(hwnd,NULL,FALSE);
             }
             return 0;
         case WM_TIMER:
             if (wp==MAINTENANCE_TIMER) moon_command(MOON_TICK,0,NULL);
+            if (wp==TAB_DRAG_TIMER) scroll_tab_drag();
             if (wp==PRESENTATION_TIMER) {
                 KillTimer(hwnd,PRESENTATION_TIMER);
                 refresh_presentation(hwnd);
@@ -1320,6 +1438,10 @@ static bool keyboard(MSG *msg) {
     const bool repeated=(msg->lParam&(1L<<30))!=0;
     const bool in_content=IsChild(content,msg->hwnd);
     const bool in_page=in_content && moon_engine_page_window(msg->hwnd);
+    if (tab_drag.source && !modifiers && msg->wParam==VK_ESCAPE) {
+        cancel_tab_drag();
+        return true;
+    }
     if (in_page) {
         if (repeated && captured_key==msg->wParam) return true;
         captured_key=0;
@@ -1346,6 +1468,11 @@ static bool keyboard(MSG *msg) {
     if (ctrl && !shift && !alt && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
     if (ctrl && msg->wParam == 'W') { moon_command(MOON_CLOSE,moon_active_index(),NULL); return true; }
     if (ctrl && msg->wParam == VK_TAB) { moon_command(shift ? MOON_KEY_PREV : MOON_KEY_NEXT,0,NULL); return true; }
+    if (!fullscreen && modifiers==(MOD_CONTROL|MOD_SHIFT) &&
+        (msg->wParam==VK_PRIOR || msg->wParam==VK_NEXT) && moon_tab_drop_enabled()) {
+        if (!repeated) moon_tab_nudge(msg->wParam==VK_NEXT);
+        return true;
+    }
     if (msg->wParam == VK_F5 || (ctrl && msg->wParam == 'R')) { moon_command(MOON_RELOAD,0,NULL); return true; }
     if (alt && msg->wParam == VK_LEFT) { moon_command(MOON_BACK,0,NULL); return true; }
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
@@ -1466,7 +1593,8 @@ static int run_shell(int argc, wchar_t **argv) {
         if (palette && (msg.hwnd==palette || IsChild(palette,msg.hwnd)) && msg.message==WM_KEYDOWN &&
             !moon_ime_composing(msg.hwnd) && palette_key(&msg)) continue;
         if ((msg.hwnd==frame || IsChild(frame,msg.hwnd)) &&
-            (msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) && (moon_find_key(&msg) || keyboard(&msg))) continue;
+            (msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) &&
+            ((tab_drag.source && msg.wParam==VK_ESCAPE && keyboard(&msg)) || moon_find_key(&msg) || keyboard(&msg))) continue;
         if (fullscreen && fullscreen_exit && msg.message==WM_MOUSEMOVE && GetForegroundWindow()==frame &&
             !IsWindowVisible(fullscreen_exit) && (msg.hwnd==frame || IsChild(frame,msg.hwnd))) {
             RECT bounds;

@@ -1,7 +1,7 @@
 {
   "id": "moon.tab-tools",
   "name": "标签管理",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonTabTools.exe",
@@ -14,7 +14,8 @@
       { "id": "closeOthers", "label": "关闭其他标签", "menu": "page" },
       { "id": "closeBelow", "label": "关闭下方标签", "menu": "page" },
       { "id": "openLink", "label": "在后台标签打开链接", "linkMenu": "open" },
-      { "id": "copyLink", "label": "复制链接地址", "linkMenu": "copy" }
+      { "id": "copyLink", "label": "复制链接地址", "linkMenu": "copy" },
+      { "id": "reorder", "label": "调整侧栏标签顺序", "tabDrop": true }
     ]
   },
   "permissions": ["tabs.organize", "tabs.manage"]
