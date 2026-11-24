@@ -596,6 +596,7 @@ def run_win32(exe, base, root):
         }), encoding="utf-8")
         (fixture / "settings.html").write_text(
             '<title>Extension fixture</title><script>(async()=>{'
+            'if(window.webkit.messageHandlers.moonPlugins)return;'
             'const api=window.webkit.messageHandlers.moonSettings;'
             'const call=async op=>JSON.parse(await api.postMessage(JSON.stringify(op)));'
             'const forged=await call({op:"write",value:{bad:true},pluginId:"moon.lua-manager"});'
@@ -1329,6 +1330,24 @@ def run_win32(exe, base, root):
             invoke("插件市场")
             wait_for(lambda: read_address() == "moon://market/", "Browser did not open the built-in plugin market")
             print("plugin_market_entry=ok", flush=True)
+            invoke("管理插件")
+            wait_for(lambda: read_address() == "moon://plugins/", "Browser did not open the built-in plugin manager")
+            invoke("插件市场")
+            wait_for(lambda: read_address() == "moon://market/", "Could not return to the plugin market")
+            invoke("管理插件")
+            wait_for(lambda: read_address() == "moon://plugins/", "Could not return to the plugin manager")
+            click(px(70),px(65))
+            palette_window = find_palette()
+            palette_items = user.GetDlgItem(palette_window,1004)
+            labels = []
+            for i in range(user.SendMessageW(palette_items,0x018B,0,0)):  # LB_GETCOUNT
+                label = ctypes.create_unicode_buffer(512)
+                user.SendMessageW(palette_items,0x0189,i,ctypes.addressof(label))  # LB_GETTEXT
+                labels.append(label.value)
+            user.PostMessageW(user.GetDlgItem(palette_window,1003),0x0100,0x1B,1)
+            if labels.count("管理插件 · Moon Browser") != 1:
+                raise RuntimeError(f"Expected one loaded plugin manager tab: {labels}")
+            print("plugin_manager_entry=ok plugin_manager_tab_reuse=ok extension_admin_isolation=ok",flush=True)
         if history.exists():
             database = profile / "history.sqlite3"
             target = base + "/page/history-contract"
@@ -1899,6 +1918,8 @@ def run_win32(exe, base, root):
                     wait_for(lambda: not open_menu(),"Main menu did not dismiss")
 
             groups = native_entries()
+            if "管理插件" not in groups:
+                raise RuntimeError("The native menu has no plugin management entry")
             expected = {
                 "标签与页面": {"页内查找\tCtrl+F","放大页面\tCtrl++","恢复上一个关闭的标签\tCtrl+Shift+T"},
                 "浏览资料": {"历史记录\tCtrl+H","查看下载\tCtrl+J","管理书签\tCtrl+Shift+O"},

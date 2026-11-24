@@ -110,6 +110,7 @@ var smoke_message: [512:0]u8 = @splat(0);
 var smoke_outcome: ?Outcome = null;
 var serving_rpc = false;
 var confirming_hotkey = false;
+var changing_state = false;
 
 fn copy(output: []u8, value: []const u8) bool {
     if (value.len >= output.len or std.mem.indexOfScalar(u8, value, 0) != null or !std.unicode.utf8ValidateSlice(value))
@@ -366,8 +367,12 @@ fn persist() bool {
     defer allocator.free(string);
     return native.moon_write_text(&file_path, string.ptr);
 }
-fn toggle(index: usize, permission: ?sdk.Permission) void {
-    if (index >= len) return;
+pub const Change = enum { saved, cancelled, unavailable };
+
+pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
+    if (index >= len or changing_state or confirming_hotkey) return .unavailable;
+    changing_state = true;
+    defer changing_state = false;
     const plugin = &all[index];
     const enabled = plugin.enabled;
     const grants = plugin.grants;
@@ -377,8 +382,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
         menu.* = action_entry.menu_override;
     if (permission) |scope| {
         if (!plugin.requests.contains(scope) or !enabled) {
-            native.moon_shell_info("插件权限", "请先启用声明此权限的插件。");
-            return;
+            return .unavailable;
         }
         if (grants.contains(scope)) {
             plugin.grants.remove(scope);
@@ -406,15 +410,24 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"tabs.session.manage" => "此插件可恢复上次正常退出时的普通网页、修改启动选项或清除已保存的会话。",
                 .@"privacy.privateWindow" => "此插件可在执行用户命令时打开独立的隐私浏览窗口。",
             };
-            if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
+            var body: [768]u8 = undefined;
+            const message = std.fmt.bufPrintSentinel(&body,"{s}（{s}）\n{s}",
+                .{ std.mem.sliceTo(&plugin.label,0),idAt(index),disclosure },0) catch return .unavailable;
+            if (!native.moon_shell_confirm("授予插件权限？", message.ptr)) return .cancelled;
             plugin.grants.insert(scope);
         }
     } else {
         if (!enabled) {
-            const disclosure = if (plugin.default_grants.contains(.@"network.filter"))
-                "启用后将立即拦截匹配规则的网页请求。你可以在插件面板为单个站点暂停过滤。"
-            else &plugin.executable;
-            if (!native.moon_shell_confirm("启用本地插件？",disclosure)) return;
+            var body: [4700]u8 = undefined;
+            const name = std.mem.sliceTo(&plugin.label,0);
+            const message = if (plugin.default_grants.contains(.@"network.filter"))
+                std.fmt.bufPrintSentinel(&body,"「{s}」将立即拦截匹配规则的网页请求。你可以在它的设置中为单个站点暂停过滤。",.{name},0)
+            else if (plugin.bundled)
+                std.fmt.bufPrintSentinel(&body,"启用「{s}」及其默认权限。",.{name},0)
+            else
+                std.fmt.bufPrintSentinel(&body,"「{s}」将按当前 Windows 用户权限运行。\n{s}",.{name,std.mem.sliceTo(&plugin.executable,0)},0);
+            const disclosure = message catch return .unavailable;
+            if (!native.moon_shell_confirm("启用插件？",disclosure.ptr)) return .cancelled;
         }
         plugin.enabled = !plugin.enabled;
         plugin.grants = if (plugin.enabled) plugin.default_grants else .empty;
@@ -428,24 +441,28 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
         plugin.grants = grants;
         plugin.hotkey = old_key;
         for (plugin.actions[0..plugin.action_count],old_menu[0..plugin.action_count]) |*entry,menu| entry.menu_override = menu;
-        native.moon_shell_info("Plugin settings", "Could not save the plugin settings.");
-        return;
+        return .unavailable;
     }
     if (plugin.hotkey==null) if (old_key) |key| {
         if (key.slot) |slot| native.moon_shell_unregister_hotkey(globalId(index,slot));
     };
     _ = plugin.epoch.fetchAdd(1, .acq_rel);
     plugin.queued_change = false;
+    return .saved;
 }
 
-pub fn enable(index: usize) void {
-    toggle(index, null);
-}
-pub fn toggleGrant(index: usize, permission: sdk.Permission) void {
-    toggle(index, permission);
-}
 pub fn count() usize {
     return len;
+}
+pub fn idAt(index: usize) []const u8 {
+    return std.mem.sliceTo(&all[index].id,0);
+}
+pub fn indexOf(id: []const u8) ?usize {
+    for (0..len) |index| if (std.mem.eql(u8,id,idAt(index))) return index;
+    return null;
+}
+pub fn isBundled(index: usize) bool {
+    return all[index].bundled;
 }
 pub fn label(index: usize) [*:0]const u8 {
     return &all[index].label;
@@ -546,6 +563,7 @@ pub fn menuLocation(index: usize, command_index: usize) c_uint {
 }
 
 pub fn setMenu(owner: []const u8, id: []const u8, add: bool) sdk.UiRegistration {
+    if (changing_state) return .unavailable;
     const index = contributor(owner) orelse return .unavailable;
     const plugin = &all[index];
     const command_index = findAction(plugin,id) orelse return .notFound;
@@ -600,7 +618,7 @@ fn hotkeyConflict(candidate: Hotkey, exclude: *const Plugin) bool {
 }
 
 pub fn setHotkey(owner: []const u8, id: []const u8, text: ?[]const u8, scope: sdk.ShortcutScope, consent: userscripts.Consent) sdk.UiRegistration {
-    if (confirming_hotkey) return .unavailable;
+    if (changing_state or confirming_hotkey) return .unavailable;
     const index = contributor(owner) orelse return .unavailable;
     const plugin = &all[index];
     const command_index = findAction(plugin,id) orelse return .notFound;

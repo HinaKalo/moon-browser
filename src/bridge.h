@@ -54,7 +54,6 @@ bool moon_shell_dark_mode(void);
 void moon_shell_focus_address(void);
 void moon_shell_toggle_sidebar(void);
 void moon_shell_toggle_theme(void);
-void moon_shell_open_plugins(void);
 void moon_shell_info(const char *title, const char *body);
 void moon_shell_toast(const char *title, const char *body);
 int moon_shell_pick_bookmarks(bool save, char *path, size_t capacity);
@@ -174,6 +173,8 @@ int moon_userscript_reload_active(const char *id);
 bool moon_devtools_open(int panel, uint64_t tab_id);
 bool moon_extension_settings(const char *id, const char *request, char *result, size_t cap);
 bool moon_extension_request(uint64_t page, const char *id, const char *request, char *result, size_t cap);
+#define MOON_PLUGIN_MANAGER_ADDRESS "moon://plugins/"
+bool moon_plugins_request(uint64_t panel, const char *request, char *result, size_t cap);
 bool moon_site_data_open(const char *id, uint64_t source, const char *expected);
 bool moon_page_source_open(const char *id, uint64_t source, const char *expected);
 void moon_page_source_result(uint64_t generation, const char *html, size_t bytes);

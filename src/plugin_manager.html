@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理插件 · Moon Browser</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page:#f5f6f9; --panel:#fff; --surface:#f1f3f9; --line:#d9dce6;
+    --text:#14161d; --muted:#51586a; --accent:#354db8; --soft:#e8ecff;
+    font:14px/1.5 "Microsoft YaHei UI","Segoe UI",sans-serif;
+    color:var(--text); background:var(--page);
+  }
+  :root[data-moon-theme=dark] {
+    color-scheme:dark;
+    --page:#191c23; --panel:#20232c; --surface:#292d38; --line:#3a4256;
+    --text:#e9ebf2; --muted:#b7becf; --accent:#adbcff; --soft:#2b365e;
+  }
+  *,*::before,*::after { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; }
+  main { max-width:1030px; padding:28px clamp(16px,4vw,38px) 36px; margin:auto; }
+  h1,h2,h3,p { margin:0; }
+  h1 { font-size:clamp(24px,4vw,32px); letter-spacing:-.045em; }
+  h2 { font-size:21px; overflow-wrap:anywhere; }
+  h3 { font-size:15px; }
+  .heading,.toolbar,.switch-row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .counter,#status,.id,.hint { color:var(--muted); }
+  .counter { margin-top:4px; }
+  .toolbar { margin:20px 0 12px; flex-wrap:wrap; }
+  .filters { display:flex; gap:3px; background:var(--surface); border:1px solid var(--line); padding:3px; border-radius:9px; }
+  button,input { font:inherit; color:inherit; }
+  button { cursor:pointer; }
+  button:disabled { opacity:.56; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .action,input[type=search] { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:7px 11px; }
+  .action:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+  input[type=search] { min-width:min(100%,210px); flex:1; max-width:340px; }
+  .filter { background:transparent; border:1px solid transparent; border-radius:6px; min-height:30px; padding:3px 10px; white-space:nowrap; }
+  .filter[aria-pressed=true] { color:var(--accent); background:var(--panel); border-color:var(--line); }
+  #status { min-height:21px; margin:0 0 8px; }
+  .workspace { display:grid; grid-template-columns:minmax(175px, .65fr) minmax(0, 1fr); gap:12px; align-items:start; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; min-width:0; }
+  #list { display:grid; gap:3px; max-height:clamp(250px, 58vh, 640px); padding:6px; overflow:auto; }
+  #list:empty { display:none; }
+  .plugin { display:grid; grid-template-columns:28px minmax(0,1fr); align-items:center; gap:8px; width:100%; text-align:left; background:transparent; border:1px solid transparent; border-radius:7px; padding:8px; }
+  .plugin:hover { background:var(--surface); }
+  .plugin[aria-pressed=true] { background:var(--soft); color:var(--accent); }
+  .plugin strong { display:block; overflow-wrap:anywhere; line-height:1.35; font-weight:600; }
+  .plugin small { display:block; color:var(--muted); margin-top:2px; }
+  .mark { width:27px; height:27px; display:grid; place-items:center; background:var(--surface); border-radius:7px; color:var(--accent); }
+  .mark::before { content:""; width:10px; height:10px; border:1.5px solid currentColor; border-radius:3px; }
+  [data-bundled=true] .mark::before { background:currentColor; border-radius:50%; }
+  #details { padding:16px clamp(12px,2.5vw,22px); }
+  .details-head { padding-bottom:14px; }
+  .id { font:12px/1.5 Consolas,monospace; margin-top:3px; overflow-wrap:anywhere; }
+  .section { border-top:1px solid var(--line); padding:12px 0; }
+  .section:last-child { padding-bottom:1px; }
+  .section h3 { margin-bottom:6px; }
+  .hint { font-size:13px; }
+  .switch-row { min-height:38px; }
+  .switch-row label { cursor:pointer; }
+  input[type=checkbox] { flex:none; width:17px; height:17px; margin:0 2px 0 0; accent-color:var(--accent); }
+  .command { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:5px 8px; padding:4px 0; }
+  kbd { background:var(--surface); border:1px solid var(--line); border-radius:4px; padding:1px 5px; color:var(--muted); white-space:nowrap; }
+  #empty { padding:22px; }
+  @media(max-width:550px) {
+    .workspace { grid-template-columns:1fr; }
+    #list { max-height:200px; }
+    input[type=search] { max-width:none; }
+  }
+</style>
+<main>
+  <header class="heading">
+    <div><h1>管理插件</h1><p id="counts" class="counter"></p></div>
+    <button class="action" id="market" type="button">插件市场</button>
+  </header>
+  <div class="toolbar">
+    <input type="search" id="search" aria-label="搜索已安装插件" placeholder="按名称或插件 ID 搜索">
+    <div class="filters" role="group" aria-label="按安装来源筛选">
+      <button class="filter" type="button" data-filter="all" aria-pressed="true">全部</button>
+      <button class="filter" type="button" data-filter="bundled" aria-pressed="false">内置</button>
+      <button class="filter" type="button" data-filter="local" aria-pressed="false">本地</button>
+    </div>
+  </div>
+  <p id="status" role="status">正在读取插件列表…</p>
+  <div class="workspace">
+    <nav id="list" class="panel" aria-label="已安装插件"></nav>
+    <section id="details" class="panel" aria-label="插件详细信息" hidden></section>
+  </div>
+  <p id="empty" class="panel" hidden></p>
+</main>
+<script>
+  const get = id => document.getElementById(id);
+  const search = get('search'), list = get('list'), details = get('details'), status = get('status'), empty = get('empty');
+  const sources = { bundled:'内置', local:'本地' };
+  const filters = [...document.querySelectorAll('[data-filter]')];
+  const cancelled = { enable:'已取消启用。', grant:'已取消授权。' };
+  let items = [], selected, source = 'all', busy = false, loading = false, generation = 0;
+
+  function make(tag, text, css) {
+    const node = document.createElement(tag);
+    if (text) node.textContent = text;
+    if (css) node.className = css;
+    return node;
+  }
+
+  async function host(request) {
+    const response = JSON.parse(await window.webkit.messageHandlers.moonPlugins.postMessage(JSON.stringify(request)));
+    if (response.ok === false) throw Error('UNAVAILABLE');
+    return response;
+  }
+
+  async function apply(plugin, fields, control) {
+    if (busy) return;
+    busy = true;
+    control.disabled = true;
+    try {
+      const response = await host({id:plugin.id, ...fields});
+      if (fields.op === 'settings') {
+        if (!response.opened) throw Error('UNAVAILABLE');
+        return;
+      }
+      if (response.result === 'unavailable') throw Error('UNAVAILABLE');
+      status.textContent = response.result === 'cancelled' ? cancelled[fields.op] : '已保存。';
+    } catch {
+      status.textContent = '操作未完成。请重试。';
+    } finally {
+      control.disabled = false;
+      busy = false;
+      if (fields.op !== 'settings') await refresh(control.id);
+    }
+  }
+
+  function checkbox(area, label, id, checked, available, change) {
+    const row = make('div', '', 'switch-row');
+    const title = make('label', label);
+    title.htmlFor = id;
+    const input = make('input');
+    input.type = 'checkbox';
+    input.id = id;
+    input.checked = checked;
+    input.disabled = !available;
+    input.onchange = () => {
+      const next = input.checked;
+      input.checked = checked;
+      change(next, input);
+    };
+    row.append(title, input);
+    area.append(row);
+  }
+
+  async function showDetails(plugin, focus) {
+    const seq = ++generation;
+    details.hidden = !plugin;
+    details.replaceChildren();
+    if (!plugin) return;
+    try {
+      const data = await host({op:'details', id:plugin.id});
+      if (seq !== generation) return;
+      const heading = make('div', '', 'details-head');
+      heading.append(make('h2', plugin.name), make('p', plugin.id, 'id'));
+      details.append(heading);
+      const general = make('div', '', 'section');
+      checkbox(general, '启用插件', 'enable', data.enabled, true,
+        (enabled, control) => apply(plugin, {op:'enable', enabled}, control));
+      if (data.settings) {
+        const button = make('button', '打开设置页面', 'action');
+        button.id = 'open-settings';
+        button.type = 'button';
+        button.disabled = !data.enabled;
+        button.onclick = () => apply(plugin, {op:'settings'}, button);
+        general.append(button);
+      }
+      details.append(general);
+      const permissions = make('div', '', 'section');
+      permissions.append(make('h3', '权限'));
+      if (!data.permissions.length) permissions.append(make('p', '此插件未请求权限。', 'hint'));
+      if (!data.enabled && data.permissions.length) permissions.append(make('p', '启用插件后可调整权限。', 'hint'));
+      for (const permission of data.permissions) {
+        checkbox(permissions, permission.label, 'permission-' + permission.id, permission.granted, data.enabled,
+          (enabled, control) => apply(plugin, {op:'grant', permission:permission.id, enabled}, control));
+      }
+      details.append(permissions);
+      const commands = make('div', '', 'section');
+      commands.append(make('h3', '命令与快捷键'));
+      for (const command of data.commands) {
+        const row = make('div', '', 'command');
+        row.append(make('span', command.label));
+        if (command.shortcut) row.append(make('kbd', command.shortcut));
+        commands.append(row);
+      }
+      details.append(commands);
+      if (focus && (document.activeElement === document.body || document.activeElement.id === focus)) get(focus)?.focus();
+    } catch {
+      if (seq === generation) details.append(make('p','暂时无法读取插件详情。','hint'));
+    }
+  }
+
+  function render(focus) {
+    const query = search.value.trim().toLowerCase();
+    const visible = items.filter(item => (source === 'all' || item.bundled === (source === 'bundled')) &&
+      (item.name.toLowerCase().includes(query) || item.id.toLowerCase().includes(query)));
+    if (!visible.some(item => item.id === selected)) selected = visible[0]?.id;
+    const old = list.querySelector(':focus');
+    list.replaceChildren();
+    for (const item of visible) {
+      const row = make('button', '', 'plugin');
+      row.type = 'button';
+      row.dataset.id = item.id;
+      row.dataset.bundled = item.bundled;
+      row.setAttribute('aria-pressed', String(item.id === selected));
+      const mark = make('span', '', 'mark');
+      mark.setAttribute('aria-hidden', 'true');
+      const body = make('span');
+      body.append(make('strong', item.name), make('small', (item.bundled ? sources.bundled : sources.local) +
+        ' · ' + (item.enabled ? '已启用' : '已停用')));
+      row.append(mark, body);
+      row.onclick = () => {
+        selected = item.id;
+        for (const child of list.children) child.setAttribute('aria-pressed', String(child === row));
+        showDetails(item);
+      };
+      list.append(row);
+      if (old?.dataset.id === item.id) row.focus();
+    }
+    empty.hidden = visible.length !== 0;
+    if (!query && source === 'local') empty.textContent = '当前没有本地安装的插件。';
+    else empty.textContent = items.length ? '没有匹配的插件。' : '当前没有已安装的插件。';
+    return showDetails(visible.find(item => item.id === selected), focus);
+  }
+
+  async function refresh(focus) {
+    if (loading || busy) return;
+    loading = true;
+    try {
+      const found = [];
+      let offset = 0;
+      do {
+        const page = await host({op:'list', offset});
+        found.push(...page.items);
+        offset = page.next;
+      } while (offset !== null);
+      items = found.sort((a,b) => a.name.localeCompare(b.name,'zh-CN') || a.id.localeCompare(b.id));
+      get('counts').textContent = items.length + ' 个已安装 · ' + items.filter(item => item.enabled).length + ' 个已启用';
+      await render(focus);
+    } catch {
+      status.textContent = '插件列表暂不可用。请按 F5 重试。';
+    } finally {
+      loading = false;
+    }
+  }
+
+  search.oninput = () => render();
+  for (const button of filters) button.onclick = () => {
+    source = button.dataset.filter;
+    for (const filter of filters) filter.setAttribute('aria-pressed', String(filter === button));
+    render();
+  };
+  get('market').onclick = async () => {
+    try {
+      if (!(await host({op:'market'})).opened) throw Error('UNAVAILABLE');
+    } catch {
+      status.textContent = '暂时无法打开插件市场。';
+    }
+  };
+  window.addEventListener('focus', () => { if (items.length && !details.contains(document.activeElement)) refresh(); });
+  status.textContent = '';
+  refresh();
+</script>
+</html>

@@ -102,7 +102,7 @@ pub fn document(allocator: std.mem.Allocator) ![:0]u8 {
         \\article{background:#fff;border:1px solid #d9dce6;border-radius:12px;padding:18px}h2{font-size:1.13rem;margin:0}
         \\p{margin:8px 0}small,p.intro{color:#51586a}a{color:#344db4}
         \\:root[data-moon-theme=dark]{color-scheme:dark;color:#e9ebf2;background:#191c23}[data-moon-theme=dark] article{background:#242630;border-color:#363b49}[data-moon-theme=dark] :is(small,p.intro){color:#b9c1d4}[data-moon-theme=dark] a{color:#a7b4ff}
-        \\</style><main><h1>插件市场</h1><p class=intro>Moon 插件目录。随浏览器提供的插件可在工具栏菜单中启用和授权。</p>
+        \\</style><main><h1>插件市场</h1><p class=intro>浏览 Moon 插件目录，或<a href="moon://plugins/">管理已安装的插件</a>。</p>
     );
     switch (state.load(.acquire)) {
         .ready => try entries(allocator,out),

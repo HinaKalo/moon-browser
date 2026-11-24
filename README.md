@@ -25,7 +25,7 @@ build 生成本地开发目录，package 打包本地开发用的自包含 ZIP�
 
 新标签页与命令面板共用命令入口。应用内置命令与启用的本地插件均可在面板调用。原型中的固定工作空间、服务入口与演示数据保留为设计参考，具体入口和数据由未来的插件提供。
 
-随包提供浏览历史和网页开发者工具插件。Ctrl+H 打开历史记录，F12 打开 WebKit Inspector，Ctrl+Shift+J 打开该网页的控制台，Ctrl+U 查看已加载的网页源代码。可在「… → 插件」中停用或撤销授权。
+随包提供浏览历史和网页开发者工具插件。Ctrl+H 打开历史记录，F12 打开 WebKit Inspector，Ctrl+Shift+J 打开该网页的控制台，Ctrl+U 查看已加载的网页源代码。「… → 管理插件」集中提供启停、授权和专属设置入口。
 
 Ctrl+D 保存书签，Ctrl+Shift+O 打开书签管理，Ctrl+J 查看下载进度。书签和下载作为独立的系统插件随包提供。
 Ctrl+F 在当前页查找文字，Ctrl++、Ctrl+- 和 Ctrl+0 调整或重置页面缩放。HTTP(S) 站点的缩放比例在重启后恢复。
@@ -45,7 +45,7 @@ Ctrl+Shift+M 打开浏览器任务管理器，查看进程内存、标签保护�
 
 ## 插件
 
-把包含 plugin.json 和插件 EXE 的文件夹放进 EXE 旁的 plugins 目录，或放进 profile\plugins。重启后从工具栏菜单启用插件，并单独授权读取标签信息。预览包附带 Active Tab Example。插件是以当前用户身份运行的本地程序。
+把包含 plugin.json 和插件 EXE 的文件夹放进 EXE 旁的 plugins 目录，或放进 profile\plugins。重启后从「… → 管理插件」启用插件，并单独授权读取标签信息。预览包附带 Active Tab Example。插件是以当前用户身份运行的本地程序。
 
 [插件开发文档](https://docs.browser.moonl.cloud/) · [插件 API 2](https://docs.browser.moonl.cloud/api.html) · [Zig SDK](sdk/README.md)
 

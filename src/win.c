@@ -49,7 +49,7 @@ static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
 enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
-enum { MENU_ADD = 11, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET,
+enum { MENU_ADD = 11, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_MANAGE_PLUGINS,
        MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 24, MENU_PLUGIN_STRIDE = 32,
        MENU_SCRIPTS_PICK = 2000, MENU_SCRIPTS_BASE = 2010 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
@@ -770,6 +770,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     if (!private_window) {
         AppendMenuW(popup,MF_STRING,MENU_UPDATES,L"\u7248\u672c\u4e0e\u66f4\u65b0");
         AppendMenuW(popup,MF_STRING,MENU_MARKET,L"插件市场");
+        AppendMenuW(popup,MF_STRING,MENU_MANAGE_PLUGINS,L"管理插件");
     }
     AppendMenuW(popup,MF_STRING|(theme==&dark?MF_CHECKED:0),MENU_THEME,L"\u6df1\u8272\u4e3b\u9898\tCtrl+Shift+L");
     AppendMenuW(popup,MF_STRING|(focus_mode?MF_CHECKED:0),MENU_FOCUS,L"\u4e13\u6ce8\u6a21\u5f0f\tCtrl+B");
@@ -788,7 +789,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
         if (!sub) continue;
         const bool enabled=moon_plugin_enabled(i);
         const unsigned id=MENU_PLUGIN_BASE+(unsigned)i*MENU_PLUGIN_STRIDE;
-        AppendMenuW(sub,MF_STRING|(enabled?MF_CHECKED:0),id,L"启用本地插件");
+        AppendMenuW(sub,MF_STRING|(enabled?MF_CHECKED:0),id,L"启用插件");
         if (moon_plugin_has_settings(i)) AppendMenuW(sub,MF_STRING|(enabled?0:MF_GRAYED),id+1,L"配置页面");
         for (size_t j=0;j<MENU_PLUGIN_ACTIONS-2;++j) {
             const char *permission=moon_plugin_permission_label(j);
@@ -814,6 +815,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     else if (command==MENU_PALETTE) open_palette();
     else if (command==MENU_UPDATES) moon_command(MOON_UPDATES,0,NULL);
     else if (command==MENU_MARKET) moon_command(MOON_MARKET,0,NULL);
+    else if (command==MENU_MANAGE_PLUGINS) moon_command(MOON_OPEN_PLUGINS,0,NULL);
     else if (command==MENU_SCRIPTS_PICK) pick_userscript();
     else if (command>=MENU_SCRIPTS_BASE) {
         const unsigned value=command-MENU_SCRIPTS_BASE;
@@ -829,16 +831,6 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
         moon_shell_refresh();
     }
 }
-void moon_shell_open_plugins(void) {
-    const int width=client_width(), height=client_height(), search=home_top(height)+98;
-    if (show_home && height-search>=145) {
-        const int tile=tile_width(width);
-        menu(frame,rectangle(home_left(width)+tile+10,search+94,tile,61),false,false);
-    } else {
-        menu(frame,rectangle(width-175,8,32,32),false,true);
-    }
-}
-
 static void palette_row(const wchar_t *name,LPARAM data) {
     LRESULT row=SendMessageW(palette_list,LB_ADDSTRING,0,(LPARAM)name);
     if (row>=0) SendMessageW(palette_list,LB_SETITEMDATA,(WPARAM)row,data);

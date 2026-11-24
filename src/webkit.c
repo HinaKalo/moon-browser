@@ -180,7 +180,8 @@ static void navigation_action(WKPageRef page, WKNavigationActionRef action, WKFr
             wk.WKFramePolicyListenerUse(listener);
         } else {
             const char *docs = "https://docs.browser.moonl.cloud/";
-            bool market_link = !strcmp(view->extension_address,"moon://market/") && !strncmp(url,docs,strlen(docs));
+            bool market_link = !strcmp(view->extension_address,"moon://market/") &&
+                (!strncmp(url,docs,strlen(docs)) || !strcmp(url,MOON_PLUGIN_MANAGER_ADDRESS));
             bool plugin_link = view->extension_id[0] && supported_scheme(request) &&
                 wk.WKNavigationActionHasUnconsumedUserGesture(action);
             if ((market_link || plugin_link) && wk.WKNavigationActionGetNavigationType(action)==kWKFrameNavigationTypeLinkClicked && safe_method(request))
@@ -455,7 +456,9 @@ void moon_engine_shutdown(void) {
     // WK's run loop can have posted completion callbacks. Let Windows unload
     // the DLL on process exit after the UI message pump has stopped.
 }
-static void extension_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context, bool settings) {
+typedef enum { EXTENSION_SETTINGS, EXTENSION_HOST, PLUGIN_MANAGER } ExtensionChannel;
+
+static void extension_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context, ExtensionChannel channel) {
     if (!reply) return;
     const uintptr_t serial = (uintptr_t)context;
     const MoonView *view = views;
@@ -466,19 +469,36 @@ static void extension_message(WKScriptMessageRef message, WKCompletionListenerRe
     bool ok = false;
     if (view && frame && wk.WKFrameInfoGetIsMainFrame(frame) && data && wk.WKGetTypeID(data) == wk.WKStringGetTypeID()) {
         size_t bytes = wk.WKStringGetUTF8CString((WKStringRef)data,request,sizeof(request));
-        if (bytes && bytes < sizeof(request) && strlen(request)+1 == bytes)
-            ok = settings ? moon_extension_settings(view->extension_id,request,response,sizeof(response)) :
-                moon_extension_request(view->token,view->extension_id,request,response,sizeof(response));
+        if (bytes && bytes < sizeof(request) && strlen(request)+1 == bytes) {
+            if (channel == PLUGIN_MANAGER) {
+                if (!view->extension_id[0] && view->extension_address && !strcmp(view->extension_address,MOON_PLUGIN_MANAGER_ADDRESS))
+                    ok = moon_plugins_request(view->token,request,response,sizeof(response));
+            } else if (view->extension_id[0]) {
+                ok = channel == EXTENSION_SETTINGS ? moon_extension_settings(view->extension_id,request,response,sizeof(response)) :
+                    moon_extension_request(view->token,view->extension_id,request,response,sizeof(response));
+            }
+        }
     }
     WKStringRef value = wk.WKStringCreateWithUTF8CString(ok ? response : "{\"ok\":false}");
     wk.WKCompletionListenerComplete(reply,value);
     release(value);
 }
 static void settings_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context) {
-    extension_message(message,reply,context,true);
+    extension_message(message,reply,context,EXTENSION_SETTINGS);
 }
 static void plugin_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context) {
-    extension_message(message,reply,context,false);
+    extension_message(message,reply,context,EXTENSION_HOST);
+}
+static void plugin_manager_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context) {
+    extension_message(message,reply,context,PLUGIN_MANAGER);
+}
+static bool add_message_handler(MoonView *view, const char *name, WKScriptMessageHandlerCallback callback) {
+    WKStringRef channel = wk.WKStringCreateWithUTF8CString(name);
+    if (!channel) return false;
+    wk.WKUserContentControllerAddScriptMessageHandler(view->extension_controller,channel,callback,
+        (const void *)view->extension_serial);
+    release(channel);
+    return true;
 }
 static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef body,const void *context) {
     const MoonView *view=context;
@@ -533,22 +553,19 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
         }
         wk.WKPageConfigurationSetWebsiteDataStore(config,temporary);
         release(temporary);
-        if (extension_id) {
-            if (strlen(extension_id)>=sizeof(view->extension_id)) goto fail;
+        const bool manager = !extension_id && !strcmp(address,MOON_PLUGIN_MANAGER_ADDRESS);
+        if (extension_id || manager) {
             view->extension_controller = wk.WKUserContentControllerCreate();
             if (!view->extension_controller) goto fail;
-            strcpy(view->extension_id,extension_id);
             view->extension_serial = ++extension_sequence;
-            WKStringRef channel = wk.WKStringCreateWithUTF8CString("moonSettings");
-            if (!channel) goto fail;
-            wk.WKUserContentControllerAddScriptMessageHandler(view->extension_controller,channel,settings_message,
-                (const void *)view->extension_serial);
-            release(channel);
-            channel = wk.WKStringCreateWithUTF8CString("moonHost");
-            if (!channel) goto fail;
-            wk.WKUserContentControllerAddScriptMessageHandler(view->extension_controller,channel,plugin_message,
-                (const void *)view->extension_serial);
-            release(channel);
+            if (manager) {
+                if (!add_message_handler(view,"moonPlugins",plugin_manager_message)) goto fail;
+            } else {
+                if (strlen(extension_id)>=sizeof(view->extension_id)) goto fail;
+                strcpy(view->extension_id,extension_id);
+                if (!add_message_handler(view,"moonSettings",settings_message) ||
+                    !add_message_handler(view,"moonHost",plugin_message)) goto fail;
+            }
             wk.WKPageConfigurationSetUserContentController(config,view->extension_controller);
         }
     } else {

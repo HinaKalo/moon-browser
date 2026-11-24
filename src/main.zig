@@ -15,6 +15,7 @@ const page_source = @import("page_source.zig");
 const reading = @import("reading.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const market = @import("market.zig");
+const plugin_manager = @import("plugin_manager.zig");
 const updater = @import("updater.zig");
 const search = @import("search.zig");
 const last_session = @import("session.zig");
@@ -90,7 +91,7 @@ const shell_actions = [_]ShellAction{
     .{ .label = "切换侧边栏", .command = native.MOON_TOGGLE_SIDEBAR },
     .{ .label = "切换亮色 / 深色主题", .command = native.MOON_TOGGLE_THEME },
     .{ .label = "内存诊断", .command = native.MOON_DIAGNOSTICS, .home = true },
-    .{ .label = "本地插件", .command = native.MOON_OPEN_PLUGINS, .home = true },
+    .{ .label = "管理插件", .command = native.MOON_OPEN_PLUGINS, .home = true },
     .{ .label = "版本与更新", .command = native.MOON_UPDATES, .home = true },
     .{ .label = "插件市场", .command = native.MOON_MARKET },
 };
@@ -146,7 +147,7 @@ fn normalize(input: []const u8, buffer: []u8) ?[:0]const u8 {
     const value = std.mem.trim(u8, input, " \t\r\n");
     if (value.len == 0) return null;
     for (value) |ch| if (std.ascii.isControl(ch)) return null;
-    if (std.mem.startsWith(u8,value,"extension://") or equals(value,market.address))
+    if (std.mem.startsWith(u8,value,"extension://") or equals(value,market.address) or equals(value,plugin_manager.address))
         return std.fmt.bufPrintSentinel(buffer,"{s}",.{value},0) catch null;
     if (safeURL(value)) {
         const scheme_len: usize = if (value[4] == ':') 7 else 8;
@@ -336,6 +337,10 @@ fn navigate(tab: *Tab, url: []const u8) void {
     var storage: [4096:0]u8 = @splat(0);
     if (!copy(&storage, url)) return;
     const allocator = std.heap.page_allocator;
+    if (equals(url,plugin_manager.address)) {
+        if (!native.moon_shell_private()) loadInternal(tab,storage,null,plugin_manager.document.ptr);
+        return;
+    }
     if (equals(url,market.address)) {
         if (native.moon_shell_private()) return;
         market.start();
@@ -901,7 +906,9 @@ fn maintenance() void {
     if (popup[0] != 0) {
         const target = popup;
         popup[0] = 0;
-        addTab(slice(&target), smoke == .off);
+        if (equals(slice(&target),plugin_manager.address)) {
+            if (!native.moon_shell_private()) _ = openInternalPage(plugin_manager.address);
+        } else addTab(slice(&target), smoke == .off);
     }
     for (tabs[0..count]) |*tab| {
         if (tab.phase == .crashed) detach(tab);
@@ -1142,36 +1149,26 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_TICK => maintenance(),
         native.MOON_PLUGIN_ENABLE => {
             if (native.moon_shell_private()) return;
-            plugins.enable(index);
-            network.select(plugins.networkSource());
-            checkSiteDataGrant();
-            checkPageSourceGrant();
-            checkFindGrant();
-            checkClosedTabGrant();
-            checkTabToolsGrant();
+            if (changePlugin(index,null)==.unavailable)
+                native.moon_shell_info("插件设置","无法保存插件设置。");
         },
         native.MOON_PLUGIN_GRANT => {
             if (native.moon_shell_private()) return;
             const permission = std.enums.fromInt(sdk.Permission,index & 0xffffffff) orelse return;
-            plugins.toggleGrant(index >> 32,permission);
-            if (permission == .@"network.filter") network.select(plugins.networkSource());
-            if (permission == .@"siteData.read") checkSiteDataGrant();
-            if (permission == .@"page.source") checkPageSourceGrant();
-            if (permission == .@"page.reading") checkFindGrant();
-            if (permission == .@"tabs.closed.manage") checkClosedTabGrant();
-            if (permission == .@"tabs.organize") checkTabToolsGrant();
+            if (changePlugin(index >> 32,permission)==.unavailable)
+                native.moon_shell_info("插件设置","无法保存插件设置。");
         },
         native.MOON_PLUGIN_SETTINGS => {
             var address: [256]u8 = undefined;
-            if (plugins.settingsAddress(index,&address)) |url| addTab(url,false);
+            if (plugins.settingsAddress(index,&address)) |url| _ = openInternalPage(url);
         },
         native.MOON_PLUGIN_COMMAND => plugins.command(index >> 32, index & 0xffffffff, tabSnapshot()),
         native.MOON_FOCUS_ADDRESS => native.moon_shell_focus_address(),
         native.MOON_TOGGLE_SIDEBAR => native.moon_shell_toggle_sidebar(),
         native.MOON_TOGGLE_THEME => native.moon_shell_toggle_theme(),
-        native.MOON_OPEN_PLUGINS => native.moon_shell_open_plugins(),
+        native.MOON_OPEN_PLUGINS => if (!native.moon_shell_private()) { _ = openInternalPage(plugin_manager.address); },
         native.MOON_UPDATES => if (!native.moon_shell_private()) updater.open(native.moon_clock()),
-        native.MOON_MARKET => if (!native.moon_shell_private()) addTab(market.address,false),
+        native.MOON_MARKET => if (!native.moon_shell_private()) { _ = openInternalPage(market.address); },
         native.MOON_SCRIPTS_INSTALL => if (!native.moon_shell_private()) userscripts.install(slice(c_text)),
         native.MOON_SCRIPTS_TOGGLE => if (!native.moon_shell_private()) userscripts.toggle(index),
         native.MOON_SCRIPTS_REMOVE => if (!native.moon_shell_private()) userscripts.remove(index),
@@ -1429,6 +1426,58 @@ export fn moon_extension_request(panel: u64, id: [*c]const u8, request: [*c]cons
     return copy(result[0..cap],reply);
 }
 
+fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
+    const result = plugins.toggle(index,permission);
+    if (result != .saved) return result;
+    if (permission == null or permission == .@"network.filter") network.select(plugins.networkSource());
+    if (permission == null or permission == .@"siteData.read") checkSiteDataGrant();
+    if (permission == null or permission == .@"page.source") checkPageSourceGrant();
+    if (permission == null or permission == .@"page.reading") checkFindGrant();
+    if (permission == null or permission == .@"tabs.closed.manage") checkClosedTabGrant();
+    if (permission == null or permission == .@"tabs.organize") checkTabToolsGrant();
+    native.moon_shell_refresh();
+    return result;
+}
+
+export fn moon_plugins_request(panel: u64, raw: [*c]const u8, response: [*c]u8, cap: usize) bool {
+    if (stopped or native.moon_shell_private()) return false;
+    const tab = tabIndex(panel) orelse return false;
+    if (!tabs[tab].extension or !equals(slice(&tabs[tab].url),plugin_manager.address)) return false;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const input = std.json.parseFromSliceLeaky(plugin_manager.Request,allocator,slice(raw),.{}) catch return false;
+    const output = response[0..cap];
+    if (input.op == .list) return plugin_manager.list(allocator,output,input.offset);
+    if (input.op == .market) {
+        if (active != tab) return false;
+        return plugin_manager.reply(allocator,output,.{ .opened = openInternalPage(market.address) });
+    }
+
+    const index = plugins.indexOf(input.id orelse return false) orelse return false;
+    if (input.op == .details) return plugin_manager.details(allocator,output,index);
+    if (active != tab) return false;
+    switch (input.op) {
+        .settings => {
+            var buffer: [256]u8 = undefined;
+            const address = plugins.settingsAddress(index,&buffer) orelse return false;
+            return plugin_manager.reply(allocator,output,.{ .opened = openInternalPage(address) });
+        },
+        .enable, .grant => {
+            const enabled = input.enabled orelse return false;
+            const permission = if (input.op == .grant) input.permission orelse return false else null;
+            const current = if (permission) |scope| blk: {
+                const flags = plugins.permissionFlags(index,scope);
+                if (!plugins.isEnabled(index) or flags & 1 == 0) return false;
+                break :blk flags & 2 != 0;
+            } else plugins.isEnabled(index);
+            const result: plugins.Change = if (current == enabled) .saved else changePlugin(index,permission);
+            return plugin_manager.reply(allocator,output,.{ .result = result });
+        },
+        else => unreachable,
+    }
+}
+
 export fn moon_privacy_allowed(tab: u64, owner: [*c]const u8) bool {
     return !stopped and count != 0 and tabs[active].id == tab and plugins.hasGrant(slice(owner),.@"privacy.clear");
 }
@@ -1443,6 +1492,10 @@ export fn moon_plugin_open_page(id: [*c]const u8) bool {
     if (stopped or count == 0) return false;
     var buffer: [256]u8 = undefined;
     const address = plugins.addressForId(slice(id),&buffer) orelse return false;
+    return openInternalPage(address);
+}
+
+fn openInternalPage(address: []const u8) bool {
     for (tabs[0..count],0..) |*tab,index| {
         if (!tab.extension or !equals(slice(&tab.url),address)) continue;
         chooseTab(index,true);
