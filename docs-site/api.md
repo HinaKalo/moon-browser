@@ -25,7 +25,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 
 将 `plugin.json` 和同目录 EXE 放进浏览器程序或配置目录下的 `plugins/<目录>`，重启后从工具栏菜单启用。命令在插件菜单与命令面板中使用同一 ID。每个插件可声明一到八条命令，ID 在插件内唯一。
 
-命令可选填 `shortcut`。当前支持 `Ctrl+H`、`Ctrl+D`、`Ctrl+Shift+O`、`Ctrl+J`、`F12`、`Ctrl+Shift+J`、`Ctrl+F`、`Ctrl++`、`Ctrl+-`、`Ctrl+0` 和 `Ctrl+Shift+T`。同一组合键由第一个已启用且声明该组合键的插件处理，随浏览器分发的插件优先。
+命令可选填 `shortcut`。当前支持 `Ctrl+H`、`Ctrl+D`、`Ctrl+Shift+O`、`Ctrl+J`、`F12`、`Ctrl+Shift+J`、`Ctrl+F`、`Ctrl++`、`Ctrl+-`、`Ctrl+0`、`Ctrl+Shift+T` 和 `Ctrl+Shift+Delete`。同一组合键由第一个已启用且声明该组合键的插件处理，随浏览器分发的插件优先。
 
 插件启用与权限授权分别由用户确认。`tabs.read` 允许访问触发时的活动标签，`lua.scripts.manage` 允许管理已安装用户脚本。撤销权限后，后续调用失效。EXE 自身按当前 Windows 用户权限运行。
 
@@ -67,6 +67,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `tabs.closed.list` | `tabs.closed.manage` | 无参数，返回最近关闭标签的数组 `[{ id, title, origin }]`。 |
 | `tabs.closed.reopen` | `tabs.closed.manage` | 在用户命令或活动插件页面中传入 `{ id? }`。省略 ID 时恢复最近一项。返回 `reopened`、`notFound`、`tabLimit` 或 `unavailable`。 |
 | `tabs.closed.clear` | `tabs.closed.manage` | 在用户命令或插件页面中调用，无参数。成功返回 `null`。 |
+| `privacy.clear` | `privacy.clear` | 在活动标签的用户命令或已授权插件页面传入 `{ history?, siteData?, cache? }`，至少选中一项。宿主确认后返回 `started`，其他结果为 `cancelled`、`busy` 或 `unavailable`。 |
+| `privacy.status` | `privacy.clear` | 无参数。返回同一插件最近一次清理的 `{ state, failed }`。见[清除浏览数据](./privacy)。 |
 
 脚本 ID 是 64 位小写十六进制字符组成的不透明标识。同一份源码重复导入返回 `ALREADY_EXISTS`。脚本内容或匹配范围改动后要重新导入，首次启用重新确认。管理接口负责导入和状态，网页导航触发运行，宿主 Lua VM 执行代码。
 

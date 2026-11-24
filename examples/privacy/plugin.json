@@ -1,0 +1,15 @@
+{
+  "id": "moon.privacy",
+  "name": "清除浏览数据",
+  "version": "0.1.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonPrivacy.exe",
+  "settingsPage": "privacy.html",
+  "contributes": {
+    "commands": [
+      { "id": "open", "label": "清除浏览数据", "shortcut": "Ctrl+Shift+Delete" }
+    ]
+  },
+  "permissions": ["privacy.clear"]
+}

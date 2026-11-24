@@ -1015,6 +1015,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.read" => "允许查看站点数据",
         .@"page.reading" => "允许打开页内查找和调整缩放",
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
+        .@"privacy.clear" => "允许在确认后清除浏览数据",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {
@@ -1043,6 +1044,10 @@ export fn moon_extension_request(panel: u64, id: [*c]const u8, request: [*c]cons
     }) catch return false;
     defer allocator.free(reply);
     return copy(result[0..cap],reply);
+}
+
+export fn moon_privacy_allowed(tab: u64, owner: [*c]const u8) bool {
+    return !stopped and count != 0 and tabs[active].id == tab and plugins.hasGrant(slice(owner),.@"privacy.clear");
 }
 
 export fn moon_plugin_open_page(id: [*c]const u8) bool {

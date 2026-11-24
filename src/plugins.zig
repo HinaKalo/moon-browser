@@ -23,6 +23,7 @@ const Grant = struct {
     lua_scripts_manage: bool = false, page_inspect: bool = false, history_manage: bool = false, network_filter: bool = false,
     bookmarks_manage: bool = false, downloads_manage: bool = false, site_data_read: bool = false, page_reading: bool = false,
     tabs_closed_manage: bool = false,
+    privacy_clear: bool = false,
 };
 const Outcome = enum { ok, failed, timed_out, crashed };
 const Trigger = enum { command, changed, timeout_test, crash_test };
@@ -137,7 +138,8 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             else if (std.mem.eql(u8,id,"moon.downloads")) .@"downloads.manage"
             else if (std.mem.eql(u8,id,"moon.site-data")) .@"siteData.read"
             else if (std.mem.eql(u8,id,"moon.reading")) .@"page.reading"
-            else if (std.mem.eql(u8,id,"moon.recent-tabs")) .@"tabs.closed.manage" else null;
+            else if (std.mem.eql(u8,id,"moon.recent-tabs")) .@"tabs.closed.manage"
+            else if (std.mem.eql(u8,id,"moon.privacy")) .@"privacy.clear" else null;
         if (default_permission) |scope| {
             if (requests.contains(scope)) {
                 plugin.enabled = true;
@@ -209,6 +211,7 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.site_data_read and plugin.requests.contains(.@"siteData.read")) plugin.grants.insert(.@"siteData.read");
         if (grant.enabled and grant.page_reading and plugin.requests.contains(.@"page.reading")) plugin.grants.insert(.@"page.reading");
         if (grant.enabled and grant.tabs_closed_manage and plugin.requests.contains(.@"tabs.closed.manage")) plugin.grants.insert(.@"tabs.closed.manage");
+        if (grant.enabled and grant.privacy_clear and plugin.requests.contains(.@"privacy.clear")) plugin.grants.insert(.@"privacy.clear");
         break;
     };
 }
@@ -228,6 +231,7 @@ fn persist() bool {
         .site_data_read = plugin.grants.contains(.@"siteData.read"),
         .page_reading = plugin.grants.contains(.@"page.reading"),
         .tabs_closed_manage = plugin.grants.contains(.@"tabs.closed.manage"),
+        .privacy_clear = plugin.grants.contains(.@"privacy.clear"),
     };
     const bytes = std.json.Stringify.valueAlloc(allocator, items[0..len], .{}) catch return false;
     defer allocator.free(bytes);
@@ -259,6 +263,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
                 .@"page.reading" => "此插件可在当前页打开查找栏，并调整页面缩放。",
                 .@"tabs.closed.manage" => "此插件可查看最近关闭标签的标题和站点，并恢复或清空这些标签。",
+                .@"privacy.clear" => "此插件可以请求清除所选浏览数据。浏览器会在删除前单独确认。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
             plugin.grants.insert(scope);

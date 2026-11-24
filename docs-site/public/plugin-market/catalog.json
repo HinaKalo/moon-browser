@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.privacy",
+      "name": "清除浏览数据",
+      "description": "按类别清除当前配置文件的浏览历史、站点数据和网页缓存。",
+      "permission": "确认后清除浏览数据",
+      "url": "https://docs.browser.moonl.cloud/privacy.html"
+    },
+    {
       "id": "moon.recent-tabs",
       "name": "最近关闭的标签",
       "description": "恢复本次会话中关闭的网页，支持 Ctrl+Shift+T 和逐项恢复。",

@@ -14,7 +14,7 @@ import sys
 import tempfile
 from threading import Event, Thread
 from time import monotonic, sleep
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 from zipfile import ZipFile
 
 
@@ -54,6 +54,8 @@ class Fixture(BaseHTTPRequestHandler):
     change_site_data_source = Event()
     reading_layout = {}
     closed_loaded = {}
+    privacy_reports = {}
+    privacy_asset_requests = 0
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -101,6 +103,17 @@ class Fixture(BaseHTTPRequestHandler):
         elif path.startswith("/closed-ready/"):
             page = path.removeprefix("/closed-ready/")
             self.closed_loaded[page] = self.closed_loaded.get(page, 0) + 1
+            data, content_type = b"ok", "text/plain"
+        elif path == "/privacy-cacheable":
+            type(self).privacy_asset_requests += 1
+            data, content_type = b"cache fixture", "text/plain"
+        elif path == "/privacy-worker.js":
+            data, content_type = b"self.addEventListener('fetch',()=>{});", "application/javascript"
+        elif path.startswith("/privacy-report/"):
+            stage = path.removeprefix("/privacy-report/")
+            report = {key: values[0] for key, values in parse_qs(urlsplit(self.path).query).items()}
+            report["cookies"] = self.headers.get("Cookie", "")
+            self.privacy_reports[stage] = report
             data, content_type = b"ok", "text/plain"
         elif path.startswith("/page/"):
             name = path.removeprefix("/page/")
@@ -171,6 +184,30 @@ class Fixture(BaseHTTPRequestHandler):
             if name == "closed-post":
                 demo = ('<form action="/closed-submit" method="post"><input name="fixture" value="test"></form>'
                         '<script>document.forms[0].submit();</script>')
+            if name.startswith("privacy-"):
+                seed = "true" if name == "privacy-seed" else "false"
+                demo = (
+                    '<script>addEventListener("load",async()=>{let phase="local";try{'
+                    f'if({seed}){{'
+                    'localStorage.setItem("moon-privacy","present");'
+                    'phase="indexeddb";'
+                    'await new Promise((resolve,reject)=>{const r=indexedDB.open("moon-privacy",1);'
+                    'r.onupgradeneeded=()=>r.result.createObjectStore("proof");'
+                    'r.onsuccess=()=>{r.result.close();resolve();};r.onerror=reject;});'
+                    'phase="cache open";const saved=await caches.open("moon-privacy");'
+                    'phase="cache put";await saved.put("/privacy-cache-proof",new Response("present"));'
+                    'phase="service worker";if(navigator.serviceWorker)await navigator.serviceWorker.register("/privacy-worker.js",{scope:"/privacy-worker-only/"});'
+                    '}'
+                    'phase="resource fetch";'
+                    'const r=await fetch("/privacy-cacheable",{cache:"force-cache"});await r.text();'
+                    'phase="storage read";const fields={local:localStorage.getItem("moon-privacy")==="present",'
+                    'idb:(await indexedDB.databases()).some(v=>v.name==="moon-privacy"),'
+                    'domCache:(await caches.keys()).includes("moon-privacy"),'
+                    'worker:navigator.serviceWorker&&(await navigator.serviceWorker.getRegistrations()).some(v=>v.scope.endsWith("/privacy-worker-only/"))};'
+                    f'await fetch("/privacy-report/{name}?"+new URLSearchParams(fields),{{cache:"no-store"}});'
+                    f'}}catch(error){{fetch("/privacy-report/{name}?error="+encodeURIComponent(phase+": "+error),{{cache:"no-store"}});}}'
+                    '});</script>'
+                )
             data = (
                 "<!doctype html><meta charset=utf-8>"
                 f"<title>Moon fixture {name}</title>"
@@ -189,6 +226,11 @@ class Fixture(BaseHTTPRequestHandler):
         if path == "/page/site-data-contract":
             self.send_header("Set-Cookie", "moon-visible=cookie-value; Path=/")
             self.send_header("Set-Cookie", "moon-http-only=private-value; HttpOnly; Path=/")
+        if path == "/page/privacy-seed":
+            self.send_header("Set-Cookie", "moon-privacy-visible=present; Path=/")
+            self.send_header("Set-Cookie", "moon-privacy-http=present; HttpOnly; Path=/")
+        if path == "/privacy-cacheable":
+            self.send_header("Cache-Control", "public, max-age=3600")
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -406,6 +448,7 @@ def run_win32(exe, base, root):
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     recent = exe.parent / "plugins" / "recent-tabs" / "MoonRecentTabs.exe"
+    privacy = exe.parent / "plugins" / "privacy" / "MoonPrivacy.exe"
     if manager.exists():
         fixture = profile / "plugins" / "settings"
         fixture.mkdir(parents=True)
@@ -419,6 +462,8 @@ def run_win32(exe, base, root):
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
             {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True},
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
+            {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
+            {"id": "moon.privacy-data-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
@@ -443,6 +488,9 @@ def run_win32(exe, base, root):
             ('const closedDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"4",method:"tabs.closed.list",params:{}}));'
              'if(JSON.parse(closedDenied).error?.code!==-32001)return;' if recent.exists() else '') +
+            ('const privacyDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"5",method:"privacy.clear",params:{siteData:true}}));'
+             'if(JSON.parse(privacyDenied).error?.code!==-32001)return;' if privacy.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -626,6 +674,36 @@ def run_win32(exe, base, root):
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "recent.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
+    if privacy.exists():
+        page = privacy.with_name("privacy.html").read_text(encoding="utf-8")
+        for choice in ("cache", "data"):
+            fixture = profile / "plugins" / f"privacy-{choice}-contract"
+            fixture.mkdir(parents=True)
+            (fixture / "plugin.json").write_text(json.dumps({
+                "id": f"moon.privacy-{choice}-fixture", "name": "Privacy contract", "version": "1.0.0",
+                "apiVersion": 2, "runtime": "native", "entry": "Unused.exe", "settingsPage": "privacy.html",
+                "permissions": ["privacy.clear"], "contributes": {"commands": [{"id": "open", "label": "Fixture"}]},
+            }), encoding="utf-8")
+            preparation = (
+                'for(const input of options)input.checked=true;updateControls();'
+                'erase.click();await wait(()=>status.textContent.includes("已取消"),"cancel");'
+                'if((await host("privacy.status")).state!=="idle")throw Error("cancel started an operation");'
+                'for(const input of options)input.checked=input.name==="cache";updateControls();'
+                if choice == "cache" else
+                'for(const input of options)input.checked=input.name!=="cache";updateControls();'
+            )
+            contract = (
+                '<script>(async()=>{'
+                'const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:"write",value}));'
+                'const wait=async(fn,label)=>{for(let i=0;i<220;i++){if(await fn())return;'
+                'await new Promise(r=>setTimeout(r,50));}throw Error(label+": "+status.textContent);};'
+                'try{await wait(()=>!erase.disabled,"ready");' + preparation +
+                'erase.click();await wait(()=>status.textContent.includes("已清除"),"clear");'
+                'const state=await host("privacy.status");'
+                'if(state.state!=="complete"||Object.values(state.failed).some(Boolean))throw Error(JSON.stringify(state));'
+                'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
+            )
+            (fixture / "privacy.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
     def browser_frame(process):
         deadline = monotonic() + 20
         while monotonic() < deadline:
@@ -1106,6 +1184,71 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address()==after and Fixture.closed_loaded.get("closed-second",0)>restore_count,
                      "Restoring a selected entry did not reopen the actual webpage")
             print("recent_tabs_plugin=ok back_forward=ok protected_input=ok non_get=ok targeted_reopen=ok clear_confirmation=ok",flush=True)
+        if privacy.exists():
+            def visit_privacy(stage):
+                set_control(edit,base + "/page/" + stage)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                result = wait_for(lambda: Fixture.privacy_reports.get(stage),f"{stage} did not report data",18)
+                if result.get("error"):
+                    raise RuntimeError(f"{stage}: {result}")
+                return result
+
+            def privacy_prompt(button):
+                popup = wait_for(lambda: owned_window("#32770","清除浏览数据？"),
+                                 "The privacy plugin did not display the host confirmation")
+                user.PostMessageW(popup,0x0111,button,0)
+                wait_for(lambda: not user.IsWindow(popup),"Privacy confirmation did not close")
+
+            def count_rows(filename,table):
+                with closing(sqlite3.connect(profile / filename)) as db:
+                    return db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+            def check_site(report,present,worker):
+                flag = str(present).lower()
+                if any(report.get(key)!=flag for key in ("local","idb","domCache")):
+                    raise RuntimeError(f"Wrong persistent site storage: {report}")
+                if worker and report.get("worker")!=flag:
+                    raise RuntimeError(f"Wrong Service Worker registration: {report}")
+                if any((key + "=present" in report["cookies"])!=present
+                       for key in ("moon-privacy-visible","moon-privacy-http")):
+                    raise RuntimeError(f"Wrong HTTP or HttpOnly cookie storage: {report}")
+
+            seeded = visit_privacy("privacy-seed")
+            worker = seeded.get("worker")=="true"
+            check_site(seeded,True,worker)
+            warm = Fixture.privacy_asset_requests
+            check_site(visit_privacy("privacy-warm"),True,worker)
+            if Fixture.privacy_asset_requests != warm:
+                raise RuntimeError("The HTTP cache fixture was not reused before clearing")
+
+            saved_bookmarks = count_rows("bookmarks.sqlite3","bookmarks")
+            saved_downloads = count_rows("downloads.sqlite3","downloads")
+            invoke("清除浏览数据")
+            wait_for(lambda: read_address()=="extension://moon.privacy/privacy.html",
+                     "The bundled privacy plugin did not open its page")
+            set_control(edit,"extension://moon.privacy-cache-fixture/privacy.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            privacy_prompt(7)  # IDNO
+            privacy_prompt(6)  # IDYES
+            library_result("moon.privacy-cache-fixture")
+            if not history_rows("SELECT id FROM visits WHERE url=?",(base + "/page/privacy-seed",)):
+                raise RuntimeError("Cache-only clearing removed history")
+            check_site(visit_privacy("privacy-after-cache"),True,worker)
+            if Fixture.privacy_asset_requests != warm + 1:
+                raise RuntimeError("Clearing the resource cache did not refetch the cached response")
+
+            set_control(edit,"extension://moon.privacy-data-fixture/privacy.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            privacy_prompt(6)  # IDYES
+            library_result("moon.privacy-data-fixture")
+            if history_rows("SELECT COUNT(*) FROM visits") != [(0,)]:
+                raise RuntimeError("Selected browsing history was not cleared")
+            check_site(visit_privacy("privacy-after-data"),False,worker)
+            if count_rows("bookmarks.sqlite3","bookmarks") != saved_bookmarks or \
+                    count_rows("downloads.sqlite3","downloads") != saved_downloads:
+                raise RuntimeError("Privacy clearing modified the bookmark or download library")
+            print(f"privacy_plugin=ok native_cancel=ok scoped_clear=ok http_cache=ok http_only=ok "
+                  f"private_site_storage=ok service_worker={'ok' if worker else 'unavailable'}",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:
@@ -1128,7 +1271,10 @@ def main():
     parser.add_argument("--report", type=Path, help="Copy browser metrics to this path")
     args = parser.parse_args()
     source = args.exe.resolve(strict=True)
-    with ThreadingHTTPServer(("127.0.0.1", 0), Fixture) as server, tempfile.TemporaryDirectory(prefix="moon-smoke-") as directory:
+    # WebKit's Windows Cache Storage backend needs room for hashed paths under the profile.
+    temp_root = Path(os.environ["LOCALAPPDATA"]) / "Temp"
+    temp_root.mkdir(exist_ok=True)
+    with ThreadingHTTPServer(("127.0.0.1", 0), Fixture) as server, tempfile.TemporaryDirectory(prefix="moon-", dir=temp_root) as directory:
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         root = Path(directory)

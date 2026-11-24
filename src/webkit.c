@@ -37,6 +37,8 @@
 #include <string.h>
 #include <wchar.h>
 
+extern void WKHTTPCookieStoreDeleteAllCookies(WKHTTPCookieStoreRef, void *, void (*)(void *));
+
 #define WK_FUNCTIONS(X) \
     X(WKRelease) X(WKGetTypeID) X(WKSessionStateGetTypeID) X(WKSessionStateCopyData) X(WKDataGetSize) \
     X(WKStringCreateWithUTF8CString) X(WKStringGetUTF8CString) X(WKStringIsEqualToUTF8CString) \
@@ -52,6 +54,10 @@
     X(WKWebsiteDataStoreConfigurationSetLocalStorageDirectory) X(WKWebsiteDataStoreConfigurationSetIndexedDBDatabaseDirectory) \
     X(WKWebsiteDataStoreConfigurationSetCacheStorageDirectory) X(WKWebsiteDataStoreConfigurationSetServiceWorkerRegistrationDirectory) \
     X(WKWebsiteDataStoreCreateWithConfiguration) X(WKWebsiteDataStoreRemoveMemoryCaches) \
+    X(WKWebsiteDataStoreGetHTTPCookieStore) X(WKHTTPCookieStoreDeleteAllCookies) \
+    X(WKWebsiteDataStoreRemoveLocalStorage) X(WKWebsiteDataStoreRemoveAllIndexedDatabases) \
+    X(WKWebsiteDataStoreRemoveAllServiceWorkerRegistrations) X(WKWebsiteDataStoreRemoveAllFetchCaches) \
+    X(WKWebsiteDataStoreRemoveNetworkCache) \
     X(WKPageConfigurationCreate) X(WKPageConfigurationSetContext) X(WKPageConfigurationSetWebsiteDataStore) \
     X(WKPageConfigurationSetPreferences) X(WKPreferencesCreate) X(WKPreferencesSetJavaScriptCanOpenWindowsAutomatically) \
     X(WKViewCreate) X(WKViewGetWindow) X(WKViewGetPage) X(WKViewSetIsInWindow) \
@@ -732,6 +738,37 @@ void moon_engine_read(MoonView *view, char *title, size_t title_cap, char *url, 
     copy_url(wk.WKPageCopyActiveURL(view->page),url,url_cap);
 }
 static void cache_trimmed(void *unused) {}
+typedef struct {
+    unsigned remaining;
+    unsigned category;
+} EraseTask;
+static EraseTask erase_site, erase_cache;
+
+static void erase_completed(void *context) {
+    EraseTask *task = context;
+    if (task->remaining && --task->remaining == 0) moon_privacy_engine_done(task->category);
+}
+
+unsigned moon_engine_erase_data(unsigned requested) {
+    if (!store || erase_site.remaining || erase_cache.remaining) return 0;
+    WKHTTPCookieStoreRef cookies = requested & MOON_ERASE_SITE ? wk.WKWebsiteDataStoreGetHTTPCookieStore(store) : NULL;
+    const unsigned accepted = (cookies ? MOON_ERASE_SITE : 0) | (requested & MOON_ERASE_CACHE);
+    erase_site = (EraseTask){ .remaining=cookies ? 5 : 0, .category=MOON_ERASE_SITE };
+    erase_cache = (EraseTask){ .remaining=accepted & MOON_ERASE_CACHE ? 2 : 0, .category=MOON_ERASE_CACHE };
+    if (cookies) {
+        wk.WKHTTPCookieStoreDeleteAllCookies(cookies,&erase_site,erase_completed);
+        wk.WKWebsiteDataStoreRemoveLocalStorage(store,&erase_site,erase_completed);
+        wk.WKWebsiteDataStoreRemoveAllIndexedDatabases(store,&erase_site,erase_completed);
+        wk.WKWebsiteDataStoreRemoveAllServiceWorkerRegistrations(store,&erase_site,erase_completed);
+        wk.WKWebsiteDataStoreRemoveAllFetchCaches(store,&erase_site,erase_completed);
+    }
+    if (accepted & MOON_ERASE_CACHE) {
+        wk.WKWebsiteDataStoreRemoveNetworkCache(store,&erase_cache,erase_completed);
+        wk.WKWebsiteDataStoreRemoveMemoryCaches(store,&erase_cache,erase_completed);
+    }
+    return accepted;
+}
+
 void moon_engine_trim(void) {
     if (store) wk.WKWebsiteDataStoreRemoveMemoryCaches(store,NULL,cache_trimmed);
 }

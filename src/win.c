@@ -689,8 +689,12 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     AppendMenuW(popup,MF_STRING|(focus_mode?MF_CHECKED:0),MENU_FOCUS,L"\u4e13\u6ce8\u6a21\u5f0f\tCtrl+B");
     userscript_menu(popup);
     size_t count=moon_plugin_count();
-    if (count) AppendMenuW(popup,MF_SEPARATOR,0,NULL);
-    for(size_t i=0;i<count;++i) {
+    HMENU extensions=count ? CreatePopupMenu() : NULL;
+    if (extensions) {
+        AppendMenuW(popup,MF_SEPARATOR,0,NULL);
+        AppendMenuW(popup,MF_POPUP,(UINT_PTR)extensions,L"插件");
+    }
+    for(size_t i=0;extensions && i<count;++i) {
         wchar_t name[256],action[300];
         if (!moon_utf16(moon_plugin_label(i),name,ARRAYSIZE(name))) continue;
         HMENU sub=CreatePopupMenu();
@@ -716,7 +720,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
             }
             AppendMenuW(sub,MF_STRING|(enabled?0:MF_GRAYED),id+MENU_PLUGIN_ACTIONS+j,action);
         }
-        AppendMenuW(popup,MF_POPUP,(UINT_PTR)sub,name);
+        AppendMenuW(extensions,MF_POPUP,(UINT_PTR)sub,name);
     }
     MapWindowPoints(hwnd,NULL,(POINT *)&button,2);
     TPMPARAMS placement={.cbSize=sizeof(placement),.rcExclude=button};
@@ -1055,6 +1059,7 @@ static bool keyboard(MSG *msg) {
     if (ctrl && shift && !alt && msg->wParam == 'O' && moon_plugin_shortcut("Ctrl+Shift+O")) return true;
     if (ctrl && msg->wParam == 'B') { moon_shell_toggle_sidebar(); return true; }
     if (ctrl && shift && !alt && msg->wParam == 'T' && moon_plugin_shortcut("Ctrl+Shift+T")) return true;
+    if (ctrl && shift && !alt && msg->wParam == VK_DELETE && moon_plugin_shortcut("Ctrl+Shift+Delete")) return true;
     if (ctrl && !shift && !alt && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
     if (ctrl && msg->wParam == 'W') { moon_command(MOON_CLOSE,moon_active_index(),NULL); return true; }
     if (ctrl && msg->wParam == VK_TAB) { moon_command(shift ? MOON_KEY_PREV : MOON_KEY_NEXT,0,NULL); return true; }

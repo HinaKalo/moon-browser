@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>清除浏览数据</title>
+<style>
+  :root {
+    color-scheme: light;
+    font: 14px/1.55 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    --page: #f6f7fa; --panel: #fff; --text: #141820; --quiet: #545d70; --rule: #dce0eb;
+    --hover: #eef1f8; --accent: #4158bf; --warning: #a12d3b; --danger: #9f2938; --on-danger: #fff;
+    background: var(--page);
+    color: var(--text);
+  }
+  :root[data-moon-theme="dark"] {
+    color-scheme: dark;
+    --page: #171a22; --panel: #202430; --text: #edf0f7; --quiet: #b8c0d2; --rule: #3a4359;
+    --hover: #292f41; --accent: #acbaff; --warning: #ffacb5; --danger: #ffb5be; --on-danger: #4b0a17;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { width: min(100%, 750px); margin: auto; padding: 43px clamp(19px, 5vw, 48px) 53px; }
+  h1 { font-size: 29px; letter-spacing: -.02em; margin: 0 0 7px; }
+  p { margin: 0; color: var(--quiet); }
+  fieldset { border: 1px solid var(--rule); border-radius: 11px; padding: 0; margin: 23px 0 0; min-width: 0; background: var(--panel); }
+  label { display: flex; align-items: start; gap: 13px; padding: 14px 16px; cursor: pointer; }
+  label + label { border-top: 1px solid var(--rule); }
+  label:hover { background: var(--hover); }
+  label:first-of-type { border-radius: 10px 10px 0 0; }
+  label:last-of-type { border-radius: 0 0 10px 10px; }
+  input { flex: none; width: 17px; height: 17px; accent-color: var(--accent); margin: 2px 0 0; }
+  strong, small { display: block; }
+  small { margin-top: 3px; font-size: 13px; color: var(--quiet); }
+  footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; padding-top: 18px; }
+  #status { flex: 1; min-width: 160px; }
+  #status[data-error] { color: var(--warning); }
+  button { font: inherit; border: 0; border-radius: 8px; padding: 9px 15px; background: var(--danger); color: var(--on-danger); cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+</style>
+<main>
+  <h1>清除浏览数据</h1>
+  <p>清除当前浏览器配置文件中所选项目的全部时间记录。</p>
+  <form id="privacy">
+    <fieldset aria-label="要清除的数据">
+      <legend class="sr-only">要清除的数据</legend>
+      <label>
+        <input type="checkbox" name="history">
+        <span><strong>浏览历史</strong><small>删除历史记录和最近关闭的标签列表。</small></span>
+      </label>
+      <label>
+        <input type="checkbox" name="siteData">
+        <span><strong>Cookie 和持久站点数据</strong><small>清除登录 Cookie 和已保存的站点数据。你可能需要重新登录。</small></span>
+      </label>
+      <label>
+        <input type="checkbox" name="cache" checked>
+        <span><strong>网页缓存文件</strong><small>清除网页资源的磁盘和内存缓存。首次重新打开网站时可能稍慢。</small></span>
+      </label>
+    </fieldset>
+    <footer>
+      <p id="status" role="status"></p>
+      <button type="submit" id="erase" disabled>清除所选数据…</button>
+    </footer>
+  </form>
+</main>
+<script>
+  const form = document.querySelector('#privacy');
+  const options = [...form.querySelectorAll('input')];
+  const erase = document.querySelector('#erase');
+  const status = document.querySelector('#status');
+  const names = { history: '浏览历史', siteData: 'Cookie 和持久站点数据', cache: '网页缓存文件' };
+  let callId = 0;
+  let busy = true;
+
+  async function host(method, params = {}) {
+    const response = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(
+      JSON.stringify({ jsonrpc: '2.0', id: String(++callId), method, params })
+    ));
+    if (response.error) throw new Error(response.error.message);
+    return response.result;
+  }
+
+  function message(text, error = false) {
+    status.textContent = text;
+    status.toggleAttribute('data-error', error);
+  }
+
+  function updateControls() {
+    options.forEach(input => { input.disabled = busy; });
+    erase.disabled = busy || !options.some(input => input.checked);
+  }
+
+  async function monitor(saved) {
+    let result = await host('privacy.status');
+    while (result.state === 'running' || result.state === 'waitingForEngine') {
+      message(result.state === 'running' ? '正在清除浏览数据…' : '仍在等待 WebKit 完成清理…');
+      await new Promise(resolve => setTimeout(resolve, result.state === 'running' ? 250 : 1500));
+      result = await host('privacy.status');
+    }
+    if (result.state === 'complete' && (!saved || status.textContent)) message('已清除所选浏览数据。');
+    if (result.state === 'incomplete') {
+      const failed = Object.keys(names).filter(key => result.failed[key]).map(key => names[key]);
+      message('未能清除' + failed.join('、') + '。', true);
+    }
+  }
+
+  async function start(event) {
+    event.preventDefault();
+    if (busy || erase.disabled) return;
+    const selection = Object.fromEntries(options.map(input => [input.name, input.checked]));
+    busy = true;
+    updateControls();
+    message('等待确认…');
+    try {
+      const result = await host('privacy.clear', selection);
+      if (result === 'started') await monitor(false);
+      else if (result === 'cancelled') message('已取消清理。');
+      else if (result === 'busy') message('已有清理正在进行。');
+      else message('当前无法清理。请切回此页再试。', true);
+    } catch {
+      message('无法清除浏览数据，请检查插件权限。', true);
+    } finally {
+      busy = false;
+      updateControls();
+    }
+  }
+
+  form.addEventListener('submit', start);
+  form.addEventListener('change', updateControls);
+  updateControls();
+  monitor(true).catch(() => message('无法获取清理状态，请检查插件权限。', true))
+    .finally(() => { busy = false; updateControls(); });
+</script>
+</html>

@@ -18,12 +18,14 @@ pub const Permission = enum {
     @"siteData.read",
     @"page.reading",
     @"tabs.closed.manage",
+    @"privacy.clear",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
     @"Ctrl+H", F12, @"Ctrl+Shift+J", @"Ctrl+D", @"Ctrl+Shift+O", @"Ctrl+J",
     @"Ctrl+F", @"Ctrl++", @"Ctrl+-", @"Ctrl+0",
     @"Ctrl+Shift+T",
+    @"Ctrl+Shift+Delete",
 };
 pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false, shortcut: ?Shortcut = null };
 pub const Manifest = struct {
@@ -52,6 +54,10 @@ pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
 pub const TabChange = struct { tabId: ?[]const u8 };
 pub const ClosedTab = struct { id: u32, title: []const u8, origin: []const u8 };
 pub const ReopenClosedTab = enum(c_int) { reopened, notFound, tabLimit, unavailable };
+pub const PrivacySelection = struct { history: bool = false, siteData: bool = false, cache: bool = false };
+pub const PrivacyStart = enum { started, cancelled, busy, unavailable };
+pub const PrivacyState = enum { idle, running, waitingForEngine, complete, incomplete };
+pub const PrivacyStatus = struct { state: PrivacyState, failed: PrivacySelection = .{} };
 pub const Script = struct { id: []const u8, name: []const u8, enabled: bool };
 pub const ScriptId = struct { id: []const u8 };
 pub const ScriptSwitch = struct { id: []const u8, enabled: bool };
@@ -143,6 +149,8 @@ pub const Method = enum {
     @"tabs.closed.list",
     @"tabs.closed.reopen",
     @"tabs.closed.clear",
+    @"privacy.clear",
+    @"privacy.status",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

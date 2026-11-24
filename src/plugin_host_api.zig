@@ -10,6 +10,7 @@ const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
 const recent_tabs = @import("recent_tabs.zig");
+const privacy = @import("privacy.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
 pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false };
@@ -38,6 +39,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
+        .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
     };
 }
 
@@ -103,6 +105,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
+        .@"privacy.clear", .@"privacy.status" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
     };
     if (!context.consent.valid(context.consent.context)) return sdk.failure(output, id, .Cancelled);
@@ -114,7 +117,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find",
-        .@"tabs.closed.list", .@"tabs.closed.clear" => {
+        .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -338,6 +341,14 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             recent_tabs.clear();
             return sdk.result(output,id,null);
         },
+        .@"privacy.clear" => {
+            if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const selection = decode(sdk.PrivacySelection,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (!selection.history and !selection.siteData and !selection.cache) return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            return sdk.result(output,id,privacy.start(selection,context.target_tab_id,owner,context.consent));
+        },
+        .@"privacy.status" => sdk.result(output,id,privacy.status(context.plugin_id)),
     };
 }
 

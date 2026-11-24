@@ -52,7 +52,7 @@ pub fn build(b: *std.Build) void {
     });
     devtools.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(devtools);
-    for ([_][]const u8{ "MoonHistory", "MoonBlocker", "MoonDownloads" }) |name| {
+    for ([_][]const u8{ "MoonHistory", "MoonBlocker", "MoonDownloads", "MoonPrivacy" }) |name| {
         const opener = b.addExecutable(.{
             .name = name,
             .root_module = b.createModule(.{ .root_source_file=b.path("examples/open_plugin_page.zig"), .target=target, .optimize=optimize, .link_libc=true }),

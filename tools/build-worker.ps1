@@ -109,6 +109,7 @@ $downloads = Join-Path $prefix 'bin\MoonDownloads.exe'
 $siteData = Join-Path $prefix 'bin\MoonSiteData.exe'
 $reading = Join-Path $prefix 'bin\MoonReading.exe'
 $recentTabs = Join-Path $prefix 'bin\MoonRecentTabs.exe'
+$privacy = Join-Path $prefix 'bin\MoonPrivacy.exe'
 $docs = @(
     $EngineLock
     (Join-Path $repo 'README.md')
@@ -132,13 +133,15 @@ $docs = @(
     (Join-Path $repo 'examples\reading\plugin.json')
     (Join-Path $repo 'examples\recent-tabs\plugin.json')
     (Join-Path $repo 'examples\recent-tabs\recent.html')
+    (Join-Path $repo 'examples\privacy\plugin.json')
+    (Join-Path $repo 'examples\privacy\privacy.html')
     (Join-Path $repo 'assets\app-icon.ico')
 )
 if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $privacy + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -180,6 +183,8 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     Copy-Item -LiteralPath $reading,(Join-Path $repo 'examples\reading\plugin.json') -Destination $readingPackage
     $recentPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\recent-tabs')).FullName
     Copy-Item -LiteralPath $recentTabs,(Join-Path $repo 'examples\recent-tabs\plugin.json'),(Join-Path $repo 'examples\recent-tabs\recent.html') -Destination $recentPackage
+    $privacyPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\privacy')).FullName
+    Copy-Item -LiteralPath $privacy,(Join-Path $repo 'examples\privacy\plugin.json'),(Join-Path $repo 'examples\privacy\privacy.html') -Destination $privacyPackage
     $fixtures = [IO.Directory]::CreateDirectory((Join-Path $stage 'tests')).FullName
     Copy-Item -LiteralPath $contractClient -Destination $fixtures
     $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $artifact))
