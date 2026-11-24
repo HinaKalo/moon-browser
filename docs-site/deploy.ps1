@@ -1,10 +1,8 @@
 #requires -Version 7.0
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
-$base = $env:MOON_DOCS_BASE
 Push-Location -LiteralPath $PSScriptRoot
 try {
-    $env:MOON_DOCS_BASE = '/moon-browser/docs/'
     pnpm install --frozen-lockfile
     pnpm build
     $archive = [IO.Path]::GetTempFileName()
@@ -21,6 +19,5 @@ try {
         }
     } finally { [IO.File]::Delete($archive) }
 } finally {
-    $env:MOON_DOCS_BASE = $base
     Pop-Location
 }

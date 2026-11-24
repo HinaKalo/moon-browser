@@ -3,8 +3,8 @@ set -eu
 
 root=/srv/moon-browser-docs
 config=/etc/caddy/Caddyfile
-snippet=/etc/caddy/moon-browser-docs.caddy
-import="	import $snippet"
+snippet=/etc/caddy/moon-browser-docs-site.caddy
+import="import $snippet"
 mkdir -p "$root/releases"
 exec 9>"$root/deploy.lock"
 flock 9
@@ -34,19 +34,15 @@ if ! grep -Fxq "$import" "$config"; then
     backup=$(mktemp /etc/caddy/moon-browser-docs-backup.XXXXXXXX)
     cp -p -- "$config" "$backup"
     cat > "$snippet" <<'CADDY'
-redir /moon-browser/docs /moon-browser/docs/ 308
-handle_path /moon-browser/docs/* {
-    root * /srv/moon-browser-docs/current
+docs.browser.moonl.cloud {
+    root * /srv/moon-browser-docs/public
     encode zstd gzip
     header Cache-Control "no-cache"
     file_server
 }
 CADDY
-    awk -v line="$import" '
-        { print }
-        $0 == "release.moonl.cloud {" { print line; matches++ }
-        END { if (matches != 1) exit 1 }
-    ' "$config" > "$candidate"
+    cat "$config" > "$candidate"
+    printf '\n%s\n' "$import" >> "$candidate"
     if ! caddy validate --config "$candidate" --adapter caddyfile; then
         rm -f -- "$snippet"
         exit 1
@@ -63,10 +59,11 @@ CADDY
     fi
 fi
 
-previous=$(readlink "$root/current" || :)
+previous=$(readlink "$root/public" || :)
+legacy=$(readlink "$root/current" || :)
 ln -s "$stage" "$stage.link"
-mv -Tf -- "$stage.link" "$root/current"
+mv -Tf -- "$stage.link" "$root/public"
 activated=true
 find "$root/releases" -mindepth 1 -maxdepth 1 -type d -name 'site.????????' \
-    ! -path "$stage" ! -path "$previous" -exec rm -rf -- {} +
-printf '%s\n' 'https://release.moonl.cloud/moon-browser/docs/'
+    ! -path "$stage" ! -path "$previous" ! -path "$legacy" -exec rm -rf -- {} +
+printf '%s\n' 'https://docs.browser.moonl.cloud/'

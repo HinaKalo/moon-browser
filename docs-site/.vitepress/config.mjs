@@ -4,7 +4,6 @@ export default defineConfig({
   lang: 'zh-CN',
   title: 'Moon Browser',
   description: 'Moon Browser 插件开发文档',
-  base: process.env.MOON_DOCS_BASE || '/',
   srcExclude: ['DEPLOY.md'],
   themeConfig: {
     nav: [

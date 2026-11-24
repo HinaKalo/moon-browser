@@ -39,7 +39,7 @@ build 生成本地开发目录，package 打包本地开发用的自包含 ZIP�
 
 把包含 plugin.json 和插件 EXE 的文件夹放进 EXE 旁的 plugins 目录，或放进 profile\plugins。重启后从工具栏菜单启用插件，并单独授权读取标签信息。预览包附带 Active Tab Example。插件是以当前用户身份运行的本地程序。
 
-[插件开发文档](https://release.moonl.cloud/moon-browser/docs/) · [插件 API 草案](https://release.moonl.cloud/moon-browser/docs/api.html)
+[插件开发文档](https://docs.browser.moonl.cloud/) · [插件 API 草案](https://docs.browser.moonl.cloud/api.html)
 
 协议使用 UTF-8、一行一个 JSON-RPC 2.0 消息。宿主每次启动独立进程进行一次交互，整个交互限时 2 秒，每帧小于 16 KiB。
 
