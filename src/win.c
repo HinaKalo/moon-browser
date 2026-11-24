@@ -63,8 +63,15 @@ static bool init_paths(void) {
     length = GetEnvironmentVariableW(L"MOON_BROWSER_PROFILE_DIR", location, ARRAYSIZE(location));
     if (length >= ARRAYSIZE(location)) return false;
     if (!length) {
-        length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, ARRAYSIZE(local));
-        if (!length || length >= ARRAYSIZE(local) || !moon_path(location, ARRAYSIZE(location), local, L"MoonBrowser\\profile")) return false;
+        wchar_t marker[2048];
+        if (!moon_path(marker, ARRAYSIZE(marker), executable, L"portable.flag")) return false;
+        DWORD attributes = GetFileAttributesW(marker);
+        if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+            if (!moon_path(location, ARRAYSIZE(location), executable, L"profile")) return false;
+        } else {
+            length = GetEnvironmentVariableW(L"LOCALAPPDATA", local, ARRAYSIZE(local));
+            if (!length || length >= ARRAYSIZE(local) || !moon_path(location, ARRAYSIZE(location), local, L"MoonBrowser\\profile")) return false;
+        }
     }
     int error = SHCreateDirectoryExW(NULL, location, NULL);
     if (error != ERROR_SUCCESS && error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) return false;

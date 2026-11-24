@@ -104,6 +104,9 @@ $docs = @(
     (Join-Path $repo 'THIRD-PARTY.md')
     (Join-Path $repo 'examples\plugin.json')
 )
+if ($Action -eq 'release') {
+    $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
+}
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
 $inputHashes = @(($docs + $exe + $sample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
@@ -127,7 +130,9 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $artifact))
     [IO.Directory]::Move($stage, $artifact)
 }
-if ($Action -in 'package','verify') {
+if ($Action -eq 'release') {
+    & (Join-Path $PSScriptRoot 'distribution\build-release.ps1') -Artifact $artifact -Work $work -EngineLock $EngineLock
+} elseif ($Action -in 'package','verify') {
     $package = Join-Path $Root "artifacts\$key\MoonBrowser-win-x64-preview.zip"
     if (![IO.File]::Exists($package)) {
         $stagedZip = Join-Path $work 'preview.zip'

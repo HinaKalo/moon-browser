@@ -1,7 +1,7 @@
 #requires -Version 7.0
 [CmdletBinding()]
 param(
-    [ValidateSet('build','test','package','verify','cache-status','cache-prune','fetch')] [string]$Action = 'build',
+    [ValidateSet('build','test','package','verify','release','cache-status','cache-prune','fetch')] [string]$Action = 'build',
     [string]$CacheDir = '',
     [string]$EngineLock = (Join-Path $PSScriptRoot 'engine.json'),
     [long]$SoftLimitBytes = 3GB,
