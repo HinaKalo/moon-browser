@@ -37,6 +37,7 @@ pub fn build(b: *std.Build) void {
         .name = "MoonExamplePlugin",
         .root_module = b.createModule(.{ .root_source_file = b.path("examples/plugin.zig"), .target = target, .optimize = optimize, .link_libc = true }),
     });
+    example.root_module.addImport("moon_plugin", plugin_sdk);
     b.installArtifact(example);
     const manager = b.addExecutable(.{
         .name = "MoonLuaManager",
@@ -126,6 +127,11 @@ pub fn build(b: *std.Build) void {
     });
     fixture.root_module.addImport("moon_plugin", plugin_sdk);
     b.installArtifact(fixture);
+    const legacy_fixture = b.addExecutable(.{
+        .name = "MoonLegacyPluginFixture",
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/legacy_plugin_fixture.zig"), .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    b.installArtifact(legacy_fixture);
     const test_step = b.step("test", "Run browser policy and update verification tests");
     for ([_][]const u8{ "src/policy_test.zig", "src/update_manifest_test.zig" }) |file| {
         const unit_tests = b.addTest(.{ .root_module = b.createModule(.{

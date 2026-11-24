@@ -1,10 +1,13 @@
 {
-  "api_version": 1,
   "id": "moon.example",
-  "name": "Active Tab Example",
-  "executable": "MoonExamplePlugin.exe",
-  "command": "Inspect active tab",
-  "menu": "extensions",
+  "name": "活动标签示例",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonExamplePlugin.exe",
+  "contributes": {
+    "commands": [{ "id": "run", "label": "查看活动标签标题", "menu": "extensions" }]
+  },
   "permissions": ["tabs.read"],
   "events": ["tabs.changed"]
 }

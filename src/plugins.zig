@@ -1311,37 +1311,36 @@ pub fn worker(opaque_task: ?*anyopaque) void {
     if (task.outcome == .ok and !exited_cleanly) task.outcome = .crashed;
 }
 
-pub fn smokeStart(step: usize, snapshot: ?Snapshot) bool {
-    const index = for (all[0..len],0..) |*plugin,i| {
-        if (plugin.protocol == .legacy and std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),"moon.example")) break i;
-    } else return false;
-    smoke_outcome = null;
-    all[index].enabled = true;
-    all[index].grants = if (step == 0) .empty else .initOne(.@"tabs.read");
-    if (step == 2) return launch(index, 0, .changed, snapshot);
-    return launch(index, 0, if (step == 3) .timeout_test else if (step == 4) .crash_test else .command, snapshot);
+fn smokePlugin(step: usize) ?usize {
+    const id = if (step < 5) "moon.legacy-contract" else if (step < 9) "moon.api-contract" else "moon.example";
+    const index = indexOf(id) orelse return null;
+    const protocol: Protocol = if (step < 5) .legacy else .v2;
+    return if (all[index].protocol == protocol) index else null;
 }
 
-fn contractFixture() ?usize {
-    for (all[0..len], 0..) |*plugin, index| {
-        if (plugin.protocol == .v2 and std.mem.eql(u8, std.mem.sliceTo(&plugin.id, 0), "moon.api-contract")) return index;
-    }
+pub fn smokeNextStep(from: usize) ?usize {
+    for (from..12) |step| if (smokePlugin(step) != null) return step;
     return null;
 }
 
-pub fn smokeHasContract() bool {
-    return contractFixture() != null;
-}
-
-pub fn smokeContract(step: usize, snapshot: ?Snapshot) bool {
-    const index = contractFixture() orelse return false;
+pub fn smokeStart(step: usize, snapshot: ?Snapshot) bool {
+    const index = smokePlugin(step) orelse return false;
     const plugin = &all[index];
-    const permitted_calls = step == 6 or step == 7;
     _ = plugin.epoch.fetchAdd(1, .acq_rel);
     plugin.enabled = true;
-    plugin.grants = if (permitted_calls) .initMany(&.{ .@"tabs.read", .@"lua.scripts.manage" }) else .empty;
+    plugin.grants = switch (step) {
+        1...4, 10, 11 => .initOne(.@"tabs.read"),
+        6, 7 => .initMany(&.{ .@"tabs.read", .@"lua.scripts.manage" }),
+        else => .empty,
+    };
+    const trigger: Trigger = switch (step) {
+        2, 7, 11 => .changed,
+        3 => .timeout_test,
+        4 => .crash_test,
+        else => .command,
+    };
     smoke_outcome = null;
-    return launch(index, if (step == 6) 1 else 0, if (step == 7) .changed else .command, snapshot);
+    return launch(index, if (step == 6) 1 else 0, trigger, snapshot);
 }
 
 pub fn smokeStatus(step: usize, title: []const u8) ?bool {
@@ -1349,13 +1348,14 @@ pub fn smokeStatus(step: usize, title: []const u8) ?bool {
     const message = std.mem.sliceTo(&smoke_message, 0);
     return switch (step) {
         0 => outcome == .ok and std.mem.eql(u8, message, "No access to active tab details"),
-        1 => outcome == .ok and std.mem.eql(u8, message, title),
+        1, 10 => outcome == .ok and std.mem.eql(u8, message, title),
         2 => outcome == .ok and std.mem.eql(u8, message, "Tab change received"),
         3 => outcome == .timed_out,
         4 => outcome == .crashed,
         5, 8 => outcome == .ok and std.mem.eql(u8, message, "V2 consent denied"),
         6 => outcome == .ok and std.mem.eql(u8, message, "V2 contract passed"),
-        7 => outcome == .ok,
+        7, 11 => outcome == .ok,
+        9 => outcome == .ok and std.mem.eql(u8, message, "请在插件管理中授予读取标签权限。"),
         else => false,
     };
 }

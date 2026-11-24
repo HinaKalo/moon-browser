@@ -123,7 +123,7 @@
     {
       "id": "moon.example",
       "name": "活动标签示例",
-      "description": "演示原生插件如何读取当前标签、接收切换事件。",
+      "description": "在浏览器内显示当前标签标题，演示 API 2 原生命令、标签授权与快捷键。",
       "permission": "读取标签标题和网址",
       "url": "https://docs.browser.moonl.cloud/guide.html"
     },

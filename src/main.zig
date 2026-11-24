@@ -2466,7 +2466,8 @@ fn smokeTick(now: u64) void {
             if (!smokePage("Moon fixture second")) return;
             log("history_navigation=ok", .{});
             smoke = .plugin;
-            if (!plugins.smokeStart(0, tabSnapshot())) return failSmoke("sample plugin unavailable");
+            plugin_step = plugins.smokeNextStep(0) orelse return failSmoke("sample plugin unavailable");
+            if (!plugins.smokeStart(plugin_step, tabSnapshot())) return failSmoke("sample plugin launch");
         },
         .plugin => {
             const success = plugins.smokeStatus(plugin_step, slice(&tabs[active].title)) orelse return;
@@ -2476,17 +2477,13 @@ fn smokeTick(now: u64) void {
                 return failSmoke("plugin protocol check");
             }
             log("plugin_case_{d}=ok", .{plugin_step});
-            plugin_step += 1;
-            if (plugin_step < 5) {
+            if (plugin_step == 8) log("plugin_api_v2=ok", .{});
+            if (plugin_step == 11) log("active_tab_example=ok", .{});
+            if (plugins.smokeNextStep(plugin_step+1)) |next| {
+                plugin_step = next;
                 if (!plugins.smokeStart(plugin_step, tabSnapshot())) return failSmoke("sample plugin launch");
                 return;
             }
-            const api_fixture = plugins.smokeHasContract();
-            if (api_fixture and plugin_step <= 8) {
-                if (!plugins.smokeContract(plugin_step, tabSnapshot())) return failSmoke("V2 contract client launch");
-                return;
-            }
-            if (api_fixture) log("plugin_api_v2=ok", .{});
             smoke = .download;
             _ = native.moon_engine_test_download(null, &smoke_download);
             var url: [4096]u8 = undefined;

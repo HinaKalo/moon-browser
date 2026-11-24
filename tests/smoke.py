@@ -28,11 +28,6 @@ CHECKS = (
     "warm_switch_p95_us=",
     "session_roundtrip=1",
     "history_navigation=ok",
-    "plugin_case_0=ok",
-    "plugin_case_1=ok",
-    "plugin_case_2=ok",
-    "plugin_case_3=ok",
-    "plugin_case_4=ok",
     "download=ok",
     "process_terminated tab=",
     "crash_recovery=ok",
@@ -475,6 +470,19 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
     scripts.append({"enabled": True, "source": demo_source})
     Fixture.seen_lua_demo.clear()
     (profile / "lua-userscripts.json").write_text(json.dumps(scripts), encoding="utf-8")
+    example_manifest = exe.parent / "plugins" / "example" / "plugin.json"
+    modern_example = json.loads(example_manifest.read_text(encoding="utf-8")).get("apiVersion") == 2
+    legacy_client = exe.parent / "tests" / "MoonLegacyPluginFixture.exe"
+    if legacy_client.is_file():
+        target = profile / "plugins" / "legacy-contract"
+        target.mkdir(parents=True)
+        shutil.copyfile(legacy_client, target / legacy_client.name)
+        manifest = {
+            "api_version": 1, "id": "moon.legacy-contract", "name": "Legacy plugin contract",
+            "executable": legacy_client.name, "command": "Check legacy plugin",
+            "permissions": ["tabs.read"], "events": ["tabs.changed"],
+        }
+        (target / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
     contract_client = exe.parent / "tests" / "MoonPluginContractClient.exe"
     if contract_client.exists():
         target = profile / "plugins" / "api-contract"
@@ -548,6 +556,10 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
         print(log, end="", flush=True)
     skipped = ("tab_stress", "warm_switch") if quick else ()
     missing = [check for check in CHECKS if check not in log and not check.startswith(skipped)]
+    if legacy_client.is_file() or not modern_example:
+        missing.extend(f"plugin_case_{step}=ok" for step in range(5) if f"plugin_case_{step}=ok" not in log)
+    if modern_example and "active_tab_example=ok" not in log:
+        missing.append("active_tab_example=ok")
     if contract_client.exists() and "plugin_api_v2=ok" not in log:
         missing.append("plugin_api_v2=ok")
     if status or missing:
@@ -629,6 +641,8 @@ def run_win32(exe, base, root):
     user.GetWindow.restype = wt.HWND
     user.IsWindow.argtypes = [wt.HWND]
     profile = Path(preview_env(root)["MOON_BROWSER_PROFILE_DIR"])
+    example_manifest = exe.parent / "plugins" / "example" / "plugin.json"
+    modern_example = json.loads(example_manifest.read_text(encoding="utf-8")).get("apiVersion") == 2
     manager = exe.parent / "plugins" / "lua-manager" / "MoonLuaManager.exe"
     devtools = exe.parent / "plugins" / "devtools" / "MoonDevTools.exe"
     devtools_commands = {command["id"] for command in
@@ -2657,7 +2671,8 @@ def run_win32(exe, base, root):
             for group, labels in expected.items():
                 if missing := labels - groups.get(group,{}).keys():
                     raise RuntimeError(f"Native menu group {group} is missing {missing}")
-            if "管理网页过滤" in groups["隐私与安全"] or "Inspect active tab" in groups["扩展工具"]:
+            sample_label = "查看活动标签标题" if modern_example else "Inspect active tab"
+            if "管理网页过滤" in groups["隐私与安全"] or sample_label in groups["扩展工具"]:
                 raise RuntimeError("A disabled optional plugin appeared in the grouped menu")
 
             if not user.RegisterHotKey(None,901,modifiers,ord('9')):
@@ -2955,6 +2970,27 @@ def run_win32(exe, base, root):
                 if read_address()!=first_grouped or "移出标签组" in tab_menu(4):
                     raise RuntimeError("Removing a tab from its group changed its page or left its membership")
                 print("tab_groups_plugin=ok create_background=ok drag_into_group=ok rename_color=ok collapse=ok member_removal=ok session_groups=ok",flush=True)
+            if modern_example:
+                plugin_state = profile / "plugin-state.json"
+                retained = [item for item in read_settings(plugin_state) if item["id"] != "moon.example"]
+                retained.append({"id": "moon.example", "enabled": True, "tabs_read": True})
+                plugin_state.write_text(json.dumps(retained), encoding="utf-8")
+                shortcut_state = profile / "plugin-shortcuts.json"
+                shortcuts = read_settings(shortcut_state) or []
+                shortcuts.append({"plugin": "moon.example", "command": "run", "shortcut": "Ctrl+Shift+6"})
+                shortcut_state.write_text(json.dumps(shortcuts), encoding="utf-8")
+                proc, frame = restart_tabs()
+                edit = user.GetDlgItem(frame,1001)
+                home = user.GetDlgItem(frame,1002)
+                shown = native_entries().get("扩展工具", {})
+                if "查看活动标签标题\tCtrl+Shift+6" not in shown:
+                    raise RuntimeError("The active-tab sample did not publish its modern menu and user shortcut")
+                invoke("查看活动标签标题")
+                notice = wait_for(lambda: owned_window("#32770", "活动标签示例"), "The active-tab result did not appear")
+                if user.GetDlgItem(notice, 1):
+                    raise RuntimeError("The active-tab result interrupted browsing with a dialog")
+                wait_for(lambda: not user.IsWindow(notice), "The active-tab toast did not dismiss itself")
+                print("active_tab_example_ui=ok extension_menu=ok user_shortcut=ok native_toast=ok", flush=True)
         if private_window.exists():
             private_title = "Moon Browser · 隐私浏览"
             kernel = ctypes.WinDLL("kernel32",use_last_error=True)
