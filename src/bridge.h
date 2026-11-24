@@ -179,6 +179,10 @@ bool moon_plugin_capture_key(unsigned modifiers, unsigned key);
 bool moon_site_data_open(const char *id, uint64_t source, const char *expected);
 bool moon_page_source_open(const char *id, uint64_t source, const char *expected);
 void moon_page_source_result(uint64_t generation, const char *html, size_t bytes);
+void moon_web_popup(uint64_t source, const char *opener, const char *target, bool gesture);
+bool moon_popups_open(const char *owner, uint64_t source);
+bool moon_popups_open_blocked(const char *owner, uint64_t panel, uint64_t notice_id);
+bool moon_popups_change_allowed(const char *owner, uint64_t panel, const char *origin, bool allow);
 bool moon_site_data_action(uint64_t panel, const char *id, bool inspector);
 bool moon_site_data_update(uint64_t panel, const char *id, bool session, uint32_t entry, uint64_t generation,
     const char *value, size_t length);

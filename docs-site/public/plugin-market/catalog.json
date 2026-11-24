@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.popups",
+      "name": "网站弹窗",
+      "description": "设置每个网站的弹窗规则，或打开一次刚拦截的链接。",
+      "permission": "管理网站弹窗",
+      "url": "https://docs.browser.moonl.cloud/popups.html"
+    },
+    {
       "id": "moon.session",
       "name": "上次会话",
       "description": "从上次正常退出恢复普通标签。支持启动恢复与后台按需加载。",

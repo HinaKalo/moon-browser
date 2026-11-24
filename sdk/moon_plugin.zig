@@ -29,6 +29,7 @@ pub const Permission = enum {
     @"tabs.session.manage",
     @"bookmarks.transfer",
     @"page.source",
+    @"popups.manage",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -83,6 +84,9 @@ pub const PageSourceStatus = struct {
 };
 pub const PageSourceQuery = struct { generation: u64, offset: usize };
 pub const PageSourceChunk = struct { sourceBase64: []const u8, next: ?usize };
+pub const PopupMode = enum { automatic, allow, block };
+pub const PopupRule = struct { origin: []const u8, mode: PopupMode };
+pub const PopupNotice = struct { id: u64, count: u32, targetOrigin: []const u8 };
 pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
 pub const TabChange = struct { tabId: ?[]const u8 };
 pub const ClosedTab = struct { id: u32, title: []const u8, origin: []const u8 };
@@ -198,6 +202,10 @@ pub const Method = enum {
     @"pageSource.open",
     @"pageSource.status",
     @"pageSource.read",
+    @"popups.open",
+    @"popups.status",
+    @"popups.setRule",
+    @"popups.openBlocked",
     @"ui.openPage",
     @"history.list",
     @"history.remove",

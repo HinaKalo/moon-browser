@@ -314,7 +314,8 @@ void moon_dialog_refresh(void) {
 void moon_shell_toast(const char *title,const char *body) {
     HWND owner=moon_shell_window();
     if (!owner || !set_text(&toast,title,body)) return;
-    if (!toast.window) CreateDialogIndirectParamW(GetModuleHandleW(NULL),&popup_template.dialog,owner,popup_message,(LPARAM)&toast);
+    if (toast.window) SetWindowTextW(toast.window,toast.title);
+    else CreateDialogIndirectParamW(GetModuleHandleW(NULL),&popup_template.dialog,owner,popup_message,(LPARAM)&toast);
     if (!toast.window) return;
     layout_popup(&toast,NULL);
     ShowWindow(toast.window,SW_SHOWNOACTIVATE);

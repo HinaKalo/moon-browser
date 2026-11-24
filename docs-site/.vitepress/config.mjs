@@ -22,6 +22,7 @@ export default defineConfig({
         { text: '插件配置页', link: '/extension-pages' },
         { text: '网页开发者工具', link: '/devtools' },
         { text: '站点数据', link: '/site-data' },
+        { text: '网站弹窗', link: '/popups' },
         { text: '清除浏览数据', link: '/privacy' },
         { text: '浏览器任务管理器', link: '/task-manager' },
         { text: '查找与缩放', link: '/reading' },

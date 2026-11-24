@@ -48,6 +48,10 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `pageSource.open` | `page.source` | 从用户命令传入 `{}`，将插件专属页面与当前已加载的 HTTP(S) 主文档绑定并请求源码。返回是否接受请求。 |
 | `pageSource.status` | `page.source` | 由绑定的插件页面传入 `{}`。返回 `{ state, generation, url, bytes, truncated }`。未绑定时返回 `idle`，已绑定的状态包括 `pending`、`ready`、`stale` 和 `unavailable`。 |
 | `pageSource.read` | `page.source` | 由绑定的插件页面传入 `{ generation, offset }`。返回 `{ sourceBase64, next }`，每块最多 12 KiB UTF-8，首次从字节偏移 0 开始，`next` 为 `null` 时结束。请流式解码 UTF-8，字符可能跨块。 |
+| `popups.open` | `popups.manage` | 从用户命令传入 `{}`，打开插件设置页，并绑定触发命令的标签。返回浏览器是否接受请求。 |
+| `popups.status` | `popups.manage` | 由插件页面传入 `{}`，返回 `{ currentOrigin, rules, blocked }`。绑定后才返回当前来源或 `{ id, count, targetOrigin }`。 |
+| `popups.setRule` | `popups.manage` | 由活动插件页传入 `{ origin, mode }`，模式为 `automatic`、`allow` 或 `block`。新增允许规则需要用户确认。 |
+| `popups.openBlocked` | `popups.manage` | 由绑定且活动的插件页传入 `{ id }`。用户确认后打开该链接，返回是否接受请求。 |
 | `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
 | `history.list` | `history.manage` | 传入 `{ query?, before? }`。返回 `{ visits, next }`，每条访问记录为 `{ id, title, url, visitedAt }`。时间为 Unix 毫秒。使用 `next` 作为下一页的 `before`。 |
 | `history.remove` | `history.manage` | 传入 `{ id }` 移除单条记录，成功返回 `null`。 |

@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>网站弹窗</title>
+<style>
+  :root { color-scheme:light; font:14px/1.5 "Segoe UI","Microsoft YaHei UI",sans-serif; --page:#f5f6f9; --panel:#fff; --text:#14161d; --muted:#51586a; --line:#d9dce6; --accent:#354db8; --soft:#e8ecff; background:var(--page); color:var(--text); }
+  :root[data-moon-theme=dark] { color-scheme:dark; --page:#191c23; --panel:#20232c; --text:#e9ebf2; --muted:#b7becf; --line:#3a4256; --accent:#adbcff; --soft:#2b365e; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; }
+  main { max-width:850px; margin:auto; padding:30px clamp(16px,5vw,42px) 36px; }
+  h1,h2,p { margin:0; }
+  h1 { font-size:28px; }
+  h2 { font-size:17px; margin-bottom:10px; }
+  header p,#results:empty+.empty,.hint { color:var(--muted); }
+  header p { margin-top:5px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; margin-top:14px; }
+  .row,form,li { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; }
+  .origin { font:13px/1.45 Consolas,monospace; overflow-wrap:anywhere; min-width:0; }
+  .notice { border-left:3px solid var(--accent); padding:9px 0 2px 11px; margin-top:10px; }
+  button,input,select { font:inherit; color:inherit; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:7px 10px; }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); }
+  button:disabled { opacity:.6; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  input { flex:1; min-width:min(200px,100%); }
+  ul { list-style:none; padding:0; margin:0; }
+  li { border-top:1px solid var(--line); padding:10px 0; }
+  li:first-child { border-top:0; padding-top:0; }
+  li:last-child { padding-bottom:0; }
+  li > div:first-child { flex:1; }
+  .policy { color:var(--muted); font-size:13px; margin-top:3px; }
+  #status { color:var(--accent); margin-top:10px; }
+  #status:empty,.empty { display:none; }
+  #results:empty+.empty { display:block; }
+</style>
+<main>
+  <header><h1>网站弹窗</h1><p>默认打开主动点击的链接，拦截网页自动打开的新标签。</p></header>
+  <section id="current" hidden>
+    <h2>当前网站</h2>
+    <div class="row"><code id="current-origin" class="origin"></code><button id="use-current" type="button">编辑此网站规则</button></div>
+    <div id="notice" class="notice row" hidden>
+      <div><p id="blocked-summary"></p><code id="blocked-target" class="origin"></code></div>
+      <button id="open-blocked" type="button">打开一次</button>
+    </div>
+  </section>
+  <section>
+    <h2>网站规则</h2>
+    <ul id="results"></ul>
+    <p class="empty">暂无网站例外。</p>
+  </section>
+  <section>
+    <h2>添加或编辑规则</h2>
+    <form id="rule-form">
+      <input id="origin" required spellcheck="false" inputmode="url" aria-label="网站 URL" placeholder="https://example.com">
+      <select id="mode" aria-label="弹窗权限">
+        <option value="allow">允许自动弹窗</option>
+        <option value="block">阻止新窗口</option>
+        <option value="automatic">恢复默认</option>
+      </select>
+      <button id="save" type="submit">保存</button>
+    </form>
+    <p id="status" role="status"></p>
+  </section>
+</main>
+<script>
+  const get = id => document.getElementById(id);
+  const input = get('origin'), mode = get('mode'), rows = get('results'), status = get('status');
+  const labels = {allow:'允许自动弹窗', block:'阻止新窗口'};
+  const messages = {
+    INVALID_PARAMS:'请输入有效的 HTTP 或 HTTPS 网站地址。',
+    LIMIT_EXCEEDED:'网站例外已达上限，请先移除不再需要的规则。',
+    CANCELLED:'操作已取消。',
+    PERMISSION_DENIED:'请在插件管理页启用网站弹窗权限。'
+  };
+  let sequence = 0, current, busy = false;
+  async function host(method, params = {}) {
+    const id = 'popups:' + ++sequence;
+    const result = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0', id, method, params})));
+    if (result.id !== id || result.error) throw Error(result.error?.data?.reason || 'UNAVAILABLE');
+    return result.result;
+  }
+  function edit(origin, selected) {
+    input.value = origin;
+    mode.value = selected;
+    input.focus();
+  }
+  async function refresh() {
+    current = await host('popups.status');
+    get('current').hidden = !current.currentOrigin;
+    get('current-origin').textContent = current.currentOrigin || '';
+    get('notice').hidden = !current.blocked;
+    if (current.blocked) {
+      get('blocked-summary').textContent = '已拦截 ' + current.blocked.count + ' 次 · 最近目标';
+      get('blocked-target').textContent = current.blocked.targetOrigin;
+    }
+    rows.replaceChildren();
+    for (const rule of current.rules.sort((a,b) => a.origin.localeCompare(b.origin))) {
+      const row = document.createElement('li');
+      const text = document.createElement('div');
+      const key = document.createElement('code');
+      key.className = 'origin';
+      key.textContent = rule.origin;
+      const label = document.createElement('p');
+      label.className = 'policy';
+      label.textContent = labels[rule.mode];
+      text.append(key,label);
+      const change = document.createElement('button');
+      change.textContent = '编辑';
+      change.onclick = () => edit(rule.origin,rule.mode);
+      const reset = document.createElement('button');
+      reset.textContent = '恢复默认';
+      reset.onclick = () => setRule(rule.origin,'automatic');
+      row.append(text,change,reset);
+      rows.append(row);
+    }
+  }
+  async function setRule(origin, value) {
+    if (busy) return;
+    busy = true;
+    get('save').disabled = true;
+    try {
+      await host('popups.setRule',{origin,mode:value});
+      await refresh();
+      status.textContent = value === 'automatic' ? '已恢复默认规则。' : '网站规则已保存。';
+    } catch (error) {
+      status.textContent = messages[error.message] || '暂时无法保存网站规则。';
+    } finally {
+      busy = false;
+      get('save').disabled = false;
+    }
+  }
+  get('use-current').onclick = () => {
+    if (current?.currentOrigin) edit(current.currentOrigin,current.rules.find(rule => rule.origin === current.currentOrigin)?.mode || 'allow');
+  };
+  get('rule-form').onsubmit = event => { event.preventDefault(); setRule(input.value.trim(),mode.value); };
+  get('open-blocked').onclick = async () => {
+    if (!current?.blocked || busy) return;
+    busy = true;
+    try {
+      const opened = await host('popups.openBlocked',{id:current.blocked.id});
+      await refresh();
+      status.textContent = opened ? '已打开新的标签页。' : '未打开弹窗。';
+    } catch {
+      status.textContent = '暂时无法打开此链接。';
+    } finally {
+      busy = false;
+    }
+  };
+  refresh().catch(error => { status.textContent = messages[error.message] || '暂时无法读取网站设置。'; });
+</script>
+</html>

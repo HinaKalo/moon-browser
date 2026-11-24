@@ -127,6 +127,8 @@ $docs = @(
     (Join-Path $repo 'examples\devtools\plugin.json')
     (Join-Path $repo 'examples\page-source\plugin.json')
     (Join-Path $repo 'examples\page-source\source.html')
+    (Join-Path $repo 'examples\popups\plugin.json')
+    (Join-Path $repo 'examples\popups\popups.html')
     (Join-Path $repo 'examples\history\plugin.json')
     (Join-Path $repo 'examples\history\history.html')
     (Join-Path $repo 'examples\blocker\plugin.json')
@@ -160,7 +162,8 @@ if ($Action -eq 'release') {
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
 $pageSource = Join-Path $prefix 'bin\MoonPageSource.exe'
-$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $pageSource + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $session + $tabTools + $privateWindow + $search + $privacy + $taskManager + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$popups = Join-Path $prefix 'bin\MoonPopups.exe'
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $pageSource + $popups + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $recentTabs + $session + $tabTools + $privateWindow + $search + $privacy + $taskManager + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -188,6 +191,8 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     Copy-Item -LiteralPath (Join-Path $repo 'examples\devtools\plugin.json') -Destination $inspector
     $sourcePackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\page-source')).FullName
     Copy-Item -LiteralPath $pageSource,(Join-Path $repo 'examples\page-source\plugin.json'),(Join-Path $repo 'examples\page-source\source.html') -Destination $sourcePackage
+    $popupPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\popups')).FullName
+    Copy-Item -LiteralPath $popups,(Join-Path $repo 'examples\popups\plugin.json'),(Join-Path $repo 'examples\popups\popups.html') -Destination $popupPackage
     $historyPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\history')).FullName
     Copy-Item -LiteralPath $history -Destination $historyPackage
     Copy-Item -LiteralPath (Join-Path $repo 'examples\history\plugin.json'),(Join-Path $repo 'examples\history\history.html') -Destination $historyPackage

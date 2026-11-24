@@ -12,6 +12,7 @@ const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
 const page_source = @import("page_source.zig");
+const popups = @import("popup_policy.zig");
 const reading = @import("reading.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const market = @import("market.zig");
@@ -41,6 +42,7 @@ const Tab = struct {
     has_document: bool = false,
     extension: bool = false,
     restoring_history: bool = false,
+    popup_origin_ready: bool = false,
     history_visit: ?u32 = null,
     download_count: usize = 0,
     activity: bool = false,
@@ -256,6 +258,8 @@ fn detach(tab: *Tab) void {
     }
     site_data.invalidate(tab.id);
     page_source.invalidate(tab.id);
+    popups.clear(tab.id);
+    tab.popup_origin_ready = false;
     if (find_tab == tab.id) moon_find_dismiss(false);
     const view = tab.view orelse return;
     tab.view = null;
@@ -1005,6 +1009,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         bookmarks.init(profile);
         downloads.init(profile);
         reading.init(profile);
+        popups.init(profile);
         userscripts.init(profile);
         search.init();
     }
@@ -1189,6 +1194,8 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         native.MOON_STARTED => {
             site_data.invalidate(id);
             page_source.invalidate(id);
+            popups.invalidate(id);
+            tab.popup_origin_ready = false;
             if (find_tab == id) moon_find_dismiss(true);
             tab.loading = true;
             tab.loaded = false;
@@ -1196,6 +1203,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         },
         native.MOON_COMMITTED => {
             page_source.invalidate(id);
+            tab.popup_origin_ready = true;
             tab.dirty = false;
             tab.has_document = true;
             tab.deadline = 0;
@@ -1245,6 +1253,8 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         native.MOON_TERMINATED => {
             site_data.closed(id);
             page_source.closed(id);
+            popups.clear(id);
+            tab.popup_origin_ready = false;
             if (find_tab == id) {
                 find_tab = 0;
                 find_owner[0] = 0;
@@ -1393,6 +1403,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"page.source" => "允许查看当前网页源代码",
+        .@"popups.manage" => "允许管理网站弹窗",
         .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
@@ -1579,6 +1590,63 @@ export fn moon_page_source_open(id: [*c]const u8, source: u64, expected: [*c]con
 
 export fn moon_page_source_result(generation: u64, html: [*c]const u8, bytes: usize) void {
     if (!stopped) page_source.complete(generation,if (html!=null) html[0..bytes] else null);
+}
+
+export fn moon_web_popup(source: u64, opener: [*c]const u8, destination: [*c]const u8, gesture: bool) void {
+    if (stopped or count == 0 or tabs[active].id != source or tabs[active].extension) return;
+    const target = slice(destination);
+    _ = popups.origin(target) orelse return;
+    const committed = popups.origin(slice(opener)) orelse return;
+    const enabled = !native.moon_shell_private() and plugins.systemEnabled(.@"popups.manage");
+    const rule = if (enabled) popups.mode(slice(&committed)) else .automatic;
+    if (rule != .block and (gesture or (rule == .allow and tabs[active].popup_origin_ready))) {
+        if (popup[0] == 0 and count < tabs.len) _ = copy(&popup,target);
+    } else if (enabled and tabs[active].popup_origin_ready and popups.blocked(source,target)) {
+        native.moon_shell_toast("已拦截弹窗","可在「… → 隐私与安全 → 管理网站弹窗」查看并打开一次。");
+    }
+}
+
+export fn moon_popups_open(owner: [*c]const u8, source: u64) bool {
+    if (stopped or count == 0 or tabs[active].id != source or native.moon_shell_private()) return false;
+    const tab = &tabs[active];
+    var origin: popups.Origin = @splat(0);
+    if (!tab.extension and tab.popup_origin_ready) {
+        if (tab.view) |view| {
+            var url: [4096:0]u8 = @splat(0);
+            native.moon_engine_committed_url(view,&url,url.len);
+            if (popups.origin(slice(&url))) |key| origin = key;
+        }
+    }
+    if (!moon_plugin_open_page(owner)) return false;
+    popups.bind(tabs[active].id,slice(owner),source,origin);
+    return true;
+}
+
+fn popupPanelAllowed(owner: []const u8, panel: u64) bool {
+    return !stopped and count != 0 and tabs[active].id == panel and tabs[active].extension and
+        !native.moon_shell_private() and plugins.hasGrant(owner,.@"popups.manage");
+}
+
+export fn moon_popups_change_allowed(owner: [*c]const u8, panel: u64, origin: [*c]const u8, allow: bool) bool {
+    const id = slice(owner);
+    if (!popupPanelAllowed(id,panel)) return false;
+    if (!allow) return true;
+    var body: [640]u8 = undefined;
+    const message = std.fmt.bufPrintSentinel(&body,"允许 {s} 在当前标签中自动打开新标签页？",.{slice(origin)},0) catch return false;
+    return native.moon_shell_confirm("允许网站弹窗？",message.ptr) and popupPanelAllowed(id,panel);
+}
+
+export fn moon_popups_open_blocked(owner: [*c]const u8, panel: u64, notice_id: u64) bool {
+    const id = slice(owner);
+    if (!popupPanelAllowed(id,panel) or popup[0] != 0 or count == tabs.len) return false;
+    var rules: popups.RuleBuffer = undefined;
+    var target: popups.Origin = undefined;
+    const notice = popups.status(panel,id,&rules,&target).blocked orelse return false;
+    if (notice.id != notice_id) return false;
+    var body: [640]u8 = undefined;
+    const message = std.fmt.bufPrintSentinel(&body,"打开刚才拦截的链接？目标站点为 {s}。",.{notice.targetOrigin},0) catch return false;
+    return native.moon_shell_confirm("打开一次弹窗？",message.ptr) and popupPanelAllowed(id,panel) and
+        popup[0] == 0 and count < tabs.len and popups.openOnce(panel,id,notice_id,&popup);
 }
 
 fn checkSiteDataGrant() void {

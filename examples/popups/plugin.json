@@ -1,0 +1,13 @@
+{
+  "id": "moon.popups",
+  "name": "网站弹窗",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonPopups.exe",
+  "settingsPage": "popups.html",
+  "contributes": {
+    "commands": [{ "id": "open", "label": "管理网站弹窗", "menu": "privacy" }]
+  },
+  "permissions": ["popups.manage"]
+}

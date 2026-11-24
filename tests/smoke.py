@@ -56,6 +56,8 @@ class Fixture(BaseHTTPRequestHandler):
     site_data_entry_changed = Event()
     change_page_source = Event()
     page_source_requests = 0
+    popup_attempts = set()
+    popup_destinations = set()
     reading_layout = {}
     closed_loaded = {}
     privacy_reports = {}
@@ -140,6 +142,12 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"ok", "text/plain"
         elif path == "/page-source-navigation":
             data, content_type = (b"change" if self.change_page_source.is_set() else b"wait"), "text/plain"
+        elif path.startswith("/popup-attempt/"):
+            self.popup_attempts.add(path.removeprefix("/popup-attempt/"))
+            data, content_type = b"ok", "text/plain"
+        elif path.startswith("/popup-target/"):
+            self.popup_destinations.add(path.removeprefix("/popup-target/"))
+            data, content_type = b"<title>Popup destination</title>Opened", "text/html"
         elif path.startswith("/reading-layout/"):
             _, _, page, width, scroll = path.split("/")
             self.reading_layout[page] = (int(width), int(scroll))
@@ -220,6 +228,19 @@ class Fixture(BaseHTTPRequestHandler):
                     'const action=await r.text();if(action==="change")location.replace("/page/site-data-changed");'
                     'if(action==="overwrite"&&!changed){changed=true;localStorage.setItem("moon-local","page-change");'
                     'fetch("/site-data-entry-changed",{cache:"no-store"});}},400);</script>'
+                )
+            if name in ("popup-default", "popup-allow", "popup-private"):
+                stage = name.removeprefix("popup-")
+                demo = (
+                    '<script>addEventListener("load",()=>setTimeout(()=>{'
+                    f'window.open("/popup-target/{stage}","_blank");fetch("/popup-attempt/{stage}");'
+                    '},250));</script>'
+                )
+            if name in ("popup-click", "popup-click-blocked", "popup-click-reset"):
+                stage = name.removeprefix("popup-")
+                demo = (
+                    f'<a href="/popup-target/{stage}" target="_blank" onclick="fetch(\'/popup-attempt/{stage}\')" '
+                    'style="position:fixed;top:0;left:0;padding:12px;background:white">Open in new tab</a>'
                 )
             if name == "source-contract":
                 Fixture.page_source_requests += 1
@@ -555,6 +576,7 @@ def run_win32(exe, base, root):
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
+    popups = exe.parent / "plugins" / "popups" / "MoonPopups.exe"
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     recent = exe.parent / "plugins" / "recent-tabs" / "MoonRecentTabs.exe"
     privacy = exe.parent / "plugins" / "privacy" / "MoonPrivacy.exe"
@@ -581,7 +603,7 @@ def run_win32(exe, base, root):
             {"id": "moon.lua-manager", "enabled": True, "tabs_read": False, "lua_scripts_manage": True},
             {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
             {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
-            {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True},
+            {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True, "popups_manage": popups.exists()},
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
@@ -631,6 +653,9 @@ def run_win32(exe, base, root):
             ('const sourceDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"8",method:"pageSource.status",params:{}}));'
              'if(JSON.parse(sourceDenied).error?.code!==-32001)return;' if page_source.exists() else '') +
+            ('const popupDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"9",method:"popups.status",params:{}}));'
+             'if(JSON.parse(popupDenied).error?.code!==-32001)return;' if popups.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -650,7 +675,7 @@ def run_win32(exe, base, root):
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.history-fixture", "name": "History API fixture", "version": "1.0.0",
             "apiVersion": 2, "runtime": "native", "entry": "Unused.exe", "settingsPage": "history.html",
-            "permissions": ["history.manage"],
+            "permissions": ["history.manage"] + (["popups.manage"] if popups.exists() else []),
             "contributes": {"commands": [{"id": "open", "label": "History fixture"}]},
         }), encoding="utf-8")
         bundled_page = (history.parent / "history.html").read_text(encoding="utf-8")
@@ -661,7 +686,12 @@ def run_win32(exe, base, root):
             'JSON.stringify({jsonrpc:"2.0",id:String(++id),method,params})));'
             'const waitFor=async predicate=>{for(let i=0;i<60;i++){const el=predicate();'
             'if(el)return el;await new Promise(resolve=>setTimeout(resolve,50));}throw new Error("UI timeout");};'
-            'try{const first=await call("history.list",{query:"HISTORY-contract"});'
+            'try{'
+            'const options=JSON.parse(await api.moonSettings.postMessage(JSON.stringify({op:"read"}))).value;'
+            'if(options?.popupMode){const reply=await call("popups.setRule",{origin:options.popupOrigin,mode:options.popupMode});'
+            'const popupResult=reply.result===true?"saved":reply.error?.data?.reason||"unexpected";'
+            'await api.moonSettings.postMessage(JSON.stringify({op:"write",value:{popupResult}}));return;}'
+            'const first=await call("history.list",{query:"HISTORY-contract"});'
             'const row=first.result?.visits?.[0];'
             'if(!row?.url.endsWith("/page/history-contract") || !row.title.includes("history-contract"))throw new Error("list");'
             'const excluded=await call("history.list",{query:"history-contract",before:row.id});'
@@ -1625,6 +1655,99 @@ def run_win32(exe, base, root):
             if not result.get("passed"):
                 raise RuntimeError(f"Page source invalidation: {result}")
             print("page_source_plugin=ok page_source_original=ok utf8_truncation=ok owner_isolation=ok no_refetch=ok source_find=ok stale_source=ok",flush=True)
+        if popups.exists():
+            user.ChildWindowFromPointEx.argtypes = [wt.HWND,wt.POINT,wt.UINT]
+            user.ChildWindowFromPointEx.restype = wt.HWND
+            user.MapWindowPoints.argtypes = [wt.HWND,wt.HWND,ctypes.POINTER(wt.POINT),wt.UINT]
+
+            def popup_click(x,y):
+                point = wt.POINT(x,y)
+                view = content
+                while (child := user.ChildWindowFromPointEx(view,point,1)) and child != view:
+                    user.MapWindowPoints(view,child,ctypes.byref(point),1)
+                    view = child
+                coords = point.y << 16 | point.x
+                user.PostMessageW(view,0x0201,1,coords)
+                user.PostMessageW(view,0x0202,0,coords)
+
+            def popup_loaded(stage, origin):
+                wait_for(lambda: stage in Fixture.popup_destinations,
+                         f"The {stage} popup did not reach its target")
+                destination = origin + "/popup-target/" + stage
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(destination,)),
+                         f"The {stage} popup never finished loading")
+
+            target = base + "/page/popup-default"
+            set_control(edit,target)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: "default" in Fixture.popup_attempts,"Automatic popup fixture did not run")
+            invoke("管理网站弹窗")
+            wait_for(lambda: read_address() == "extension://moon.popups/popups.html",
+                     "The website popup settings did not open")
+            if "default" in Fixture.popup_destinations:
+                raise RuntimeError("An unsolicited popup opened under the default rule")
+            panel = wt.RECT()
+            user.GetClientRect(content,ctypes.byref(panel))
+            # Click the bound notice action in the bundled page at the fixed smoke viewport size.
+            sleep(0.45)
+            popup_click(panel.right-px(88),px(245))
+            confirm = wait_for(lambda: owned_window("#32770","打开一次弹窗？"),
+                               "The blocked popup did not offer a one-time confirmation")
+            user.SendMessageW(confirm,0x0111,6,0)  # IDYES
+            popup_loaded("default",base)
+
+            target = base + "/page/popup-click"
+            set_control(edit,target)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
+                     "User-initiated popup fixture did not load")
+            popup_click(px(30),px(20))
+            popup_loaded("click",base)
+
+            def configure_popups(origin, mode, *, confirm=None, expected="saved"):
+                path = profile / f'extension-{sha256(b"moon.history-fixture").hexdigest()}.json'
+                pending = path.with_suffix(".popup-signal")
+                pending.write_text(json.dumps({"popupOrigin":origin,"popupMode":mode}),encoding="utf-8")
+                pending.replace(path)
+                set_control(edit,"extension://moon.history-fixture/history.html")
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                if confirm is not None:
+                    try:
+                        question = wait_for(lambda: owned_window("#32770","允许网站弹窗？"),
+                                            "Adding an allow exception did not prompt for confirmation")
+                    except RuntimeError as error:
+                        raise RuntimeError(f"{error}: address={read_address()}, fixture={read_settings(path)}") from error
+                    user.SendMessageW(question,0x0111,confirm,0)
+                result = wait_for(lambda: read_settings(path).get("popupResult"),"Popup rule request did not complete")
+                if result != expected:
+                    raise RuntimeError(f"Popup rule result was {result!r}, expected {expected!r}")
+
+            allow_origin = base.replace("127.0.0.1","localhost")
+            configure_popups(allow_origin,"allow",confirm=7,expected="CANCELLED")
+            configure_popups(allow_origin,"allow",confirm=6)
+            target = allow_origin + "/page/popup-allow"
+            set_control(edit,target)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            popup_loaded("allow",allow_origin)
+            for stage, mode in (("click-blocked","block"),("click-reset","automatic")):
+                configure_popups(base,mode)
+                target = base + "/page/popup-" + stage
+                set_control(edit,target)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
+                         "Popup rule link fixture did not load")
+                popup_click(px(30),px(20))
+                wait_for(lambda: stage in Fixture.popup_attempts,"Popup link did not receive a click")
+                if mode == "block":
+                    sleep(0.35)
+                    if stage in Fixture.popup_destinations:
+                        raise RuntimeError("Explicit block rule allowed a clicked link")
+                else:
+                    popup_loaded(stage,base)
+            rules = json.loads((profile / "popup-rules.json").read_text(encoding="utf-8"))
+            if rules != [{"origin":allow_origin,"mode":"allow"}]:
+                raise RuntimeError(f"Unexpected persisted popup rules: {rules}")
+            print("popup_policy=ok default_block=ok open_once=ok user_clicked_link=ok saved_origin_exception=ok block_and_reset=ok allow_confirmation=ok",flush=True)
         if reading.exists():
             def navigate_reading(url):
                 set_control(edit,url)
@@ -1944,6 +2067,8 @@ def run_win32(exe, base, root):
                 expected["浏览资料"].update({"导入 HTML 书签","导出 HTML 书签"})
             if private_window.exists():
                 expected["隐私与安全"].add("新建隐私窗口\tCtrl+Shift+N")
+            if popups.exists():
+                expected["隐私与安全"].add("管理网站弹窗")
             if page_source.exists():
                 expected["开发与诊断"].add("查看网页源代码\tCtrl+Shift+7")
             for group, labels in expected.items():
@@ -2190,7 +2315,16 @@ def run_win32(exe, base, root):
             try:
                 guest = open_private()
                 guest_home = user.GetDlgItem(guest,1002)
+                if popups.exists():
+                    guest_edit = user.GetDlgItem(guest,1001)
+                    set_control(guest_edit,base.replace("127.0.0.1","localhost") + "/page/popup-private")
+                    user.PostMessageW(guest_edit,0x0100,0x0D,1)
+                    wait_for(lambda: "private" in Fixture.popup_attempts,"Private popup probe did not run")
                 private_probe(guest,"private-empty","")
+                if popups.exists():
+                    if "private" in Fixture.popup_destinations:
+                        raise RuntimeError("Ordinary window popup rules changed a private window")
+                    print("private_popup_default=ok",flush=True)
                 private_probe(guest,"private-seed","private")
                 guest_dpi = user.GetDpiForWindow(guest)
                 x,y = (251*guest_dpi+48)//96,(104*guest_dpi+48)//96

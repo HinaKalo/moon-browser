@@ -233,14 +233,25 @@ static void rendering(WKPageRef page, WKPageRenderingProgressEvents events, WKTy
     if (events & WKPageRenderingProgressEventFirstVisuallyNonEmptyLayout)
         emit(client, MOON_PAINTED, "layout");
 }
-static WKPageRef popup_requested(WKPageRef page, WKURLRequestRef request, WKDictionaryRef features,
-                                 WKEventModifiers modifiers, WKEventMouseButton button, const void *client) {
-    if (((const MoonView *)client)->extension_address) return NULL;
-    if (!request || !supported_scheme(request) || !safe_method(request)) return NULL;
-    char url[4096];
-    copy_url(wk.WKURLRequestCopyURL(request),url,sizeof(url));
-    if (!strncmp(url,"http://",7) || !strncmp(url,"https://",8))
-        emit(client, MOON_POPUP, url);
+static bool copy_popup_url(WKURLRef url, char buffer[4100]) {
+    WKStringRef string = url ? wk.WKURLCopyString(url) : NULL;
+    const size_t size = string ? wk.WKStringGetUTF8CString(string,buffer,4100) : 0;
+    release(string);
+    release(url);
+    return size > 1 && size <= 4096 && strlen(buffer)+1 == size;
+}
+static WKPageRef popup_requested(WKPageRef page, WKPageConfigurationRef config, WKNavigationActionRef action,
+                                WKWindowFeaturesRef features, const void *client) {
+    const MoonView *view = client;
+    if (view->extension_address) return NULL;
+    WKURLRequestRef request = wk.WKNavigationActionCopyRequest(action);
+    if (request && supported_scheme(request) && safe_method(request)) {
+        char target[4100], opener[4100];
+        if (copy_popup_url(wk.WKURLRequestCopyURL(request),target) &&
+            copy_popup_url(wk.WKPageCopyCommittedURL(page),opener))
+            moon_web_popup(view->token,opener,target,wk.WKNavigationActionHasUnconsumedUserGesture(action));
+    }
+    release(request);
     return NULL;
 }
 static DownloadSlot *download_slot(WKDownloadRef download) {
@@ -574,7 +585,8 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
     }
     view->view_preferences = wk.WKPreferencesCreate();
     if (!view->view_preferences) goto fail;
-    wk.WKPreferencesSetJavaScriptCanOpenWindowsAutomatically(view->view_preferences,false);
+    // WebKit forwards scripted requests to our native policy, which decides whether to open a tab.
+    wk.WKPreferencesSetJavaScriptCanOpenWindowsAutomatically(view->view_preferences,address==NULL);
     wk.WKPageConfigurationSetPreferences(config,view->view_preferences);
     RECT bounds;
     HWND parent = moon_shell_content();
@@ -596,7 +608,7 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
         .renderingProgressDidChange=rendering,.webProcessDidTerminate=terminated };
     WKPageStateClientV0 state = { .base={0,view},.didChangeTitle=changed,.didChangeActiveURL=changed,
         .didChangeCanGoBack=changed,.didChangeCanGoForward=changed };
-    WKPageUIClientV1 ui = { .base={1,view}, .createNewPage=popup_requested };
+    WKPageUIClientV6 ui = { .base={6,view}, .createNewPage=popup_requested };
     const WKPageFindClientV0 find = { .base={0,view},
         .didFindString=find_succeeded, .didFailToFindString=find_failed };
     wk.WKPageSetPageNavigationClient(view->page,&navigation.base);

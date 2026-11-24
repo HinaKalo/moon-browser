@@ -33,6 +33,7 @@ const Grant = struct {
     tabs_manage: ?bool = null,
     search_manage: bool = false,
     site_data_write: ?bool = null,
+    popups_manage: bool = false,
     page_source: bool = false,
     tabs_session_manage: bool = false,
     bookmarks_transfer: ?bool = null,
@@ -171,6 +172,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         const default_permission: ?sdk.Permission = if (std.mem.eql(u8,id,"moon.history")) .@"history.manage"
             else if (std.mem.eql(u8,id,"moon.devtools")) .@"page.inspect"
             else if (std.mem.eql(u8,id,"moon.source")) .@"page.source"
+            else if (std.mem.eql(u8,id,"moon.popups")) .@"popups.manage"
             else if (std.mem.eql(u8,id,"moon.bookmarks")) .@"bookmarks.manage"
             else if (std.mem.eql(u8,id,"moon.downloads")) .@"downloads.manage"
             else if (std.mem.eql(u8,id,"moon.site-data")) .@"siteData.read"
@@ -277,6 +279,7 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.downloads_manage and plugin.requests.contains(.@"downloads.manage")) plugin.grants.insert(.@"downloads.manage");
         if (grant.enabled and grant.site_data_read and plugin.requests.contains(.@"siteData.read")) plugin.grants.insert(.@"siteData.read");
         if (grant.enabled and grant.page_source and plugin.requests.contains(.@"page.source")) plugin.grants.insert(.@"page.source");
+        if (grant.enabled and grant.popups_manage and plugin.requests.contains(.@"popups.manage")) plugin.grants.insert(.@"popups.manage");
         if (grant.enabled and grant.page_reading and plugin.requests.contains(.@"page.reading")) plugin.grants.insert(.@"page.reading");
         if (grant.enabled and grant.tabs_closed_manage and plugin.requests.contains(.@"tabs.closed.manage")) plugin.grants.insert(.@"tabs.closed.manage");
         if (grant.enabled and grant.privacy_clear and plugin.requests.contains(.@"privacy.clear")) plugin.grants.insert(.@"privacy.clear");
@@ -360,6 +363,7 @@ fn persist() bool {
         .search_manage = plugin.grants.contains(.@"search.manage"),
         .site_data_write = plugin.grants.contains(.@"siteData.write"),
         .page_source = plugin.grants.contains(.@"page.source"),
+        .popups_manage = plugin.grants.contains(.@"popups.manage"),
         .tabs_session_manage = plugin.grants.contains(.@"tabs.session.manage"),
         .bookmarks_transfer = plugin.grants.contains(.@"bookmarks.transfer"),
         .menu_items = menus[index][0..used],
@@ -398,6 +402,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"lua.scripts.manage" => "此插件可导入、停用或移除 Lua 用户脚本。新脚本首次启用时，浏览器会单独确认网站范围。",
                 .@"page.inspect" => "此插件可为触发命令时的网页打开开发者工具。控制台和站点存储可在工具中查看。",
                 .@"page.source" => "你从网页触发此插件命令时，它的专属页面可读取该网页已经加载的主文档源代码。",
+                .@"popups.manage" => "此插件可管理网站弹窗权限，并为触发命令的网页打开最近拦截的链接。",
                 .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",
                 .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",
