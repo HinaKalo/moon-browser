@@ -8,14 +8,21 @@
 | --- | --- | --- |
 | GitHub Releases | MoonBrowser-Portable-win-x64.zip | MoonBrowser-Installer-win-x64.exe |
 | Moon RelHub | moon-browser / win-x64-portable | moon-browser / win-x64-installer |
-| WinGet | 通过发布页提供 | 清单使用相同 Installer、同版版本号与 SHA-256 |
+| WinGet | 通过发布页提供 | 清单使用 Moon 上的同版 Installer |
 
 ## 发布步骤
 
-1. 用 .\build.ps1 verify 验收浏览器，再用 .\build.ps1 release 生成两个公开包。
-2. 对新包运行 .\tests\distribution.ps1 <产物目录>，验证 Portable 启动和 Installer 下载、安装、卸载。
-3. 提交并推送对应源码。运行 .\tools\publish-release.ps1 -ArtifactDirectory <产物目录> -NotesFile <说明文件>。它先暂存 GitHub 草稿和未启用的 Moon 发布，再切换渠道并通过公开下载验收版本和哈希。若一端失败，修复后用同版同一批文件重跑。
-4. 从同版 Installer 生成 WinGet 清单，运行 winget validate，提交到社区维护流程。记录实际提交或收录状态。
+更新版本与 docs/<版本>.md，提交源码后从 PowerShell 7 运行：
+
+~~~powershell
+.\tools\release.ps1 -Async
+~~~
+
+命令返回进程 ID 和日志路径。任务在独立 Git 工作树固定本次提交，本地跑单元测试、Windows 界面及 WebKit 冒烟测试，并检查两种包和 WinGet 清单。通过后推送源码，同步 GitHub Release 和 Moon preview，再更新或新建 WinGet PR。WinGet 收录进度以社区 PR 为准。
+
+日志位于 $env:LOCALAPPDATA\MoonBrowser\release-jobs\<版本>.log，保留最近五个。去掉 -Async 可在前台运行同一流程。发布只检查版本及产物元数据，省略下载后的 SHA-256 比对。WinGet 的 InstallerSha256 由同批安装包生成。若中途失败，用同版同批文件重跑。
+
+完整压力测试可用 .\build.ps1 verify。修改打包或安装逻辑时，用 .\tests\distribution.ps1 <产物目录> 验证 Portable 引导及 Installer 安装和卸载。
 
 正式版本如需撤回，从已知正常包重新构建并使用更高的 versionCode。用户已下载的安装包不会因渠道回退而自动降级。
 

@@ -126,6 +126,10 @@ def run_win32(exe, base, root):
     user.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
     user.GetDpiForWindow.argtypes = [wt.HWND]
     user.GetDpiForWindow.restype = wt.UINT
+    user.GetWindowLongPtrW.argtypes = [wt.HWND, ctypes.c_int]
+    user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user.GetWindowRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
+    user.ClientToScreen.argtypes = [wt.HWND, ctypes.POINTER(wt.POINT)]
     user.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
     user.GetDlgItem.argtypes = [wt.HWND, ctypes.c_int]
     user.GetDlgItem.restype = wt.HWND
@@ -152,6 +156,15 @@ def run_win32(exe, base, root):
             sleep(0.1)
         if not frame:
             raise RuntimeError("Win32 shell not found")
+        style = user.GetWindowLongPtrW(frame, -16)  # GWL_STYLE
+        if style & 0x00C00000 == 0x00C00000:  # WS_CAPTION
+            raise RuntimeError(f'Duplicate Windows title bar style is present: {style:#x}')
+        outer, origin = wt.RECT(), wt.POINT()
+        if (not user.GetWindowRect(frame, ctypes.byref(outer))
+                or not user.ClientToScreen(frame, ctypes.byref(origin))
+                or origin.y != outer.top):
+            raise RuntimeError('Native non-client area added a second row above the toolbar')
+        print('single_titlebar=ok', flush=True)
         edit = user.GetDlgItem(frame, 1001)
         home = user.GetDlgItem(frame, 1002)
         content = user.FindWindowExW(frame, None, "MoonContent", None)

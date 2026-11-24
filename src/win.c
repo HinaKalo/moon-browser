@@ -1020,6 +1020,8 @@ int moon_shell_run(void) {
     frame = CreateWindowExW(0,L"MoonBrowserWindow",L"Moon Browser",WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT,CW_USEDEFAULT,1120,760,NULL,NULL,instance,NULL);
     if (!frame) return 1;
+    SetWindowLongPtrW(frame,GWL_STYLE,GetWindowLongPtrW(frame,GWL_STYLE) & ~(LONG_PTR)WS_CAPTION);
+    SetWindowPos(frame,NULL,0,0,0,0,SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     dpi = GetDpiForWindow(frame);
     address_brush = CreateSolidBrush(rgb(theme->field));
     content = CreateWindowExW(0,L"MoonContent",NULL,WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,

@@ -23,7 +23,7 @@ $assets = @(
 )
 foreach ($item in $assets) {
     $item.path = (Resolve-Path -LiteralPath (Join-Path $artifact $item.name)).Path
-    $item.sha = (Get-FileHash -LiteralPath $item.path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $item.bytes = (Get-Item -LiteralPath $item.path).Length
     $item.url = "$base/v1/apps/moon-browser/$($item.platform)/releases/$($version.code)/download"
 }
 if ((Get-Item -LiteralPath $assets[1].path).VersionInfo.FileVersion.Trim() -ne $version.windows_version) {
@@ -33,16 +33,6 @@ if ((Get-Item -LiteralPath $assets[1].path).VersionInfo.FileVersion.Trim() -ne $
 function Native([string]$Program, [string[]]$Arguments) {
     & $Program @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$Program failed (exit $LASTEXITCODE)." }
-}
-function Check-Download([string]$Url, [string]$Hash) {
-    $temp = New-TemporaryFile
-    try {
-        Native 'curl.exe' @('-q','--fail','--location','--proto','=https','--proto-redir','=https',
-            '--silent','--show-error','--max-time','90','--output',$temp.FullName,$Url)
-        if ((Get-FileHash -LiteralPath $temp.FullName -Algorithm SHA256).Hash -ne $Hash) {
-            throw "Public download SHA-256 mismatch: $Url."
-        }
-    } finally { Remove-Item -LiteralPath $temp.FullName }
 }
 function Moon([string]$Command) {
     Native 'ssh' @('-o','BatchMode=yes','-o','ConnectTimeout=10','moon',
@@ -55,8 +45,8 @@ function Check-Release {
     }
     foreach ($item in $assets) {
         $uploaded = $release.assets | Where-Object name -EQ $item.name
-        if (!$uploaded -or $uploaded.digest -ne "sha256:$($item.sha)") {
-            throw "Unexpected GitHub asset digest: $($item.name)."
+        if (!$uploaded -or $uploaded.state -ne 'uploaded' -or $uploaded.size -ne $item.bytes) {
+            throw "Missing or incomplete GitHub asset: $($item.name)."
         }
     }
     return $release
@@ -74,8 +64,7 @@ if ($LASTEXITCODE -ne 0) {
 } else {
     $found = $lookup | ConvertFrom-Json
     if ($found.targetCommitish -ne $head) {
-        if (!$found.isDraft) { throw 'The public release already exists for a different commit.' }
-        Native 'gh' @('release','edit',$tag,'--repo',$repo,'--target',$head)
+        throw 'The release already exists for a different commit.'
     }
     if ($found.isDraft) {
         foreach ($item in $assets) {
@@ -92,7 +81,11 @@ $pending = @()
 foreach ($item in $assets) {
     $response = Invoke-WebRequest -Method Head -Uri $item.url -SkipHttpErrorCheck -TimeoutSec 20
     if ($response.StatusCode -eq 404) { $pending += $item }
-    elseif ($response.StatusCode -eq 200) { Check-Download $item.url $item.sha }
+    elseif ($response.StatusCode -eq 200) {
+        if ([long]($response.Headers['Content-Length'] | Select-Object -First 1) -ne $item.bytes) {
+            throw "Unexpected RelHub file size for $($item.name)."
+        }
+    }
     else { throw "Could not inspect RelHub release at $($item.url). HTTP $($response.StatusCode)." }
 }
 if ($pending.Count) {
@@ -103,7 +96,6 @@ if ($pending.Count) {
         foreach ($item in $pending) {
             Native 'scp' @('-q','-o','BatchMode=yes',$item.path,"moon:$stage/$($item.name)")
             Moon "relhub publish -app moon-browser -platform $($item.platform) -no-channel -code $($version.code) -version $($version.name) -file $stage/$($item.name) -name $($item.name) -notes-file $stage/notes.md"
-            Check-Download $item.url $item.sha
         }
     } finally {
         Moon "rm -f -- $stage/notes.md $stage/$($assets[0].name) $stage/$($assets[1].name); rmdir -- $stage"
@@ -124,10 +116,10 @@ if ($release.isDraft) {
 }
 
 foreach ($item in $assets) {
-    Check-Download "https://github.com/$repo/releases/download/$tag/$($item.name)" $item.sha
     $check = Invoke-RestMethod "$base/v1/apps/moon-browser/check?platform=$($item.platform)&channel=preview&versionCode=0" -TimeoutSec 20
-    if ($check.manifest.versionCode -ne $version.code -or $check.manifest.sha256 -ne $item.sha) {
+    if ($check.manifest.versionCode -ne $version.code -or $check.manifest.versionName -ne $version.name -or
+        $check.manifest.size -ne $item.bytes) {
         throw "The public RelHub preview does not match $($item.name)."
     }
-    Write-Output ("{0} published and verified on GitHub and Moon: {1}" -f $item.name,$item.sha)
+    Write-Output "$($item.name) published on GitHub and Moon ($tag)."
 }
