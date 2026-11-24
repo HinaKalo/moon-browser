@@ -14,6 +14,7 @@ const page_source = @import("page_source.zig");
 const popups = @import("popup_policy.zig");
 const autoplay = @import("autoplay_policy.zig");
 const site_sound = @import("site_sound.zig");
+const reading = @import("reading.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const privacy = @import("privacy.zig");
 const search = @import("search.zig");
@@ -66,6 +67,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
         .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => .@"siteSettings.autoplay",
         .@"siteSettings.sound.get", .@"siteSettings.sound.set", .@"siteSettings.sound.toggle" => .@"siteSettings.sound",
+        .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => .@"siteSettings.zoom",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
@@ -208,6 +210,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
         .@"siteSettings.sound.get", .@"siteSettings.sound.set" => {},
+        .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         .@"tabs.groups.list", .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve" => {},
         .@"privacy.clear", .@"privacy.status" => {},
@@ -450,6 +453,25 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             const changed = native.moon_site_sound_toggle(owner.ptr,context.target_tab_id,context.target_navigation);
             return sdk.result(output,id,std.enums.fromInt(sdk.SiteSoundResult,changed) orelse .unavailable);
+        },
+        .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => {
+            if (!context.from_page or native.moon_shell_private() or !native.moon_extension_panel_active(context.target_tab_id))
+                return sdk.failure(output,id,.PermissionDenied);
+            if (method == .@"siteSettings.zoom.get") {
+                const query = if (params == null) sdk.SiteZoomQuery{} else
+                    decode(sdk.SiteZoomQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+                var buffer: [reading.zoom_page_size]sdk.SiteZoomRule = undefined;
+                const page = reading.listZoom(allocator,query,popups.boundOrigin(context.target_tab_id,context.plugin_id),&buffer)
+                    catch |err| return sdk.failure(output,id,if (err==error.InvalidParams) .InvalidParams else .InternalError);
+                return sdk.result(output,id,page);
+            }
+            const rule = decode(sdk.SiteZoomRule,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (!reading.validLevel(rule.percent)) return sdk.failure(output,id,.InvalidParams);
+            const key = popups.origin(rule.origin) orelse return sdk.failure(output,id,.InvalidParams);
+            const origin = std.mem.sliceTo(&key,0);
+            reading.save(origin,rule.percent) catch return sdk.failure(output,id,.InternalError);
+            native.moon_site_zoom_apply(&key,rule.percent,0);
+            return sdk.result(output,id,sdk.SiteZoomRule{ .origin=origin,.percent=rule.percent });
         },
         .@"ui.openPage" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
@@ -721,7 +743,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                     return sdk.result(output,id,appearance);
                 },
                 .@"window.appearance.set" => {
-                    if (!context.user_command and (!context.from_page or !native.moon_appearance_page_active(context.target_tab_id)))
+                    if (!context.user_command and (!context.from_page or !native.moon_extension_panel_active(context.target_tab_id)))
                         return sdk.failure(output,id,.PermissionDenied);
                     const change = decode(sdk.AppearanceChange,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
                     if (change.theme == null and change.focusMode == null) return sdk.failure(output,id,.InvalidParams);

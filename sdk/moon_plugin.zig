@@ -42,6 +42,7 @@ pub const Permission = enum {
     @"siteData.cacheWrite",
     @"siteData.records",
     @"window.appearance",
+    @"siteSettings.zoom",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -65,6 +66,12 @@ pub const Theme = enum { light, dark };
 pub const Appearance = struct { theme: Theme, focusMode: bool };
 pub const AppearanceChange = struct { theme: ?Theme = null, focusMode: ?bool = null };
 pub const AppearanceTarget = enum { theme, focusMode };
+pub const SiteZoomRule = struct { origin: []const u8, percent: u16 };
+pub const SiteZoomQuery = struct { query: []const u8 = "", offset: u32 = 0 };
+pub const SiteZoomPage = struct {
+    currentOrigin: ?[]const u8, currentPercent: u16,
+    levels: []const u16, rules: []const SiteZoomRule, previous: ?u32, next: ?u32,
+};
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
 pub const LinkMenuAction = enum(c_uint) { open = 1, copy, bookmark };
 pub const LinkResult = enum { opened, copied, clipboardBusy, limitReached, saved, alreadySaved, unavailable };
@@ -332,6 +339,8 @@ pub const Method = enum {
     @"siteSettings.sound.get",
     @"siteSettings.sound.set",
     @"siteSettings.sound.toggle",
+    @"siteSettings.zoom.get",
+    @"siteSettings.zoom.set",
     @"ui.openPage",
     @"history.list",
     @"history.remove",

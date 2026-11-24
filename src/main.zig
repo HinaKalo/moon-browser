@@ -1879,6 +1879,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"siteData.cookieDetails" => "允许查看 Cookie 属性和 HttpOnly Cookie",
         .@"window.appearance" => "允许设置浏览器主题和专注模式",
+        .@"siteSettings.zoom" => "允许查看和修改网站缩放比例",
         .@"siteData.cacheWrite" => "允许经确认删除单个站点缓存",
         .@"siteData.records" => "允许查看 IndexedDB 记录预览",
         .@"page.source" => "允许查看当前网页源代码",
@@ -2094,7 +2095,7 @@ export fn moon_appearance_available() bool {
     return !stopped and plugins.systemEnabled(.@"window.appearance");
 }
 
-export fn moon_appearance_page_active(panel: u64) bool {
+export fn moon_extension_panel_active(panel: u64) bool {
     return !stopped and count!=0 and tabs[active].id==panel and tabs[active].extension;
 }
 
@@ -2577,6 +2578,15 @@ fn zoomOrigin(tab: *const Tab, buffer: *[4096:0]u8) ?[]const u8 {
     return reading.origin(slice(buffer));
 }
 
+export fn moon_site_zoom_apply(origin: [*c]const u8, percent: c_uint, except_tab: u64) void {
+    for (tabs[0..count]) |*tab| {
+        if (tab.id==except_tab or !tab.document_committed or tab.phase!=.live) continue;
+        var buffer: [4096:0]u8 = @splat(0);
+        const key = zoomOrigin(tab,&buffer) orelse continue;
+        if (equals(slice(origin),key)) native.moon_engine_set_zoom(tab.view.?,percent);
+    }
+}
+
 export fn moon_reading_zoom(id: u64, action: c_int) c_uint {
     const tab = readingTarget(id) orelse return 0;
     const command = std.enums.fromInt(sdk.ZoomAction,action) orelse return 0;
@@ -2585,12 +2595,8 @@ export fn moon_reading_zoom(id: u64, action: c_int) c_uint {
     var url: [4096:0]u8 = @splat(0);
     if (!native.moon_shell_private()) if (zoomOrigin(tab,&url)) |key| {
         reading.save(key,percent) catch return 0;
-        for (tabs[0..count]) |*peer| {
-            if (peer.id == id or peer.phase != .live or peer.loading) continue;
-            var peer_url: [4096:0]u8 = @splat(0);
-            const origin = zoomOrigin(peer,&peer_url) orelse continue;
-            if (equals(key,origin)) native.moon_engine_set_zoom(peer.view.?,percent);
-        }
+        url[key.len]=0;
+        moon_site_zoom_apply(&url,percent,id);
     };
     native.moon_engine_set_zoom(view,percent);
     return percent;

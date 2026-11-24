@@ -11,8 +11,8 @@
     {
       "id": "moon.popups",
       "name": "站点设置",
-      "description": "按网站管理弹窗、媒体自动播放和网站静音。",
-      "permission": "管理网站弹窗、自动播放和声音规则",
+      "description": "按网站管理弹窗、媒体自动播放、静音和网页缩放。",
+      "permission": "管理网站弹窗、自动播放、声音和缩放规则",
       "url": "https://docs.browser.moonl.cloud/popups.html"
     },
     {

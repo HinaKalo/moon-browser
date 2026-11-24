@@ -61,6 +61,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteSettings.sound.get` | `siteSettings.sound` | 普通窗口插件页传入 `{}`，返回 `{ currentOrigin, muted }`。`muted` 为已静音的来源列表。 |
 | `siteSettings.sound.set` | `siteSettings.sound` | 活动插件页传入 `{ origin, muted }`。`muted` 为布尔值，成功后立即同步该来源的已打开标签页。 |
 | `siteSettings.sound.toggle` | `siteSettings.sound` | 用户在网页触发命令时传入 `{}`。目标由浏览器绑定到触发命令的活动网页。返回 `muted`、`unmuted`、`limitReached` 或 `unavailable`。 |
+| `siteSettings.zoom.get` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ query?, offset? }`。返回 `{ currentOrigin, currentPercent, levels, rules, previous, next }`。分页偏移为空时表示该方向没有更多页面。 |
+| `siteSettings.zoom.set` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ origin, percent }`，比例取自 `levels`。返回规范化后的规则。设为 100 会删除该来源的例外。 |
 | `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
 | `history.list` | `history.manage` | 传入 `{ query?, before? }`。返回 `{ visits, next }`，每条访问记录为 `{ id, title, url, visitedAt }`。时间为 Unix 毫秒。使用 `next` 作为下一页的 `before`。 |
 | `history.remove` | `history.manage` | 传入 `{ id }` 移除单条记录，成功返回 `null`。 |
@@ -131,7 +133,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 
 - 菜单、命令面板和快捷键发送 `commands.run`。`params.id` 是清单中的命令。插件用同一请求 ID 回复 `{ message?: string, toast?: boolean }`，再以退出码 0 退出。0.1.0-preview.10 起，`toast: true` 将消息显示为短暂的原生通知。
 - `tabs.changed` 是无 ID 通知，`params.tabId` 是标签 ID 或 `null`。只有声明该事件并获得 `tabs.read` 的插件会收到通知。插件处理后直接退出，繁忙时标签切换可合并。
-- 插件以 `p:1`、`p:2` 递增发送请求并逐条收取回复。宿主请求使用 `h:` 前缀，每行小于 32 KiB。普通调用最多 24 个请求，初始化与通知有约 2 秒处理窗口，普通命令最多 120 秒。声明 `interactive: true` 的命令最多运行 30 分钟，从 0.1.0-preview.57 起最多可发送 256 个请求。读取握手的 `requestLimit`，即可用实际宿主上限配置 SDK 的 `Client.request_budget`。
+- 插件以 `p:1`、`p:2` 递增发送请求并逐条收取回复。宿主请求使用 `h:` 前缀，每行小于 32 KiB。普通调用最多 24 个请求，初始化与通知有约 2 秒处理窗口，普通命令最多 120 秒。声明 `interactive: true` 的命令最多运行 30 分钟，从 0.1.0-preview.58 起最多可发送 256 个请求。读取握手的 `requestLimit`，即可用实际宿主上限配置 SDK 的 `Client.request_budget`。
 
 ~~~json
 {"jsonrpc":"2.0","id":"h:1","method":"plugin.initialize","params":{"apiVersion":2,"pluginId":"example.system-tools","permissions":["tabs.read"]}}

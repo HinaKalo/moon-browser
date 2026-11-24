@@ -24,6 +24,12 @@ SDK 提供 `siteSettings.autoplay.get` 和 `siteSettings.autoplay.set`。插件�
 
 网站静音与单标签静音可以同时生效。只有两项都解除，标签页才恢复声音。网站仍可开始播放媒体并显示播放进度。规则按协议、主机和端口保存，隐私窗口使用独立的标签静音。
 
+## 网站缩放
+
+从 0.1.0-preview.58 起，在「站点设置 → 网站缩放」查看、搜索和编辑已保存的比例。从网页进入时会自动填入该来源及其比例。保存后，同一来源已打开的普通标签页会即时调整。选择「恢复 100%」会删除该来源的例外，后续访问使用默认比例。
+
+比例与页面缩放快捷键共用同一份设置。HTTP、HTTPS 和非默认端口各自保存。隐私窗口中的缩放只作用于当前标签页。插件通过 `siteSettings.zoom` 权限调用 `siteSettings.zoom.get` 和 `siteSettings.zoom.set`。
+
 ## 内核能力
 
 目前 Windows 发行包固定使用 Playwright WebKit build 2388。对该二进制开启宿主媒体设备设置后，在安全的本机网页中仍未暴露 `navigator.mediaDevices`。摄像头和麦克风规则需要支持此网页接口的 Windows WebKit 构建。

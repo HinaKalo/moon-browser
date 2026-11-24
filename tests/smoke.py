@@ -1,5 +1,6 @@
 """Exercise the packaged Windows host and real WebKit processes over loopback."""
 import argparse
+from base64 import b64encode
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from hashlib import sha256
@@ -272,7 +273,12 @@ class Fixture(BaseHTTPRequestHandler):
                 silent = token.removesuffix("-retry").endswith("-silent")
                 media = "video" if silent else "audio"
                 extension = "mp4" if media=="video" else "wav"
-                demo = (f'<{media} controls src="/autoplay.{extension}?{token}"></{media}><script>'
+                source = f"/autoplay.{extension}?{token}"
+                if token.endswith("-retry"):
+                    contents = AUTOPLAY_VIDEO.read_bytes() if silent else AUTOPLAY_AUDIO
+                    mime = "video/mp4" if silent else "audio/wav"
+                    source = f"data:{mime};base64,{b64encode(contents).decode('ascii')}"
+                demo = (f'<{media} controls src="{source}"></{media}><script>'
                         f'const element=document.querySelector("{media}");'
                         f'const result={json.dumps(token)};element.muted={json.dumps(silent)};'
                         'const report=value=>fetch("/autoplay-report/"+result+"?"+value,{cache:"no-store"});'
@@ -803,6 +809,7 @@ def run_win32(exe, base, root):
     popup_command = popup_manifest.get("contributes",{}).get("commands",[{}])[0].get("label","管理网站弹窗")
     autoplay_settings = "siteSettings.autoplay" in popup_manifest.get("permissions",[])
     sound_settings = "siteSettings.sound" in popup_manifest.get("permissions",[])
+    zoom_settings = "siteSettings.zoom" in popup_manifest.get("permissions",[])
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     reading_manifest = json.loads(reading.with_name("plugin.json").read_text(encoding="utf-8")) if reading.exists() else {}
     reader_page = reading.with_name("reader.html")
@@ -853,6 +860,7 @@ def run_win32(exe, base, root):
             {"id": "moon.task-fixture", "enabled": True, "tabs_read": False, "task_manager_manage": True},
             {"id": "moon.command-fixture", "enabled": True, "tabs_read": False, "ui_commands": True},
             {"id": "moon.search-fixture", "enabled": True, "tabs_read": False, "search_manage": True},
+            *([{"id":"moon.zoom-fixture","enabled":True,"tabs_read":False,"popups_manage":True,"site_settings_zoom":True}] if zoom_settings else []),
             {"id": "moon.tab-tools", "enabled": True, "tabs_read": False, "tabs_organize": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
@@ -907,6 +915,9 @@ def run_win32(exe, base, root):
             ('const soundDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"13",method:"siteSettings.sound.get",params:{}}));'
              'if(JSON.parse(soundDenied).error?.code!==-32001)return;' if sound_settings else '') +
+            ('const zoomDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"16",method:"siteSettings.zoom.get",params:{}}));'
+             'if(JSON.parse(zoomDenied).error?.code!==-32001)return;' if zoom_settings else '') +
             ('const appearanceDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"14",method:"window.appearance.set",params:{theme:"dark"}}));'
              'if(JSON.parse(appearanceDenied).error?.code!==-32001)return;' if appearance.is_file() else '') +
@@ -927,6 +938,51 @@ def run_win32(exe, base, root):
         )
         (profile / "lua-userscripts.json").write_text(
             json.dumps([{"source": lua_source, "enabled": True}]), encoding="utf-8")
+    if zoom_settings:
+        fixture = profile/"plugins"/"zoom-fixture"
+        fixture.mkdir(parents=True)
+        shutil.copy2(popups,fixture/popups.name)
+        (fixture/"plugin.json").write_text(json.dumps({
+            "id":"moon.zoom-fixture","name":"Zoom settings fixture","version":"1.0.0",
+            "apiVersion":2,"runtime":"native","entry":popups.name,"settingsPage":"popups.html",
+            "permissions":["popups.manage","siteSettings.zoom"],
+            "contributes":{"commands":[{"id":"open","label":"运行站点缩放验收"}]},
+        }),encoding="utf-8")
+        page = popups.with_name("popups.html").read_text(encoding="utf-8")
+        contract = """
+<script>(async()=>{
+    const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:"write",value}));
+    const wait=async(fn,label)=>{for(let i=0;i<160;i++){if(fn())return;
+        await new Promise(r=>setTimeout(r,50));}throw Error(label);};
+    const sites=Array.from({length:17},(_,i)=>"https://zoom-"+String(i).padStart(2,"0")+".fixture.invalid");
+    const rows=()=>get("zoom-results").querySelectorAll("li");
+    try {
+        await wait(()=>!get("zoom").hidden&&zoomPercent.value==="110","active origin and saved zoom");
+        if(zoomInput.value!==SITE_ORIGIN)throw Error("panel not bound to active website");
+        const normal=await host("siteSettings.zoom.set",{origin:"HTTPS://ZOOM-00.fixture.invalid:443/a",percent:125});
+        if(normal.origin!==sites[0]||normal.percent!==125)throw Error("origin normalization");
+        for(const origin of sites.slice(1))await host("siteSettings.zoom.set",{origin,percent:150});
+        for(const rule of [{origin:SITE_ORIGIN,percent:115},{origin:"https://name@example.invalid",percent:150}]){
+            let invalid=false;try{await host("siteSettings.zoom.set",rule);}catch(error){invalid=error.message==="INVALID_PARAMS";}
+            if(!invalid)throw Error("invalid rule accepted");
+        }
+        zoomSearch.value="ZOOM-";zoomSearch.dispatchEvent(new Event("input"));
+        await wait(()=>rows().length===16&&!zoomNext.disabled,"first filtered page");
+        zoomNext.click();
+        await wait(()=>rows().length===1&&rows()[0].textContent.includes(sites[16]),"next page");
+        rows()[0].querySelector("button:last-child").click();
+        await wait(()=>zoomStatus.textContent==="已恢复 100%。"&&rows().length===16&&zoomNext.disabled,"reset rule and paginate");
+        for(const origin of sites.slice(0,-1))await host("siteSettings.zoom.set",{origin,percent:100});
+        zoomSearch.value="";zoomSearch.dispatchEvent(new Event("input"));
+        zoomPercent.value="150";get("zoom-form").dispatchEvent(new Event("submit",{cancelable:true}));
+        await wait(()=>zoomStatus.textContent==="已保存并应用 150%。"&&rows().length===1&&rows()[0].textContent.includes(SITE_ORIGIN),"save from form");
+        const final=await host("siteSettings.zoom.get");
+        if(final.currentPercent!==150||final.rules.length!==1||final.next!==null)throw Error("saved state mismatch");
+        await emit({passed:true});
+    } catch(error){await emit({error:String(error)});}
+})();</script>
+"""
+        (fixture/"popups.html").write_text(page.replace("</html>",contract.replace("SITE_ORIGIN",json.dumps(base))+"</html>"),encoding="utf-8")
     if history.exists():
         fixture = profile / "plugins" / "history-contract"
         fixture.mkdir(parents=True)
@@ -3051,6 +3107,14 @@ def run_win32(exe, base, root):
                      "The reading preference restart fixture did not finish loading",15)
             wait_for(lambda: 0 < viewport("reading-restart")[0] < normal_width*0.94,
                      "Persistent site zoom was not restored after restarting the browser")
+            if zoom_settings:
+                invoke("运行站点缩放验收")
+                wait_for(lambda: read_address()=="extension://moon.zoom-fixture/popups.html","The site zoom panel did not open")
+                library_result("moon.zoom-fixture")
+                click(px(251),px(187))  # Close the settings tab and return to the original page.
+                wait_for(lambda: read_address()==persisted and 0<viewport("reading-restart")[0]<normal_width*0.8,
+                         "Saving the site rule did not reflow the already open source tab")
+                print("site_zoom_settings=ok bound_origin=ok search=ok pagination=ok validation=ok per_site_reset=ok live_reflow=ok",flush=True)
             invoke("重置页面缩放")
             wait_for(lambda: viewport("reading-restart")[0] == normal_width,
                      "Reset did not restore the default webpage layout")

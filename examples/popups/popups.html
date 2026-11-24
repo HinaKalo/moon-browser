@@ -34,10 +34,12 @@
   #status { color:var(--accent); margin-top:10px; }
   #status:empty,.empty { display:none; }
   #results:empty+.empty { display:block; }
-  #autoplay-results:empty+.empty,#sound-results:empty+.empty { display:block; }
-  #autoplay-list,#sound-list { margin-top:14px; }
-  #autoplay-status,#sound-status { margin-top:10px; color:var(--accent); }
-  #autoplay-status:empty,#sound-status:empty { display:none; }
+  #autoplay-results:empty+.empty,#sound-results:empty+.empty,#zoom-results:empty+.empty { display:block; }
+  #autoplay-list,#sound-list,#zoom-list { margin-top:14px; }
+  #autoplay-status,#sound-status,#zoom-status { margin-top:10px; color:var(--accent); }
+  #autoplay-status:empty,#sound-status:empty,#zoom-status:empty { display:none; }
+  #zoom-query { width:100%; margin-bottom:12px; }
+  #zoom-pages { justify-content:flex-end; margin-top:12px; }
 </style>
 <main>
   <header><h1>站点设置</h1><p>按网站保存规则。HTTP、HTTPS 和不同端口各自设置。</p></header>
@@ -95,6 +97,24 @@
     <div id="sound-list">
       <ul id="sound-results" aria-label="静音网站"></ul>
       <p class="empty">暂无静音网站。</p>
+    </div>
+  </section>
+  <section id="zoom" hidden>
+    <h2>网站缩放</h2>
+    <form id="zoom-form">
+      <input id="zoom-origin" required spellcheck="false" inputmode="url" aria-label="缩放的网站 URL" placeholder="https://example.com">
+      <select id="zoom-percent" aria-label="网页缩放比例"></select>
+      <button id="zoom-save" type="submit">保存比例</button>
+    </form>
+    <p id="zoom-status" role="status"></p>
+    <div id="zoom-list">
+      <input id="zoom-query" type="search" maxlength="100" aria-label="搜索缩放例外" placeholder="搜索已保存的网站">
+      <ul id="zoom-results" aria-label="网站缩放例外"></ul>
+      <p class="empty">没有匹配的缩放例外。</p>
+      <div class="row" id="zoom-pages" hidden>
+        <button id="zoom-prev" type="button">上一页</button>
+        <button id="zoom-next" type="button">下一页</button>
+      </div>
     </div>
   </section>
 </main>
@@ -249,10 +269,98 @@
     } finally { soundBusy = get('sound-save').disabled = false; }
   }
   get('sound-form').onsubmit = event => { event.preventDefault(); saveSound(soundInput.value.trim(),true); };
+  const zoomInput=get('zoom-origin'), zoomPercent=get('zoom-percent'), zoomSearch=get('zoom-query'), zoomStatus=get('zoom-status');
+  const zoomPrev=get('zoom-prev'), zoomNext=get('zoom-next');
+  let zoomBack=null, zoomMore=null, zoomBound, zoomCurrentPercent, zoomRevision=0, zoomBusy=false, zoomDebounce;
+  function renderZoomControls() {
+    for (const id of ['zoom-origin','zoom-percent','zoom-save']) get(id).disabled=zoomBusy || !zoomPercent.options.length;
+    zoomPrev.disabled=zoomBusy || zoomBack===null;
+    zoomNext.disabled=zoomBusy || zoomMore===null;
+    get('zoom-pages').hidden=zoomBack===null && zoomMore===null;
+  }
+  async function refreshZoom(offset) {
+    const revision=++zoomRevision;
+    try {
+      const page=await host('siteSettings.zoom.get',{query:zoomSearch.value.trim(),offset});
+      if (revision!==zoomRevision) return;
+      if (!zoomPercent.options.length) {
+        for (const percent of page.levels) {
+          const option=document.createElement('option');
+          option.value=percent;
+          option.textContent=percent+'%';
+          zoomPercent.append(option);
+        }
+      }
+      if (zoomBound!==page.currentOrigin ||
+          (zoomInput.value===zoomBound && Number(zoomPercent.value)===zoomCurrentPercent)) {
+        zoomInput.value=page.currentOrigin || '';
+        zoomPercent.value=page.currentPercent;
+      }
+      zoomBound=page.currentOrigin;
+      zoomCurrentPercent=page.currentPercent;
+      zoomBack=page.previous;
+      zoomMore=page.next;
+      const list=get('zoom-results');
+      list.replaceChildren();
+      for (const rule of page.rules) {
+        const row=document.createElement('li'), description=document.createElement('div'), origin=document.createElement('code');
+        const percent=document.createElement('p'), editButton=document.createElement('button'), reset=document.createElement('button');
+        origin.className='origin';
+        origin.textContent=rule.origin;
+        percent.className='policy';
+        percent.textContent=rule.percent+'%';
+        editButton.textContent='编辑';
+        editButton.setAttribute('aria-label','编辑 '+rule.origin+' 的缩放比例');
+        editButton.onclick=()=>{
+          if (zoomBusy) return;
+          zoomInput.value=rule.origin;
+          zoomPercent.value=rule.percent;
+          zoomPercent.focus();
+        };
+        reset.textContent='恢复 100%';
+        reset.setAttribute('aria-label','将 '+rule.origin+' 恢复为 100%');
+        reset.onclick=()=>saveZoom(rule.origin,100,false);
+        description.append(origin,percent);
+        row.append(description,editButton,reset);
+        list.append(row);
+      }
+      get('zoom').hidden=false;
+      renderZoomControls();
+    } catch (error) {
+      if (revision!==zoomRevision) return;
+      get('zoom').hidden=error.message==='PERMISSION_DENIED';
+      zoomStatus.textContent='暂时无法读取网站缩放。';
+      renderZoomControls();
+    }
+  }
+  async function saveZoom(origin,percent,fromForm) {
+    if (zoomBusy) return;
+    zoomBusy=true;
+    renderZoomControls();
+    try {
+      const applied=await host('siteSettings.zoom.set',{origin,percent});
+      if (fromForm || zoomInput.value===applied.origin) {
+        zoomInput.value=applied.origin;
+        zoomPercent.value=applied.percent;
+      }
+      await refreshZoom(0);
+      zoomStatus.textContent=percent===100?'已恢复 100%。':'已保存并应用 '+percent+'%。';
+    } catch (error) {
+      zoomStatus.textContent=messages[error.message] || '暂时无法保存网站缩放。';
+    } finally { zoomBusy=false; renderZoomControls(); }
+  }
+  get('zoom-form').onsubmit=event=>{ event.preventDefault(); saveZoom(zoomInput.value.trim(),Number(zoomPercent.value),true); };
+  zoomSearch.oninput=()=>{
+    clearTimeout(zoomDebounce);
+    zoomDebounce=setTimeout(()=>refreshZoom(0),140);
+  };
+  zoomPrev.onclick=()=>{ if (zoomBack!==null) refreshZoom(zoomBack); };
+  zoomNext.onclick=()=>{ if (zoomMore!==null) refreshZoom(zoomMore); };
   function load() {
     refresh().catch(error => { status.textContent = messages[error.message] || '暂时无法读取网站设置。'; });
     refreshAutoplay().catch(() => { get('autoplay').hidden = true; });
     refreshSound().catch(() => { get('sound').hidden = true; });
+    refreshZoom(0);
   }
   document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });
   load();
