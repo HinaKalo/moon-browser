@@ -25,7 +25,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 
 将 `plugin.json` 和同目录 EXE 放进浏览器程序或配置目录下的 `plugins/<目录>`，重启后从工具栏菜单启用。命令在插件菜单与命令面板中使用同一 ID。每个插件可声明一到八条命令，ID 在插件内唯一。
 
-命令可选填 `shortcut`。当前支持 `Ctrl+H`、`Ctrl+D`、`Ctrl+Shift+O`、`Ctrl+J`、`F12` 和 `Ctrl+Shift+J`。同一组合键由第一个已启用且声明该组合键的插件处理，随浏览器分发的插件优先。
+命令可选填 `shortcut`。当前支持 `Ctrl+H`、`Ctrl+D`、`Ctrl+Shift+O`、`Ctrl+J`、`F12`、`Ctrl+Shift+J`、`Ctrl+F`、`Ctrl++`、`Ctrl+-` 和 `Ctrl+0`。同一组合键由第一个已启用且声明该组合键的插件处理，随浏览器分发的插件优先。
 
 插件启用与权限授权分别由用户确认。`tabs.read` 允许访问触发时的活动标签，`lua.scripts.manage` 允许管理已安装用户脚本。撤销权限后，后续调用失效。EXE 自身按当前 Windows 用户权限运行。
 
@@ -62,6 +62,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteData.list` | `siteData.read` | 面板传入 `{ group }`，类别是 `cookies`、`local` 或 `session`。返回 `{ available, entries, more, generation }`。 |
 | `siteData.value` | `siteData.read` | 面板传入 `{ group, id, generation }`，返回当前快照中的预览值。 |
 | `siteData.refresh` / `siteData.openInspector` | `siteData.read` | 前台面板可刷新同一网页的快照，或为原网页打开已启用的 WebKit Inspector。返回布尔值。 |
+| `reading.find` | `page.reading` | 在用户命令中传入 `{}`，为触发命令的活动标签打开原生查找栏。返回布尔值。 |
+| `reading.zoom` | `page.reading` | 在用户命令中传入 `{ action }`。支持 `increase`、`decrease`、`reset`，返回新的整数百分比。活动页不可用时返回 `null`。 |
 
 脚本 ID 是 64 位小写十六进制字符组成的不透明标识。同一份源码重复导入返回 `ALREADY_EXISTS`。脚本内容或匹配范围改动后要重新导入，首次启用重新确认。管理接口负责导入和状态，网页导航触发运行，宿主 Lua VM 执行代码。
 

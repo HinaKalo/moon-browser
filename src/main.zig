@@ -11,6 +11,7 @@ const network = @import("network_policy.zig");
 const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
+const reading = @import("reading.zig");
 const market = @import("market.zig");
 const updater = @import("updater.zig");
 
@@ -44,6 +45,8 @@ const Retiring = struct { handle: *anyopaque, pid: u32 };
 var tabs: [max_tabs]Tab = undefined;
 var count: usize = 0;
 var active: usize = 0;
+var find_tab: u64 = 0;
+var find_owner: [96:0]u8 = @splat(0);
 var next_id: u64 = 1;
 var boot: u64 = 0;
 var settings: policy.Settings = .{};
@@ -247,6 +250,7 @@ fn storeSession(tab: *Tab) void {
 }
 fn detach(tab: *Tab) void {
     site_data.invalidate(tab.id);
+    if (find_tab == tab.id) moon_find_dismiss(false);
     const view = tab.view orelse return;
     tab.view = null;
     tab.loaded = false;
@@ -413,6 +417,7 @@ fn restore(tab: *Tab) void {
 }
 fn chooseTab(index: usize, notify: bool) void {
     if (index >= count or index == active) return;
+    moon_find_dismiss(false);
     const now = native.moon_clock();
     tabs[active].last_used = now;
     if (tabs[active].view) |view| native.moon_engine_show(view, false);
@@ -630,6 +635,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     history.init(profile);
     bookmarks.init(profile);
     downloads.init(profile);
+    reading.init(profile);
     userscripts.init(profile);
     var first_url: ?[:0]u8 = null;
     defer if (first_url) |allocated| allocator.free(allocated);
@@ -699,6 +705,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         history.close();
         bookmarks.close();
         downloads.close();
+        reading.close();
         site_data.reset();
         for (tabs[0..count]) |*tab| {
             detach(tab);
@@ -745,12 +752,14 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             plugins.enable(index);
             network.select(plugins.networkSource());
             checkSiteDataGrant();
+            checkFindGrant();
         },
         native.MOON_PLUGIN_GRANT => {
             const permission = std.enums.fromInt(sdk.Permission,index & 0xffffffff) orelse return;
             plugins.toggleGrant(index >> 32,permission);
             if (permission == .@"network.filter") network.select(plugins.networkSource());
             if (permission == .@"siteData.read") checkSiteDataGrant();
+            if (permission == .@"page.reading") checkFindGrant();
         },
         native.MOON_PLUGIN_SETTINGS => {
             var address: [256]u8 = undefined;
@@ -776,6 +785,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
     switch (kind) {
         native.MOON_STARTED => {
             site_data.invalidate(id);
+            if (find_tab == id) moon_find_dismiss(true);
             tab.loading = true;
             tab.loaded = false;
             tab.history_visit = null;
@@ -786,6 +796,11 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             tab.deadline = 0;
             tab.phase = .live;
             sync(tab);
+            if (tab.view) |view| {
+                var url: [4096:0]u8 = @splat(0);
+                const percent = if (zoomOrigin(tab,&url)) |key| reading.load(key) else 100;
+                native.moon_engine_set_zoom(view,percent);
+            }
         },
         native.MOON_FINISHED => {
             tab.loading = false;
@@ -821,6 +836,11 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         },
         native.MOON_TERMINATED => {
             site_data.closed(id);
+            if (find_tab == id) {
+                find_tab = 0;
+                find_owner[0] = 0;
+                if (native.moon_shell_find_hide()) native.moon_shell_focus_address();
+            }
             tab.phase = .crashed;
             tab.loading = false;
             tab.loaded = false;
@@ -940,6 +960,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"bookmarks.manage" => "允许管理书签",
         .@"downloads.manage" => "允许管理下载",
         .@"siteData.read" => "允许查看站点数据",
+        .@"page.reading" => "允许打开页内查找和调整缩放",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {
@@ -1029,6 +1050,76 @@ export fn moon_site_data_action(panel: u64, id: [*c]const u8, inspector: bool) b
 
 export fn moon_site_data_result(source: u64, request: u64, snapshot: [*c]const u8) void {
     if (!stopped) site_data.complete(source,request,slice(snapshot));
+}
+
+fn checkFindGrant() void {
+    if (find_tab != 0 and !plugins.hasGrant(slice(&find_owner),.@"page.reading"))
+        moon_find_dismiss(true);
+}
+
+fn readingTarget(id: u64) ?*Tab {
+    if (stopped or count == 0) return null;
+    const tab = &tabs[active];
+    return if (tab.id == id and tab.phase == .live and tab.loaded and !tab.loading and tab.view != null) tab else null;
+}
+
+export fn moon_reading_find(id: u64, owner: [*c]const u8) bool {
+    const tab = readingTarget(id) orelse return false;
+    if (!copy(&find_owner,slice(owner))) return false;
+    if (!native.moon_shell_find_show()) {
+        find_owner[0] = 0;
+        return false;
+    }
+    find_tab = tab.id;
+    return true;
+}
+
+export fn moon_find_query(query: [*c]const u8, backwards: bool) void {
+    const tab = readingTarget(find_tab) orelse return;
+    if (query[0] == 0) native.moon_engine_hide_find(tab.view.?) else
+        native.moon_engine_find(tab.view.?,query,backwards);
+}
+
+export fn moon_find_result(id: u64, query: [*c]const u8, matches: c_uint) void {
+    if (id == find_tab and readingTarget(id) != null) native.moon_shell_find_result(query,matches);
+}
+
+export fn moon_find_dismiss(refocus: bool) void {
+    if (find_tab == 0) return;
+    const index = tabIndex(find_tab);
+    find_tab = 0;
+    find_owner[0] = 0;
+    const focused = native.moon_shell_find_hide();
+    if (index) |i| if (tabs[i].view) |view| {
+        native.moon_engine_hide_find(view);
+        if (refocus and focused and active == i) native.moon_engine_show(view,true);
+    };
+}
+
+fn zoomOrigin(tab: *const Tab, buffer: *[4096:0]u8) ?[]const u8 {
+    if (tab.extension) return null;
+    const view = tab.view orelse return null;
+    native.moon_engine_committed_url(view,buffer,buffer.len);
+    return reading.origin(slice(buffer));
+}
+
+export fn moon_reading_zoom(id: u64, action: c_int) c_uint {
+    const tab = readingTarget(id) orelse return 0;
+    const command = std.enums.fromInt(sdk.ZoomAction,action) orelse return 0;
+    const view = tab.view.?;
+    const percent = reading.next(@intCast(native.moon_engine_zoom(view)),command);
+    var url: [4096:0]u8 = @splat(0);
+    if (zoomOrigin(tab,&url)) |key| {
+        reading.save(key,percent) catch return 0;
+        for (tabs[0..count]) |*peer| {
+            if (peer.id == id or peer.phase != .live or peer.loading) continue;
+            var peer_url: [4096:0]u8 = @splat(0);
+            const origin = zoomOrigin(peer,&peer_url) orelse continue;
+            if (equals(key,origin)) native.moon_engine_set_zoom(peer.view.?,percent);
+        }
+    }
+    native.moon_engine_set_zoom(view,percent);
+    return percent;
 }
 
 export fn moon_plugin_shortcut(shortcut: [*c]const u8) bool {

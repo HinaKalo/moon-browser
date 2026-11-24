@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
     app.root_module.addImport("moon_plugin", plugin_sdk);
     app.root_module.addWin32ResourceFile(.{ .file=b.path("src/moon-browser.rc") });
     app.root_module.addIncludePath(b.path("third_party"));
-    app.root_module.addCSourceFiles(.{ .files = &.{ "src/win.c", "src/win_dialog.c", "src/webkit.c", "src/plugin_io.c", "src/update_win.c", "src/lua_runtime.c" }, .flags = &.{ "-std=c17", "-DUNICODE", "-D_UNICODE" } });
+    app.root_module.addCSourceFiles(.{ .files = &.{ "src/win.c", "src/win_dialog.c", "src/win_find.c", "src/webkit.c", "src/plugin_io.c", "src/update_win.c", "src/lua_runtime.c" }, .flags = &.{ "-std=c17", "-DUNICODE", "-D_UNICODE" } });
     app.root_module.addCSourceFiles(.{ .root = b.path("third_party/Lua"), .files = &.{
         "lapi.c", "lauxlib.c", "lbaselib.c", "lcode.c", "lctype.c", "ldebug.c", "ldo.c", "ldump.c",
         "lfunc.c", "lgc.c", "llex.c", "lmathlib.c", "lmem.c", "lobject.c", "lopcodes.c", "lparser.c",
@@ -72,6 +72,12 @@ pub fn build(b: *std.Build) void {
     });
     site_data.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(site_data);
+    const reading = b.addExecutable(.{
+        .name = "MoonReading",
+        .root_module = b.createModule(.{ .root_source_file=b.path("examples/reading/main.zig"),.target=target,.optimize=optimize,.link_libc=true }),
+    });
+    reading.root_module.addImport("moon_plugin",plugin_sdk);
+    b.installArtifact(reading);
     const fixture = b.addExecutable(.{
         .name = "MoonPluginContractClient",
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/plugin_contract_client.zig"), .target = target, .optimize = optimize, .link_libc = true }),

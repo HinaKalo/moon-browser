@@ -35,6 +35,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => .@"downloads.manage",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
+        .@"reading.find", .@"reading.zoom" => .@"page.reading",
     };
 }
 
@@ -109,7 +110,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     switch (method) {
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
-        .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector" => {
+        .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -305,6 +306,18 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             return sdk.result(output,id,native.moon_site_data_action(context.target_tab_id,owner.ptr,method == .@"siteData.openInspector"));
+        },
+        .@"reading.find" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            return sdk.result(output,id,native.moon_reading_find(context.target_tab_id,owner.ptr));
+        },
+        .@"reading.zoom" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const value = decode(struct { action: sdk.ZoomAction },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const percent = native.moon_reading_zoom(context.target_tab_id,@intFromEnum(value.action));
+            const result: ?c_uint = if (percent == 0) null else percent;
+            return sdk.result(output,id,result);
         },
     };
 }

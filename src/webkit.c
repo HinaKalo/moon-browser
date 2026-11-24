@@ -68,6 +68,8 @@
     X(WKPreferencesSetDeveloperExtrasEnabled) \
     X(WKPageGetInspector) X(WKInspectorShow) X(WKInspectorShowConsole) X(WKInspectorShowResources) \
     X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
+    X(WKPageSetPageFindClient) X(WKPageFindString) X(WKPageHideFindUI) \
+    X(WKPageGetPageZoomFactor) X(WKPageSetPageZoomFactor) \
     X(WKPageCopySessionState) X(WKPageRestoreFromSessionState) X(WKPageGetProcessIdentifier) X(WKPageGetMediaState) \
     X(WKNavigationActionCopyRequest) X(WKNavigationActionShouldPerformDownload) \
     X(WKNavigationActionGetNavigationType) X(WKNavigationActionHasUnconsumedUserGesture) \
@@ -115,6 +117,16 @@ typedef struct {
 static DownloadSlot downloads[64];
 
 static void release(WKTypeRef ref) { if (ref) wk.WKRelease(ref); }
+static void find_succeeded(WKPageRef page, WKStringRef string, unsigned matches, const void *client) {
+    (void)page;
+    const MoonView *view = client;
+    char query[1024];
+    if (string && wk.WKStringGetUTF8CString(string,query,sizeof(query)) < sizeof(query))
+        moon_find_result(view->token,query,matches);
+}
+static void find_failed(WKPageRef page, WKStringRef string, const void *client) {
+    find_succeeded(page,string,0,client);
+}
 static void copy_string(WKStringRef string, char *buffer, size_t cap) {
     buffer[0] = 0;
     if (string) {
@@ -550,8 +562,11 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
     WKPageStateClientV0 state = { .base={0,view},.didChangeTitle=changed,.didChangeActiveURL=changed,
         .didChangeCanGoBack=changed,.didChangeCanGoForward=changed };
     WKPageUIClientV1 ui = { .base={1,view}, .createNewPage=popup_requested };
+    const WKPageFindClientV0 find = { .base={0,view},
+        .didFindString=find_succeeded, .didFailToFindString=find_failed };
     wk.WKPageSetPageNavigationClient(view->page,&navigation.base);
     wk.WKPageSetPageStateClient(view->page,&state.base);
+    wk.WKPageSetPageFindClient(view->page,&find.base);
     if (!address && filter_bundle_available) {
         const WKPageInjectedBundleClientV0 client = {
             .base={0,view},.didReceiveMessageFromInjectedBundle=site_snapshot_received,
@@ -613,6 +628,7 @@ void moon_engine_close(MoonView *view) {
     wk.WKPageSetPageStateClient(view->page,NULL);
     wk.WKPageSetPageNavigationClient(view->page,NULL);
     wk.WKPageSetPageUIClient(view->page,NULL);
+    wk.WKPageSetPageFindClient(view->page,NULL);
     if (!view->extension_address && filter_bundle_available) wk.WKPageSetPageInjectedBundleClient(view->page,NULL);
     wk.WKPageClose(view->page);
     if (IsWindow(view->hwnd)) DestroyWindow(view->hwnd);
@@ -636,6 +652,24 @@ bool moon_engine_load(MoonView *view, const char *url) {
 void moon_engine_back(MoonView *view) { if (wk.WKPageCanGoBack(view->page)) wk.WKPageGoBack(view->page); }
 void moon_engine_forward(MoonView *view) { if (wk.WKPageCanGoForward(view->page)) wk.WKPageGoForward(view->page); }
 void moon_engine_reload(MoonView *view) { wk.WKPageReload(view->page); }
+void moon_engine_find(MoonView *view, const char *query, bool backwards) {
+    WKStringRef string = wk.WKStringCreateWithUTF8CString(query);
+    if (!string) return;
+    WKFindOptions options = kWKFindOptionsCaseInsensitive | kWKFindOptionsWrapAround |
+        kWKFindOptionsShowHighlight | kWKFindOptionsShowFindIndicator;
+    if (backwards) options |= kWKFindOptionsBackwards;
+    wk.WKPageFindString(view->page,string,options,MOON_FIND_MATCH_LIMIT);
+    release(string);
+}
+void moon_engine_hide_find(MoonView *view) { wk.WKPageHideFindUI(view->page); }
+void moon_engine_set_zoom(MoonView *view, unsigned percent) {
+    const double factor = percent / 100.0;
+    if (factor != wk.WKPageGetPageZoomFactor(view->page)) wk.WKPageSetPageZoomFactor(view->page,factor);
+}
+unsigned moon_engine_zoom(MoonView *view) {
+    const double factor = wk.WKPageGetPageZoomFactor(view->page);
+    return factor >= 0.1 && factor <= 10.0 ? (unsigned)(factor * 100.0 + 0.5) : 100;
+}
 bool moon_engine_inspect(MoonView *view, int panel) {
     if (view->extension_address) return false;
     wk.WKPreferencesSetDeveloperExtrasEnabled(view->view_preferences,true);

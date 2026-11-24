@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.reading",
+      "name": "查找与缩放",
+      "description": "在当前页查找文字，按站点记住页面缩放比例。",
+      "permission": "打开页内查找和调整缩放",
+      "url": "https://docs.browser.moonl.cloud/reading.html"
+    },
+    {
       "id": "moon.site-data",
       "name": "站点数据",
       "description": "筛选当前网页可读的 Cookie、Local Storage 和 Session Storage。",

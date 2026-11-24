@@ -548,6 +548,7 @@ static void layout(void) {
         HRGN corners=CreateRoundRectRgn(0,0,pane_width+1,pane_height+1,px(20),px(20));
         if (corners && !SetWindowRgn(content,corners,TRUE)) DeleteObject(corners);
     }
+    moon_find_layout();
     int address_width=address_right(width)-address_left()-34;
     MoveWindow(address,px(address_left()+29),px(14),px(address_width>10?address_width:10),px(21),TRUE);
     if (home_edit) {
@@ -616,6 +617,7 @@ static void refresh_theme(void) {
     InvalidateRect(address,NULL,TRUE);
     InvalidateRect(home_edit,NULL,TRUE);
     InvalidateRect(content,NULL,TRUE);
+    moon_find_layout();
     moon_dialog_refresh();
 }
 static bool theme_path(char *path,size_t size) {
@@ -1021,7 +1023,7 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
-static bool composing(HWND input) {
+bool moon_ime_composing(HWND input) {
     HIMC context=ImmGetContext(input);
     if (!context) return false;
     bool active=ImmGetCompositionStringW(context,GCS_COMPSTR,NULL,0)>0;
@@ -1031,7 +1033,7 @@ static bool composing(HWND input) {
 static bool keyboard(MSG *msg) {
     bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0;
     bool alt = (msg->lParam & (1L<<29)) != 0;
-    if ((msg->hwnd==address || msg->hwnd==home_edit) && msg->wParam==VK_RETURN && !ctrl && !alt && !composing(msg->hwnd)) {
+    if ((msg->hwnd==address || msg->hwnd==home_edit) && msg->wParam==VK_RETURN && !ctrl && !alt && !moon_ime_composing(msg->hwnd)) {
         wchar_t wide[4096];
         char value[16384];
         GetWindowTextW(msg->hwnd,wide,ARRAYSIZE(wide));
@@ -1042,6 +1044,10 @@ static bool keyboard(MSG *msg) {
     if ((ctrl && msg->wParam == 'L') || msg->wParam == VK_F6) { moon_shell_focus_address(); return true; }
     if (ctrl && msg->wParam == 'K') { open_palette(); return true; }
     if (ctrl && !shift && !alt && msg->wParam == 'H' && moon_plugin_shortcut("Ctrl+H")) return true;
+    if (ctrl && !shift && !alt && msg->wParam == 'F' && moon_plugin_shortcut("Ctrl+F")) return true;
+    if (ctrl && !alt && (msg->wParam==VK_OEM_PLUS || msg->wParam==VK_ADD) && moon_plugin_shortcut("Ctrl++")) return true;
+    if (ctrl && !shift && !alt && (msg->wParam==VK_OEM_MINUS || msg->wParam==VK_SUBTRACT) && moon_plugin_shortcut("Ctrl+-")) return true;
+    if (ctrl && !shift && !alt && (msg->wParam=='0' || msg->wParam==VK_NUMPAD0) && moon_plugin_shortcut("Ctrl+0")) return true;
     if (!ctrl && !shift && !alt && msg->wParam == VK_F12 && moon_plugin_shortcut("F12")) return true;
     if (ctrl && shift && !alt && msg->wParam == 'J' && moon_plugin_shortcut("Ctrl+Shift+J")) return true;
     if (ctrl && !shift && !alt && msg->wParam == 'J' && moon_plugin_shortcut("Ctrl+J")) return true;
@@ -1153,9 +1159,9 @@ int moon_shell_run(void) {
     while ((next=GetMessageW(&msg,NULL,0,0)) > 0) {
         if (moon_dialog_message(&msg)) continue;
         if (palette && (msg.hwnd==palette || IsChild(palette,msg.hwnd)) && msg.message==WM_KEYDOWN &&
-            !composing(msg.hwnd) && palette_key(&msg)) continue;
+            !moon_ime_composing(msg.hwnd) && palette_key(&msg)) continue;
         if ((msg.hwnd==frame || IsChild(frame,msg.hwnd)) &&
-            (msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) && keyboard(&msg)) continue;
+            (msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) && (moon_find_key(&msg) || keyboard(&msg))) continue;
         if (IsChild(content,msg.hwnd) && page_input(msg.message,msg.wParam))
             moon_command(MOON_INPUT,0,NULL);
         TranslateMessage(&msg);

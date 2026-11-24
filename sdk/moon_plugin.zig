@@ -16,9 +16,13 @@ pub const Permission = enum {
     @"bookmarks.manage",
     @"downloads.manage",
     @"siteData.read",
+    @"page.reading",
 };
 pub const Event = enum { @"tabs.changed" };
-pub const Shortcut = enum { @"Ctrl+H", F12, @"Ctrl+Shift+J", @"Ctrl+D", @"Ctrl+Shift+O", @"Ctrl+J" };
+pub const Shortcut = enum {
+    @"Ctrl+H", F12, @"Ctrl+Shift+J", @"Ctrl+D", @"Ctrl+Shift+O", @"Ctrl+J",
+    @"Ctrl+F", @"Ctrl++", @"Ctrl+-", @"Ctrl+0",
+};
 pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false, shortcut: ?Shortcut = null };
 pub const Manifest = struct {
     id: []const u8,
@@ -80,6 +84,7 @@ pub const SiteDataStatus = struct { state: SiteDataState, origin: []const u8, ge
 pub const SiteDataEntry = struct { id: u32, name: []const u8, length: usize, shortened: bool };
 pub const SiteDataPage = struct { available: bool, entries: []const SiteDataEntry, more: bool, generation: u64 };
 pub const SiteDataItem = struct { group: SiteDataGroup, id: u32, generation: u64 };
+pub const ZoomAction = enum { increase, decrease, reset };
 pub const NetworkFilterStatus = struct { preferred: bool, active: bool, exceptions: []const []const u8 };
 pub const NetworkFilterSite = struct { host: []const u8, enabled: bool };
 pub const CommandResult = struct {
@@ -129,6 +134,8 @@ pub const Method = enum {
     @"siteData.value",
     @"siteData.refresh",
     @"siteData.openInspector",
+    @"reading.find",
+    @"reading.zoom",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

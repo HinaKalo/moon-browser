@@ -21,7 +21,7 @@ const LegacyManifest = struct {
 const Grant = struct {
     id: []const u8, enabled: bool, tabs_read: bool,
     lua_scripts_manage: bool = false, page_inspect: bool = false, history_manage: bool = false, network_filter: bool = false,
-    bookmarks_manage: bool = false, downloads_manage: bool = false, site_data_read: bool = false,
+    bookmarks_manage: bool = false, downloads_manage: bool = false, site_data_read: bool = false, page_reading: bool = false,
 };
 const Outcome = enum { ok, failed, timed_out, crashed };
 const Trigger = enum { command, changed, timeout_test, crash_test };
@@ -134,7 +134,8 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             else if (std.mem.eql(u8,id,"moon.devtools")) .@"page.inspect"
             else if (std.mem.eql(u8,id,"moon.bookmarks")) .@"bookmarks.manage"
             else if (std.mem.eql(u8,id,"moon.downloads")) .@"downloads.manage"
-            else if (std.mem.eql(u8,id,"moon.site-data")) .@"siteData.read" else null;
+            else if (std.mem.eql(u8,id,"moon.site-data")) .@"siteData.read"
+            else if (std.mem.eql(u8,id,"moon.reading")) .@"page.reading" else null;
         if (default_permission) |scope| {
             if (requests.contains(scope)) {
                 plugin.enabled = true;
@@ -204,6 +205,7 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.bookmarks_manage and plugin.requests.contains(.@"bookmarks.manage")) plugin.grants.insert(.@"bookmarks.manage");
         if (grant.enabled and grant.downloads_manage and plugin.requests.contains(.@"downloads.manage")) plugin.grants.insert(.@"downloads.manage");
         if (grant.enabled and grant.site_data_read and plugin.requests.contains(.@"siteData.read")) plugin.grants.insert(.@"siteData.read");
+        if (grant.enabled and grant.page_reading and plugin.requests.contains(.@"page.reading")) plugin.grants.insert(.@"page.reading");
         break;
     };
 }
@@ -221,6 +223,7 @@ fn persist() bool {
         .bookmarks_manage = plugin.grants.contains(.@"bookmarks.manage"),
         .downloads_manage = plugin.grants.contains(.@"downloads.manage"),
         .site_data_read = plugin.grants.contains(.@"siteData.read"),
+        .page_reading = plugin.grants.contains(.@"page.reading"),
     };
     const bytes = std.json.Stringify.valueAlloc(allocator, items[0..len], .{}) catch return false;
     defer allocator.free(bytes);
@@ -250,6 +253,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",
                 .@"downloads.manage" => "此插件可读取本机下载记录、取消传输，并在文件夹中显示已保存的文件。",
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
+                .@"page.reading" => "此插件可在当前页打开查找栏，并调整页面缩放。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
             plugin.grants.insert(scope);
@@ -315,11 +319,21 @@ pub fn settingsAddress(index: usize, buffer: []u8) ?[:0]u8 {
     return std.fmt.bufPrintSentinel(buffer,"extension://{s}/{s}",.{ std.mem.sliceTo(&plugin.id,0),std.mem.sliceTo(&plugin.settings_page,0) },0) catch null;
 }
 
-pub fn pageGrants(id: []const u8) ?Permissions {
+fn enabledPlugin(id: []const u8) ?*const Plugin {
     for (all[0..len]) |*plugin| {
-        if (plugin.enabled and plugin.settings_page[0] != 0 and std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),id)) return plugin.grants;
+        if (plugin.enabled and std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),id)) return plugin;
     }
     return null;
+}
+
+pub fn pageGrants(id: []const u8) ?Permissions {
+    const plugin = enabledPlugin(id) orelse return null;
+    return if (plugin.settings_page[0] != 0) plugin.grants else null;
+}
+
+pub fn hasGrant(id: []const u8, permission: sdk.Permission) bool {
+    const plugin = enabledPlugin(id) orelse return false;
+    return plugin.grants.contains(permission);
 }
 
 pub fn systemEnabled(permission: sdk.Permission) bool {

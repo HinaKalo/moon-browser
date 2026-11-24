@@ -52,6 +52,7 @@ class Fixture(BaseHTTPRequestHandler):
     filter_probe = False
     slow_download_release = Event()
     change_site_data_source = Event()
+    reading_layout = {}
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -92,6 +93,10 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"ok", "text/plain"
         elif path == "/site-data-navigation":
             data, content_type = (b"change" if self.change_site_data_source.is_set() else b"keep"), "text/plain"
+        elif path.startswith("/reading-layout/"):
+            _, _, page, width, scroll = path.split("/")
+            self.reading_layout[page] = (int(width), int(scroll))
+            data, content_type = b"ok", "text/plain"
         elif path.startswith("/page/"):
             name = path.removeprefix("/page/")
             if name == "中文":
@@ -145,6 +150,16 @@ class Fixture(BaseHTTPRequestHandler):
                     'Storage.prototype.getItem=()=>"forged";'
                     'setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
                     'if(await r.text()==="change")location.replace("/page/site-data-changed");},400);</script>'
+                )
+            if name in ("reading-contract", "reading-other-origin", "reading-restart"):
+                demo = (
+                    '<p style="margin-top:1100px">月亮查找词</p>'
+                    '<p style="margin-top:1200px;margin-bottom:1000px">月亮查找词</p>'
+                    '<script>let previous;const report=()=>{'
+                    'const value=innerWidth+"/"+Math.round(scrollY);'
+                    f'if(previous!==value){{previous=value;fetch("/reading-layout/{name}/"+value);}}'
+                    '};addEventListener("scroll",report);addEventListener("resize",report);'
+                    'addEventListener("load",report);</script>'
                 )
             data = (
                 "<!doctype html><meta charset=utf-8>"
@@ -367,6 +382,7 @@ def run_win32(exe, base, root):
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
+    reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     if manager.exists():
         fixture = profile / "plugins" / "settings"
         fixture.mkdir(parents=True)
@@ -397,6 +413,9 @@ def run_win32(exe, base, root):
             ('const siteDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"2",method:"siteData.status",params:{}}));'
              'if(JSON.parse(siteDenied).error?.code!==-32001)return;' if site_data.exists() else '') +
+            ('const readingDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"3",method:"reading.find",params:{}}));'
+             'if(JSON.parse(readingDenied).error?.code!==-32601)return;' if reading.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -548,25 +567,24 @@ def run_win32(exe, base, root):
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "site-data.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
-    proc = subprocess.Popen([str(exe), "--gdi"], env=preview_env(root))
-    frame = None
-    try:
+    def browser_frame(process):
         deadline = monotonic() + 20
         while monotonic() < deadline:
             candidate = None
             while candidate := user.FindWindowExW(None, candidate, "MoonBrowserWindow", None):
                 owner = wt.DWORD()
                 user.GetWindowThreadProcessId(candidate, ctypes.byref(owner))
-                if owner.value == proc.pid:
-                    frame = candidate
-                    break
-            if frame:
-                break
-            if proc.poll() is not None:
-                raise RuntimeError(f"Win32 smoke startup exited with {proc.returncode}")
+                if owner.value == process.pid and user.IsWindowVisible(candidate):
+                    return candidate
+            if process.poll() is not None:
+                raise RuntimeError(f"Win32 smoke startup exited with {process.returncode}")
             sleep(0.1)
-        if not frame:
-            raise RuntimeError("Win32 shell not found")
+        raise RuntimeError("Win32 shell not found")
+
+    proc = subprocess.Popen([str(exe), "--gdi"], env=preview_env(root))
+    frame = None
+    try:
+        frame = browser_frame(proc)
         style = user.GetWindowLongPtrW(frame, -16)  # GWL_STYLE
         if style & 0x00C00000 == 0x00C00000:  # WS_CAPTION
             raise RuntimeError(f'Duplicate Windows title bar style is present: {style:#x}')
@@ -701,10 +719,13 @@ def run_win32(exe, base, root):
             if not result.get("passed"):
                 raise RuntimeError(f"{plugin}: {result.get('error')}")
 
+        def read_control(control):
+            text = ctypes.create_unicode_buffer(4096)
+            user.SendMessageW(control, 0x000D, len(text), ctypes.addressof(text))
+            return text.value
+
         def read_address():
-            address = ctypes.create_unicode_buffer(4096)
-            user.SendMessageW(edit, 0x000D, len(address), ctypes.addressof(address))
-            return address.value
+            return read_control(edit)
 
         invoke("版本与更新")
         popup = wait_for(lambda: owned_window("#32770", "版本与更新"), "Compact update dialog did not open")
@@ -895,6 +916,78 @@ def run_win32(exe, base, root):
             if not result.get("passed"):
                 raise RuntimeError(f"Site data invalidation: {result}")
             print("site_data_system_plugin=ok isolated_storage=ok site_data_navigation_cleanup=ok",flush=True)
+        if reading.exists():
+            def navigate_reading(url):
+                set_control(edit,url)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(url,)),
+                         f"Reading fixture did not finish loading: {url}",15)
+
+            def find_bar():
+                found = user.FindWindowExW(frame,None,"MoonFind",None)
+                return found if found and user.IsWindowVisible(found) else None
+
+            def viewport(page):
+                return Fixture.reading_layout.get(page,(0,0))
+
+            target = base + "/page/reading-contract"
+            navigate_reading(target)
+            normal_width = wait_for(lambda: viewport("reading-contract")[0],"Reading viewport was not reported")
+            invoke("页内查找")
+            bar = wait_for(find_bar,"The reading plugin did not open the find bar")
+            search = user.GetDlgItem(bar,1201)
+            matches = user.GetDlgItem(bar,1202)
+            set_control(search,"没有这个词")
+            wait_for(lambda: read_control(matches) == "无匹配","Find did not report zero matches")
+            set_control(search,"月亮查找词")
+            wait_for(lambda: read_control(matches) == "2 项匹配","WebKit did not return two Chinese matches")
+            initial_offset = wait_for(lambda: viewport("reading-contract")[1],"Find did not scroll to a match")
+            user.PostMessageW(search,0x0100,0x0D,1)  # Enter
+            wait_for(lambda: abs(viewport("reading-contract")[1]-initial_offset)>700,
+                     "Enter did not move to the other occurrence")
+            user.SendMessageW(user.GetDlgItem(bar,1203),0x00F5,0,0)  # BM_CLICK
+            wait_for(lambda: abs(viewport("reading-contract")[1]-initial_offset)<100,
+                     "Previous did not return to the first occurrence")
+            user.PostMessageW(search,0x0100,0x1B,1)  # Escape
+            wait_for(lambda: not find_bar(),"Escape did not close the find bar")
+
+            invoke("放大页面")
+            wait_for(lambda: 0 < viewport("reading-contract")[0] < normal_width*0.94,
+                     "Zoom did not reflow the webpage")
+            wait_for(lambda: owned_window("#32770","查找与缩放"),"Zoom did not report its result")
+            with closing(sqlite3.connect(profile / "page-zoom.sqlite3")) as db:
+                if db.execute("SELECT origin,percent FROM zoom").fetchall() != [(base,110)]:
+                    raise RuntimeError("Zoom did not store the active site's 110% setting")
+
+            invoke("页内查找")
+            wait_for(find_bar,"The find bar did not reopen")
+            invoke("新建标签页")
+            wait_for(lambda: not find_bar() and user.IsWindowVisible(home),"Find bar leaked across tabs")
+            other_origin = base.replace("127.0.0.1","localhost") + "/page/reading-other-origin"
+            navigate_reading(other_origin)
+            wait_for(lambda: viewport("reading-other-origin")[0] == normal_width,
+                     "Zoom preference leaked to another origin")
+
+            user.PostMessageW(frame,0x0010,0,0)
+            if proc.wait(8) != 0:
+                raise RuntimeError("Browser failed to shut down before reading preference check")
+            frame = None
+            persisted = base + "/page/reading-restart"
+            proc = subprocess.Popen([str(exe),"--gdi",persisted],env=preview_env(root))
+            frame = browser_frame(proc)
+            edit = user.GetDlgItem(frame,1001)
+            user.SetWindowPos(frame,None,0,0,840,590,0x0016)
+            wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(persisted,)),
+                     "The reading preference restart fixture did not finish loading",15)
+            wait_for(lambda: 0 < viewport("reading-restart")[0] < normal_width*0.94,
+                     "Persistent site zoom was not restored after restarting the browser")
+            invoke("重置页面缩放")
+            wait_for(lambda: viewport("reading-restart")[0] == normal_width,
+                     "Reset did not restore the default webpage layout")
+            with closing(sqlite3.connect(profile / "page-zoom.sqlite3")) as db:
+                if db.execute("SELECT origin FROM zoom").fetchall():
+                    raise RuntimeError("Reset left a stored non-default zoom preference")
+            print("reading_plugin=ok native_unicode_find=ok find_tab_scope=ok site_zoom_restart=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

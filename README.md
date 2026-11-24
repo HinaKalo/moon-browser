@@ -28,6 +28,7 @@ build 生成本地开发目录，package 打包本地开发用的自包含 ZIP�
 随包提供浏览历史和网页开发者工具插件。Ctrl+H 打开历史记录，F12 打开 WebKit Inspector，Ctrl+Shift+J 打开该网页的控制台。可在工具栏的各插件子菜单停用或撤销授权。
 
 Ctrl+D 保存书签，Ctrl+Shift+O 打开书签管理，Ctrl+J 查看下载进度。书签和下载作为独立的系统插件随包提供。
+Ctrl+F 在当前页查找文字，Ctrl++、Ctrl+- 和 Ctrl+0 调整或重置页面缩放。HTTP(S) 站点的缩放比例在重启后恢复。
 
 ## 标签内存
 

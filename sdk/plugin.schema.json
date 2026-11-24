@@ -15,7 +15,7 @@
     "entry": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.[eE][xX][eE]$" },
     "permissions": {
       "type": "array",
-      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage", "network.filter", "bookmarks.manage", "downloads.manage", "siteData.read"] }
+      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage", "network.filter", "bookmarks.manage", "downloads.manage", "siteData.read", "page.reading"] }
     },
     "events": {
       "type": "array",
@@ -38,7 +38,7 @@
               "id": { "type": "string", "maxLength": 63, "pattern": "^[A-Za-z0-9_-](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?$" },
               "label": { "type": "string", "minLength": 1, "maxLength": 255 },
               "interactive": { "type": "boolean" },
-              "shortcut": { "enum": ["Ctrl+H", "F12", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J"] }
+              "shortcut": { "enum": ["Ctrl+H", "F12", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0"] }
             }
           }
         }

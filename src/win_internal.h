@@ -16,4 +16,8 @@ typedef struct MoonDialogTheme {
 MoonDialogTheme moon_dialog_theme(void);
 void moon_dialog_refresh(void);
 bool moon_dialog_message(MSG *message);
+enum { MOON_FIND_MATCH_LIMIT = 999 };
+void moon_find_layout(void);
+bool moon_find_key(MSG *message);
+bool moon_ime_composing(HWND input);
 #endif
