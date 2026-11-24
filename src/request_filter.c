@@ -9,8 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The public C bundle header includes JavaScriptCore, which the filter does not use.
-   These client slots mirror WKBundleClientV0 at the engine lock revision. */
+/* These client slots mirror WKBundleClientV1 at the engine lock revision. */
 typedef struct { int version; const void *info; } BundleClientBase;
 typedef struct {
     BundleClientBase base;
@@ -18,7 +17,10 @@ typedef struct {
     void (*will_destroy_page)(WKBundleRef,WKBundlePageRef,const void *);
     void (*did_initialize_page_group)(WKBundleRef,WKBundlePageGroupRef,const void *);
     void (*did_receive_message)(WKBundleRef,WKStringRef,WKTypeRef,const void *);
+    void (*did_receive_page_message)(WKBundleRef,WKBundlePageRef,WKStringRef,WKTypeRef,const void *);
 } BundleClient;
+
+void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRef name,WKTypeRef data,const void *info);
 
 static void (*set_bundle_client)(WKBundleRef,const BundleClientBase *);
 static void (*set_load_client)(WKBundlePageRef,const WKBundlePageResourceLoadClientBase *);
@@ -223,7 +225,8 @@ __declspec(dllexport) void WKBundleInitialize(WKBundleRef bundle,WKTypeRef data)
 #undef RESOLVE_AS
     if (data) set_rules(data);
     const BundleClient client = {
-        .base={0,NULL},.did_create_page=created_page,.will_destroy_page=destroyed_page,.did_receive_message=receive_message,
+        .base={1,NULL},.did_create_page=created_page,.will_destroy_page=destroyed_page,.did_receive_message=receive_message,
+        .did_receive_page_message=moon_bundle_site_message,
     };
     set_bundle_client(bundle,&client.base);
 }

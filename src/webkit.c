@@ -31,6 +31,7 @@
 #include <WebKit/WKWebsiteDataStoreConfigurationRef.h>
 #include <WebKit/WKWebsiteDataStoreRef.h>
 #include <commdlg.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +58,7 @@
     X(WKPageSetPageNavigationClient) X(WKPageSetPageUIClient) X(WKPageSetPageStateClient) \
     X(WKPageLoadURL) X(WKPageCopyTitle) X(WKPageCopyActiveURL) X(WKPageClose) \
     X(WKPageCopyCommittedURL) X(WKPageCallAsyncJavaScriptWithoutUserGesture) \
+    X(WKPageSetPageInjectedBundleClient) X(WKPagePostMessageToInjectedBundle) \
     X(WKPageLoadHTMLString) X(WKStringGetTypeID) X(WKFrameInfoGetIsMainFrame) \
     X(WKWebsiteDataStoreCreateNonPersistentDataStore) X(WKPageConfigurationSetUserContentController) \
     X(WKUserContentControllerCreate) X(WKUserContentControllerAddScriptMessageHandler) \
@@ -442,7 +444,7 @@ static void extension_message(WKScriptMessageRef message, WKCompletionListenerRe
         size_t bytes = wk.WKStringGetUTF8CString((WKStringRef)data,request,sizeof(request));
         if (bytes && bytes < sizeof(request) && strlen(request)+1 == bytes)
             ok = settings ? moon_extension_settings(view->extension_id,request,response,sizeof(response)) :
-                moon_extension_request(view->extension_id,request,response,sizeof(response));
+                moon_extension_request(view->token,view->extension_id,request,response,sizeof(response));
     }
     WKStringRef value = wk.WKStringCreateWithUTF8CString(ok ? response : "{\"ok\":false}");
     wk.WKCompletionListenerComplete(reply,value);
@@ -453,6 +455,36 @@ static void settings_message(WKScriptMessageRef message, WKCompletionListenerRef
 }
 static void plugin_message(WKScriptMessageRef message, WKCompletionListenerRef reply, const void *context) {
     extension_message(message,reply,context,false);
+}
+static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef body,const void *context) {
+    const MoonView *view=context;
+    if (!wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot") || !body ||
+        wk.WKGetTypeID(body)!=wk.WKStringGetTypeID()) return;
+    const size_t cap=512*1024+32;
+    char *response=malloc(cap);
+    if (!response) return;
+    const size_t n=wk.WKStringGetUTF8CString((WKStringRef)body,response,cap);
+    if (n && n<cap && strlen(response)+1==n) {
+        char *end=NULL;
+        const uint64_t request=strtoull(response,&end,10);
+        if (end!=response && *end=='\n') moon_site_data_result(view->token,request,end+1);
+    }
+    free(response);
+}
+bool moon_engine_inspect_site(MoonView *view,uint64_t request) {
+    if (!filter_bundle_available || !view || view->extension_address) return false;
+    char url[4096], payload[4160];
+    moon_engine_committed_url(view,url,sizeof(url));
+    if (!*url) return false;
+    const int length=snprintf(payload,sizeof(payload),"%" PRIu64 "\n%s",request,url);
+    if (length<0 || (size_t)length>=sizeof(payload)) return false;
+    WKStringRef name=wk.WKStringCreateWithUTF8CString("MoonInspectSite");
+    WKStringRef body=wk.WKStringCreateWithUTF8CString(payload);
+    const bool ok=name && body;
+    if (ok) wk.WKPagePostMessageToInjectedBundle(view->page,name,body);
+    release(body);
+    release(name);
+    return ok;
 }
 
 static MoonView *open_view(uint64_t token, const char *extension_id, const char *address) {
@@ -520,6 +552,12 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
     WKPageUIClientV1 ui = { .base={1,view}, .createNewPage=popup_requested };
     wk.WKPageSetPageNavigationClient(view->page,&navigation.base);
     wk.WKPageSetPageStateClient(view->page,&state.base);
+    if (!address && filter_bundle_available) {
+        const WKPageInjectedBundleClientV0 client = {
+            .base={0,view},.didReceiveMessageFromInjectedBundle=site_snapshot_received,
+        };
+        wk.WKPageSetPageInjectedBundleClient(view->page,&client.base);
+    }
     wk.WKPageSetPageUIClient(view->page,&ui.base);
     wk.WKPageListenForLayoutMilestones(view->page,kWKDidFirstVisuallyNonEmptyLayout);
     ShowWindow(view->hwnd,SW_HIDE);
@@ -575,6 +613,7 @@ void moon_engine_close(MoonView *view) {
     wk.WKPageSetPageStateClient(view->page,NULL);
     wk.WKPageSetPageNavigationClient(view->page,NULL);
     wk.WKPageSetPageUIClient(view->page,NULL);
+    if (!view->extension_address && filter_bundle_available) wk.WKPageSetPageInjectedBundleClient(view->page,NULL);
     wk.WKPageClose(view->page);
     if (IsWindow(view->hwnd)) DestroyWindow(view->hwnd);
     release(view->view);

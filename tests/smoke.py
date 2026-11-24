@@ -51,6 +51,7 @@ class Fixture(BaseHTTPRequestHandler):
     seen_allowed_request = Event()
     filter_probe = False
     slow_download_release = Event()
+    change_site_data_source = Event()
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -89,6 +90,8 @@ class Fixture(BaseHTTPRequestHandler):
         elif path == "/moon-filter-probe/passed":
             self.seen_filter_proof.set()
             data, content_type = b"ok", "text/plain"
+        elif path == "/site-data-navigation":
+            data, content_type = (b"change" if self.change_site_data_source.is_set() else b"keep"), "text/plain"
         elif path.startswith("/page/"):
             name = path.removeprefix("/page/")
             if name == "中文":
@@ -134,6 +137,15 @@ class Fixture(BaseHTTPRequestHandler):
                 )
             if name == "filter-allowed":
                 demo = '<script>fetch("/moon-filter-probe/blocked-fetch?allow=1");</script>'
+            if name == "site-data-contract":
+                demo = (
+                    '<script>localStorage.setItem("moon-local","local-value");'
+                    'sessionStorage.setItem("moon-session","session-value");'
+                    'Object.defineProperty(document,"cookie",{get:()=>"forged=other"});'
+                    'Storage.prototype.getItem=()=>"forged";'
+                    'setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
+                    'if(await r.text()==="change")location.replace("/page/site-data-changed");},400);</script>'
+                )
             data = (
                 "<!doctype html><meta charset=utf-8>"
                 f"<title>Moon fixture {name}</title>"
@@ -149,6 +161,9 @@ class Fixture(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         if path == "/download":
             self.send_header("Content-Disposition", 'attachment; filename="moon.txt"')
+        if path == "/page/site-data-contract":
+            self.send_header("Set-Cookie", "moon-visible=cookie-value; Path=/")
+            self.send_header("Set-Cookie", "moon-http-only=private-value; HttpOnly; Path=/")
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -351,6 +366,7 @@ def run_win32(exe, base, root):
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
+    site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     if manager.exists():
         fixture = profile / "plugins" / "settings"
         fixture.mkdir(parents=True)
@@ -362,6 +378,7 @@ def run_win32(exe, base, root):
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
+            {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
@@ -377,6 +394,9 @@ def run_win32(exe, base, root):
             + ('const denied=await window.webkit.messageHandlers.moonHost.postMessage('
                'JSON.stringify({jsonrpc:"2.0",id:"1",method:"history.list",params:{}}));'
                'if(JSON.parse(denied).error?.code!==-32001)return;' if history.exists() else '') +
+            ('const siteDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"2",method:"siteData.status",params:{}}));'
+             'if(JSON.parse(siteDenied).error?.code!==-32001)return;' if site_data.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -489,6 +509,45 @@ def run_win32(exe, base, root):
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "downloads.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
+    if site_data.exists():
+        fixture = profile / "plugins" / "site-data-contract"
+        fixture.mkdir(parents=True)
+        shutil.copy2(site_data,fixture / site_data.name)
+        manifest = json.loads((site_data.parent / "plugin.json").read_text(encoding="utf-8"))
+        manifest["id"] = "moon.site-data-fixture"
+        manifest["contributes"]["commands"][0]["label"] = "运行站点数据验收"
+        (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+        page = (site_data.parent / "site-data.html").read_text(encoding="utf-8")
+        contract = (
+            '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
+            'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
+            'const wait=async(fn,label)=>{for(let i=0;i<180;i++){const v=await fn();if(v)return v;'
+            'await new Promise(r=>setTimeout(r,50));}throw Error(label);};'
+            'try{const result=await wait(async()=>{const data=await host("siteData.status");'
+            'if(data.state==="unavailable"||data.state==="stale")throw Error("snapshot "+data.state+": "+data.failure);'
+            'return data.state==="ready"&&data;},"snapshot ready");'
+            f'if(result.origin!=="{base}")throw Error("origin");'
+            'for(const [section,key,secret] of [["cookies","moon-visible","cookie-value"],'
+            '["local","moon-local","local-value"],["session","moon-session","session-value"]]){'
+            'document.querySelector("[data-group="+section+"]").click();'
+            'const row=await wait(()=>[...document.querySelectorAll("#results li")].find(r=>r.querySelector("code").textContent===key),key);'
+            'if(row.querySelector("pre").textContent)throw Error("value visible by default");'
+            'row.querySelector("button").click();'
+            'await wait(()=>row.querySelector("pre").textContent===secret,section+" isolated value");'
+            'row.querySelector("button").click();'
+            '}const cookies=await host("siteData.list",{group:"cookies"});'
+            'if(cookies.entries.some(row=>row.name==="moon-http-only"||row.name==="forged"))throw Error("cookie scope");'
+            'if(!await host("siteData.refresh"))throw Error("refresh request");'
+            'await wait(async()=>{const data=await host("siteData.status");'
+            'return data.state==="ready"&&data.generation>result.generation;},"new generation");'
+            'await emit({ready:true});'
+            'await wait(async()=>(await host("siteData.status")).state==="stale","navigation cleanup");'
+            'await wait(()=>!document.querySelector("#results li"),"clear rows");'
+            'let rejected=false;try{await host("siteData.value",{group:"cookies",id:0,generation:result.generation});}'
+            'catch(error){rejected=error.message==="NOT_FOUND";}if(!rejected)throw Error("stale credential read");'
+            'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
+        )
+        (fixture / "site-data.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
     proc = subprocess.Popen([str(exe), "--gdi"], env=preview_env(root))
     frame = None
     try:
@@ -811,6 +870,31 @@ def run_win32(exe, base, root):
             if not row or row[0] != 4 or not 0 < row[1] < 8 * 64 * 1024:
                 raise RuntimeError(f"Download cancellation and progress were not recorded: {row}")
             print("download_system_plugin=ok download_live_progress=ok download_cancel=ok",flush=True)
+        if site_data.exists():
+            target = base + "/page/site-data-contract"
+            set_control(edit,target)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: ("Moon fixture site-data-contract",) in history_rows("SELECT title FROM visits WHERE url=?",(target,)),
+                     "Site data fixture did not finish loading")
+            invoke("查看当前站点数据")
+            wait_for(lambda: read_address() == "extension://moon.site-data/site-data.html",
+                     "The bundled site data plugin did not open its page")
+            invoke("Moon fixture site-data-contract")
+            wait_for(lambda: read_address() == target,"The original site data source could not be selected")
+            invoke("运行站点数据验收")
+            wait_for(lambda: read_address() == "extension://moon.site-data-fixture/site-data.html",
+                     "The site data contract did not bind its page")
+            config = profile / f'extension-{sha256(b"moon.site-data-fixture").hexdigest()}.json'
+            phase = wait_for(lambda: config.exists() and json.loads(config.read_text(encoding="utf-8")),
+                             "The site data contract reported no initial result",15)
+            if not phase.get("ready"):
+                raise RuntimeError(f"Site data fixture: {phase}")
+            Fixture.change_site_data_source.set()
+            result = wait_for(lambda: config.exists() and not (current := json.loads(config.read_text(encoding="utf-8"))).get("ready") and current,
+                              "The site data contract reported no navigation result",15)
+            if not result.get("passed"):
+                raise RuntimeError(f"Site data invalidation: {result}")
+            print("site_data_system_plugin=ok isolated_storage=ok site_data_navigation_cleanup=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

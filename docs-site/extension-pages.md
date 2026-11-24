@@ -34,4 +34,6 @@ await callSettings('write', { ...current, refreshOnSave: true });
 
 0.1.0-preview.10 起，获得相应授权的页面可调用 `bookmarks.list`、`bookmarks.save`、`bookmarks.update`、`bookmarks.remove` 和 `downloads.*`。`bookmarks.saveActive` 由 EXE 在用户命令中调用。[书签与下载](./library)
 
+0.1.0-preview.11 起，站点数据的查看权限绑定到用户实际打开的面板和当前网页。由 EXE 发起 `siteData.open`，由面板读取条目和值。[站点数据](./site-data)
+
 宿主在文档根节点设置 `data-moon-theme="light"` 或 `data-moon-theme="dark"`，切换浏览器主题时同步更新。页面可使用 CSS 属性选择器适配。

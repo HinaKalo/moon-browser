@@ -21,7 +21,7 @@ const LegacyManifest = struct {
 const Grant = struct {
     id: []const u8, enabled: bool, tabs_read: bool,
     lua_scripts_manage: bool = false, page_inspect: bool = false, history_manage: bool = false, network_filter: bool = false,
-    bookmarks_manage: bool = false, downloads_manage: bool = false,
+    bookmarks_manage: bool = false, downloads_manage: bool = false, site_data_read: bool = false,
 };
 const Outcome = enum { ok, failed, timed_out, crashed };
 const Trigger = enum { command, changed, timeout_test, crash_test };
@@ -133,7 +133,8 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         const default_permission: ?sdk.Permission = if (std.mem.eql(u8,id,"moon.history")) .@"history.manage"
             else if (std.mem.eql(u8,id,"moon.devtools")) .@"page.inspect"
             else if (std.mem.eql(u8,id,"moon.bookmarks")) .@"bookmarks.manage"
-            else if (std.mem.eql(u8,id,"moon.downloads")) .@"downloads.manage" else null;
+            else if (std.mem.eql(u8,id,"moon.downloads")) .@"downloads.manage"
+            else if (std.mem.eql(u8,id,"moon.site-data")) .@"siteData.read" else null;
         if (default_permission) |scope| {
             if (requests.contains(scope)) {
                 plugin.enabled = true;
@@ -202,6 +203,7 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.network_filter and plugin.requests.contains(.@"network.filter")) plugin.grants.insert(.@"network.filter");
         if (grant.enabled and grant.bookmarks_manage and plugin.requests.contains(.@"bookmarks.manage")) plugin.grants.insert(.@"bookmarks.manage");
         if (grant.enabled and grant.downloads_manage and plugin.requests.contains(.@"downloads.manage")) plugin.grants.insert(.@"downloads.manage");
+        if (grant.enabled and grant.site_data_read and plugin.requests.contains(.@"siteData.read")) plugin.grants.insert(.@"siteData.read");
         break;
     };
 }
@@ -218,6 +220,7 @@ fn persist() bool {
         .network_filter = plugin.grants.contains(.@"network.filter"),
         .bookmarks_manage = plugin.grants.contains(.@"bookmarks.manage"),
         .downloads_manage = plugin.grants.contains(.@"downloads.manage"),
+        .site_data_read = plugin.grants.contains(.@"siteData.read"),
     };
     const bytes = std.json.Stringify.valueAlloc(allocator, items[0..len], .{}) catch return false;
     defer allocator.free(bytes);
@@ -246,6 +249,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",
                 .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",
                 .@"downloads.manage" => "此插件可读取本机下载记录、取消传输，并在文件夹中显示已保存的文件。",
+                .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
             plugin.grants.insert(scope);
@@ -374,7 +378,8 @@ fn launch(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snaps
         .executable = &plugin.executable,
         .epoch = &plugin.epoch,
         .expected_epoch = plugin.epoch.load(.acquire),
-        .snapshot = if (plugin.grants.contains(.@"tabs.read") or plugin.grants.contains(.@"bookmarks.manage")) snapshot else null,
+        .snapshot = if (plugin.grants.contains(.@"tabs.read") or plugin.grants.contains(.@"bookmarks.manage") or
+            plugin.grants.contains(.@"siteData.read")) snapshot else null,
         .target_tab_id = if (snapshot) |tab| tab.id else 0,
         .trigger = trigger,
         .plugin_id = &plugin.id,

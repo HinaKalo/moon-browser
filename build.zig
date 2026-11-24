@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
     });
     request_filter.root_module.addIncludePath(b.path("third_party"));
-    request_filter.root_module.addCSourceFile(.{ .file = b.path("src/request_filter.c"), .flags = &.{"-std=c17"} });
+    request_filter.root_module.addCSourceFiles(.{ .files = &.{ "src/request_filter.c","src/site_snapshot.c" }, .flags = &.{"-std=c17"} });
     b.installArtifact(request_filter);
 
     const example = b.addExecutable(.{
@@ -66,6 +66,12 @@ pub fn build(b: *std.Build) void {
     });
     bookmarks.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(bookmarks);
+    const site_data = b.addExecutable(.{
+        .name = "MoonSiteData",
+        .root_module = b.createModule(.{ .root_source_file=b.path("examples/site-data/main.zig"),.target=target,.optimize=optimize,.link_libc=true }),
+    });
+    site_data.root_module.addImport("moon_plugin",plugin_sdk);
+    b.installArtifact(site_data);
     const fixture = b.addExecutable(.{
         .name = "MoonPluginContractClient",
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/plugin_contract_client.zig"), .target = target, .optimize = optimize, .link_libc = true }),

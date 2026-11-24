@@ -1,0 +1,11 @@
+{
+  "id": "moon.site-data",
+  "name": "站点数据",
+  "version": "0.1.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonSiteData.exe",
+  "settingsPage": "site-data.html",
+  "contributes": { "commands": [{ "id": "inspect", "label": "查看当前站点数据" }] },
+  "permissions": ["siteData.read"]
+}

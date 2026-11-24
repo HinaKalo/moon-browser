@@ -15,7 +15,7 @@
     "entry": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.[eE][xX][eE]$" },
     "permissions": {
       "type": "array",
-      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage", "network.filter", "bookmarks.manage", "downloads.manage"] }
+      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage", "network.filter", "bookmarks.manage", "downloads.manage", "siteData.read"] }
     },
     "events": {
       "type": "array",

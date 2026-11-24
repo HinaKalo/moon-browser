@@ -15,6 +15,7 @@ pub const Permission = enum {
     @"network.filter",
     @"bookmarks.manage",
     @"downloads.manage",
+    @"siteData.read",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum { @"Ctrl+H", F12, @"Ctrl+Shift+J", @"Ctrl+D", @"Ctrl+Shift+O", @"Ctrl+J" };
@@ -69,6 +70,16 @@ pub const Download = struct {
     startedAt: u64,
 };
 pub const DownloadPage = struct { downloads: []const Download, next: ?u32 };
+pub const SiteDataGroup = enum { cookies, local, session };
+pub const SiteDataState = enum { idle, pending, ready, stale, unavailable, expired };
+pub const SiteDataFailure = enum {
+    engineUnavailable, frameUnavailable, sourceChanged, worldUnavailable, contextUnavailable,
+    evaluationFailed, conversionFailed, invalidResult, timedOut,
+};
+pub const SiteDataStatus = struct { state: SiteDataState, origin: []const u8, generation: u64, failure: ?SiteDataFailure = null };
+pub const SiteDataEntry = struct { id: u32, name: []const u8, length: usize, shortened: bool };
+pub const SiteDataPage = struct { available: bool, entries: []const SiteDataEntry, more: bool, generation: u64 };
+pub const SiteDataItem = struct { group: SiteDataGroup, id: u32, generation: u64 };
 pub const NetworkFilterStatus = struct { preferred: bool, active: bool, exceptions: []const []const u8 };
 pub const NetworkFilterSite = struct { host: []const u8, enabled: bool };
 pub const CommandResult = struct {
@@ -112,6 +123,12 @@ pub const Method = enum {
     @"downloads.cancel",
     @"downloads.remove",
     @"downloads.reveal",
+    @"siteData.open",
+    @"siteData.status",
+    @"siteData.list",
+    @"siteData.value",
+    @"siteData.refresh",
+    @"siteData.openInspector",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

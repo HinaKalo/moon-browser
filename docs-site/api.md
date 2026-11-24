@@ -57,6 +57,11 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `bookmarks.update` / `bookmarks.remove` | `bookmarks.manage` | 编辑时传入 `{ id, title, url, folder? }`，删除时传入 `{ id }`。成功返回 `null`。 |
 | `downloads.list` | `downloads.manage` | 传入 `{ query?, before? }`，返回 `{ downloads, next }`。记录包含名称、状态、已传字节、可选总字节数及开始时间。 |
 | `downloads.cancel` / `downloads.remove` / `downloads.reveal` | `downloads.manage` | 传入 `{ id }`，操作活动传输、终态记录或已完成的文件。成功返回 `null`。 |
+| `siteData.open` | `siteData.read` | 在用户命令中传入 `{}`，打开清单声明的面板并绑定触发命令的网页。返回布尔值。 |
+| `siteData.status` | `siteData.read` | 从已打开的面板调用，返回 `{ state, origin, generation, failure? }`。 |
+| `siteData.list` | `siteData.read` | 面板传入 `{ group }`，类别是 `cookies`、`local` 或 `session`。返回 `{ available, entries, more, generation }`。 |
+| `siteData.value` | `siteData.read` | 面板传入 `{ group, id, generation }`，返回当前快照中的预览值。 |
+| `siteData.refresh` / `siteData.openInspector` | `siteData.read` | 前台面板可刷新同一网页的快照，或为原网页打开已启用的 WebKit Inspector。返回布尔值。 |
 
 脚本 ID 是 64 位小写十六进制字符组成的不透明标识。同一份源码重复导入返回 `ALREADY_EXISTS`。脚本内容或匹配范围改动后要重新导入，首次启用重新确认。管理接口负责导入和状态，网页导航触发运行，宿主 Lua VM 执行代码。
 

@@ -6,6 +6,8 @@
 - **查看网页资源和站点数据**。打开 WebKit Inspector 后选择 Storage，查看该页面可用的 Cookies、Local Storage、Session Storage 等。
 - **打开网页开发者工具**。在 WebKit Inspector 中使用 Elements、Network、Sources 等面板。
 
+常用的 Cookie、Local Storage 和 Session Storage 可直接从独立的「查看当前站点数据」命令打开。[站点数据](./site-data)
+
 插件用 `devtools.open` 请求打开工具，网页数据由 WebKit Inspector 自己显示。该请求仅对触发命令的当前网页生效。
 
 [插件 API](./api)

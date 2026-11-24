@@ -10,6 +10,7 @@ const history = @import("history.zig");
 const network = @import("network_policy.zig");
 const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
+const site_data = @import("site_data.zig");
 const market = @import("market.zig");
 const updater = @import("updater.zig");
 
@@ -245,6 +246,7 @@ fn storeSession(tab: *Tab) void {
     }
 }
 fn detach(tab: *Tab) void {
+    site_data.invalidate(tab.id);
     const view = tab.view orelse return;
     tab.view = null;
     tab.loaded = false;
@@ -295,6 +297,7 @@ fn show(tab: *Tab) void {
 }
 
 fn loadInternal(tab: *Tab, address: [4096:0]u8, id: ?[:0]const u8, html: [*:0]const u8) void {
+    if (tab.extension and !equals(slice(&tab.url),slice(&address))) site_data.closed(tab.id);
     detach(tab);
     forgetSession(tab);
     tab.extension = true;
@@ -347,6 +350,7 @@ fn navigate(tab: *Tab, url: []const u8) void {
         return;
     }
     if (tab.extension) {
+        site_data.closed(tab.id);
         detach(tab);
         tab.extension = false;
         tab.unsafe_history = false;
@@ -439,6 +443,7 @@ fn addTab(url: ?[]const u8, notify: bool) void {
 }
 fn closeTab(index: usize) void {
     if (index >= count) return;
+    site_data.closed(tabs[index].id);
     const was_active = index == active;
     detach(&tabs[index]);
     forgetSession(&tabs[index]);
@@ -472,6 +477,7 @@ fn sync(tab: *Tab) void {
     }
 }
 fn protected(tab: *const Tab) bool {
+    if (count != 0 and site_data.protected(tab.id,tabs[active].id)) return true;
     return tab.loading or !tab.loaded or tab.dirty or tab.unsafe_history or tab.download_count != 0 or
         tab.activity or !safeURL(slice(&tab.url));
 }
@@ -554,6 +560,7 @@ fn maintenance() void {
     if (smoke == .off) updater.tick(now);
     if (stopped) return;
     downloads.flush();
+    site_data.tick(now);
     if (market.changed()) {
         const allocator = std.heap.page_allocator;
         if (market.document(allocator)) |html| {
@@ -692,6 +699,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         history.close();
         bookmarks.close();
         downloads.close();
+        site_data.reset();
         for (tabs[0..count]) |*tab| {
             detach(tab);
             forgetSession(tab);
@@ -736,11 +744,13 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_PLUGIN_ENABLE => {
             plugins.enable(index);
             network.select(plugins.networkSource());
+            checkSiteDataGrant();
         },
         native.MOON_PLUGIN_GRANT => {
             const permission = std.enums.fromInt(sdk.Permission,index & 0xffffffff) orelse return;
             plugins.toggleGrant(index >> 32,permission);
             if (permission == .@"network.filter") network.select(plugins.networkSource());
+            if (permission == .@"siteData.read") checkSiteDataGrant();
         },
         native.MOON_PLUGIN_SETTINGS => {
             var address: [256]u8 = undefined;
@@ -765,6 +775,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
     const tab = &tabs[index];
     switch (kind) {
         native.MOON_STARTED => {
+            site_data.invalidate(id);
             tab.loading = true;
             tab.loaded = false;
             tab.history_visit = null;
@@ -804,10 +815,12 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         },
         native.MOON_CHANGED => sync(tab),
         native.MOON_SAME_DOCUMENT => {
+            site_data.invalidate(id);
             sync(tab);
             if (!tab.extension and !tab.restoring_history and plugins.systemEnabled(.@"history.manage")) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
         },
         native.MOON_TERMINATED => {
+            site_data.closed(id);
             tab.phase = .crashed;
             tab.loading = false;
             tab.loaded = false;
@@ -926,6 +939,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"network.filter" => "允许拦截网页请求",
         .@"bookmarks.manage" => "允许管理书签",
         .@"downloads.manage" => "允许管理下载",
+        .@"siteData.read" => "允许查看站点数据",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {
@@ -944,12 +958,12 @@ fn pageActive(_: ?*const anyopaque) callconv(.c) bool {
     return !stopped;
 }
 
-export fn moon_extension_request(id: [*c]const u8, request: [*c]const u8, result: [*c]u8, cap: usize) bool {
+export fn moon_extension_request(panel: u64, id: [*c]const u8, request: [*c]const u8, result: [*c]u8, cap: usize) bool {
     if (stopped) return false;
     const grants = plugins.pageGrants(slice(id)) orelse return false;
     const allocator = std.heap.page_allocator;
     const reply = api.dispatch(allocator,slice(request),.{
-        .grants=grants,.plugin_id=slice(id),.target_tab_id=0,.tab=null,
+        .grants=grants,.plugin_id=slice(id),.target_tab_id=panel,.tab=null,
         .consent=.{ .context=&stopped,.valid=pageActive },.from_page=true,
     }) catch return false;
     defer allocator.free(reply);
@@ -969,6 +983,52 @@ export fn moon_plugin_open_page(id: [*c]const u8) bool {
     if (count == tabs.len) return false;
     addTab(address,true);
     return true;
+}
+
+fn checkSiteDataGrant() void {
+    const owner = site_data.ownerId() orelse return;
+    const grants = plugins.pageGrants(owner) orelse {
+        site_data.reset();
+        return;
+    };
+    if (!grants.contains(.@"siteData.read")) site_data.reset();
+}
+
+export fn moon_site_data_open(id: [*c]const u8, source: u64, expected: [*c]const u8) bool {
+    if (stopped or count == 0 or tabs[active].id != source) return false;
+    const tab = &tabs[active];
+    const view = tab.view orelse return false;
+    if (tab.extension or tab.loading or !tab.loaded) return false;
+    var committed: [4096:0]u8 = @splat(0);
+    native.moon_engine_committed_url(view,&committed,committed.len);
+    const url = slice(&committed);
+    if (!equals(url,slice(expected)) or !history.validURL(url)) return false;
+    const scheme: usize = if (url[4] == ':') 7 else 8;
+    const authority = std.mem.indexOfAny(u8,url[scheme..],"/?#") orelse url.len - scheme;
+    site_data.begin(slice(id),source,url[0..scheme+authority],view);
+    if (!moon_plugin_open_page(id)) {
+        site_data.reset();
+        return false;
+    }
+    site_data.bindPanel(tabs[active].id);
+    return true;
+}
+
+export fn moon_site_data_action(panel: u64, id: [*c]const u8, inspector: bool) bool {
+    if (stopped or count == 0 or tabs[active].id != panel) return false;
+    const source = site_data.selected(panel,slice(id)) orelse return false;
+    const index = tabIndex(source) orelse return false;
+    const tab = &tabs[index];
+    const view = tab.view orelse return false;
+    if (tab.extension or tab.loading or !tab.loaded) return false;
+    if (!inspector) return site_data.request(view);
+    if (!plugins.systemEnabled(.@"page.inspect")) return false;
+    chooseTab(index,true);
+    return native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.resources));
+}
+
+export fn moon_site_data_result(source: u64, request: u64, snapshot: [*c]const u8) void {
+    if (!stopped) site_data.complete(source,request,slice(snapshot));
 }
 
 export fn moon_plugin_shortcut(shortcut: [*c]const u8) bool {

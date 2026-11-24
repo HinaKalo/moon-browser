@@ -106,6 +106,7 @@ $history = Join-Path $prefix 'bin\MoonHistory.exe'
 $blocker = Join-Path $prefix 'bin\MoonBlocker.exe'
 $bookmarks = Join-Path $prefix 'bin\MoonBookmarks.exe'
 $downloads = Join-Path $prefix 'bin\MoonDownloads.exe'
+$siteData = Join-Path $prefix 'bin\MoonSiteData.exe'
 $docs = @(
     $EngineLock
     (Join-Path $repo 'README.md')
@@ -124,13 +125,15 @@ $docs = @(
     (Join-Path $repo 'examples\bookmarks\bookmarks.html')
     (Join-Path $repo 'examples\downloads\plugin.json')
     (Join-Path $repo 'examples\downloads\downloads.html')
+    (Join-Path $repo 'examples\site-data\plugin.json')
+    (Join-Path $repo 'examples\site-data\site-data.html')
     (Join-Path $repo 'assets\moon-browser.ico')
 )
 if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $bookmarks + $downloads + $siteData + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -166,6 +169,8 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     Copy-Item -LiteralPath $bookmarks,(Join-Path $repo 'examples\bookmarks\plugin.json'),(Join-Path $repo 'examples\bookmarks\bookmarks.html') -Destination $bookmarkPackage
     $downloadPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\downloads')).FullName
     Copy-Item -LiteralPath $downloads,(Join-Path $repo 'examples\downloads\plugin.json'),(Join-Path $repo 'examples\downloads\downloads.html') -Destination $downloadPackage
+    $siteDataPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\site-data')).FullName
+    Copy-Item -LiteralPath $siteData,(Join-Path $repo 'examples\site-data\plugin.json'),(Join-Path $repo 'examples\site-data\site-data.html') -Destination $siteDataPackage
     $fixtures = [IO.Directory]::CreateDirectory((Join-Path $stage 'tests')).FullName
     Copy-Item -LiteralPath $contractClient -Destination $fixtures
     $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $artifact))

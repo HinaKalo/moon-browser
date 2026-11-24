@@ -8,6 +8,7 @@ const history = @import("history.zig");
 const network = @import("network_policy.zig");
 const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
+const site_data = @import("site_data.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
 pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false };
@@ -32,6 +33,8 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.update", .@"bookmarks.remove" => .@"bookmarks.manage",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => .@"downloads.manage",
+        .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.value",
+        .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
     };
 }
 
@@ -95,6 +98,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"history.list", .@"history.remove", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => {},
+        .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
     };
     if (!context.consent.valid(context.consent.context)) return sdk.failure(output, id, .Cancelled);
@@ -104,7 +108,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     const params = object.get("params");
     switch (method) {
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
-        .@"network.filter.status", .@"bookmarks.saveActive" => {
+        .@"network.filter.status", .@"bookmarks.saveActive", .@"siteData.open",
+        .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -271,6 +276,35 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             };
             action catch |err| return sdk.failure(output,id,libraryReason(err));
             break :change sdk.result(output,id,null);
+        },
+        .@"siteData.open" => open: {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const tab = context.tab orelse break :open sdk.result(output,id,false);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            break :open sdk.result(output,id,native.moon_site_data_open(owner.ptr,tab.id,&tab.url));
+        },
+        .@"siteData.status" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            return sdk.result(output,id,site_data.status(context.target_tab_id,context.plugin_id));
+        },
+        .@"siteData.list" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(struct { group: sdk.SiteDataGroup },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            var entries: [32]sdk.SiteDataEntry = undefined;
+            const result = site_data.list(context.target_tab_id,context.plugin_id,options.group,&entries) orelse
+                return sdk.failure(output,id,.NotFound);
+            return sdk.result(output,id,result);
+        },
+        .@"siteData.value" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(sdk.SiteDataItem,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const result = site_data.value(context.target_tab_id,context.plugin_id,options) orelse return sdk.failure(output,id,.NotFound);
+            return sdk.result(output,id,result);
+        },
+        .@"siteData.refresh", .@"siteData.openInspector" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            return sdk.result(output,id,native.moon_site_data_action(context.target_tab_id,owner.ptr,method == .@"siteData.openInspector"));
         },
     };
 }
