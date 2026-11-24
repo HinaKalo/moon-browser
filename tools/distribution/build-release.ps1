@@ -55,7 +55,7 @@ $compilerInstall = Start-Process -FilePath $compilerSetup -ArgumentList @('/PORT
     '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/SP-',('/DIR="{0}"' -f $compilerRoot)) -WindowStyle Hidden -PassThru -Wait
 if ($compilerInstall.ExitCode) { throw "Portable compiler setup failed (exit $($compilerInstall.ExitCode))." }
 $iscc = Join-Path $compilerRoot 'ISCC.exe'
-& $iscc ('/DReleaseVersion=' + $version.name) ('/DWindowsVersion=' + $version.windows_version) ('/DPayloadDir=' + $payload) ('/DEngineUrl=' + $url.AbsoluteUri) ("/DAppIcon=" + (Join-Path $repo 'assets\moon-browser.ico')) `
+& $iscc ('/DReleaseVersion=' + $version.name) ('/DWindowsVersion=' + $version.windows_version) ('/DPayloadDir=' + $payload) ('/DEngineUrl=' + $url.AbsoluteUri) ("/DAppIcon=" + (Join-Path $repo 'assets\app-icon.ico')) `
     ('/DEngineHash=' + $engine.sha256) ('/DEngineBytes=' + $engine.archive_bytes) "/DEngineIntegrityInclude=$engineCheck" `
     "/O$Work" (Join-Path $PSScriptRoot 'moon-browser.iss')
 

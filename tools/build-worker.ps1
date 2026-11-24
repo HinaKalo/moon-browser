@@ -127,7 +127,7 @@ $docs = @(
     (Join-Path $repo 'examples\downloads\downloads.html')
     (Join-Path $repo 'examples\site-data\plugin.json')
     (Join-Path $repo 'examples\site-data\site-data.html')
-    (Join-Path $repo 'assets\moon-browser.ico')
+    (Join-Path $repo 'assets\app-icon.ico')
 )
 if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
