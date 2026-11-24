@@ -18,10 +18,10 @@
 
 | 菜单 | 系统插件 |
 | --- | --- |
-| 标签与页面 | [页内查找与缩放](./reading)、[最近关闭的标签](./recent-tabs)、[启动与会话](./session)、[标签管理](./tab-tools)、[搜索引擎](./search) |
+| 标签与页面 | [页内查找、缩放和全屏](./reading)、[最近关闭的标签](./recent-tabs)、[启动与会话](./session)、[标签管理与分组](./tab-tools)、[搜索引擎](./search)、网页另存为 HTML |
 | 浏览资料 | [历史记录](./history)、[书签和下载](./library) |
 | 隐私与安全 | [隐私浏览](./private-window)、[清除浏览数据](./privacy)、[站点数据](./site-data)、[网站弹窗](./popups)、[严格去广告](./blocker) |
-| 开发与诊断 | [控制台和网页源代码](./devtools)、[浏览器任务管理器](./task-manager) |
+| 开发与诊断 | [WebKit 检查器、控制台、元素拾取和网页源代码](./devtools)、[浏览器任务管理器](./task-manager) |
 | 扩展工具 | [Lua 脚本编辑器](./lua-userscripts)、[菜单与快捷键示例](./command-contributions) |
 
 [Moon 插件目录](https://docs.browser.moonl.cloud/plugin-market/catalog.json) · [插件开发体系](./plugin-system)

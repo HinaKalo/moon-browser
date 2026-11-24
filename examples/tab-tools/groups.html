@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>管理标签组</title>
+<style>
+  :root { color-scheme:light; font:14px/1.5 "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif; --page:#f6f7fa; --surface:#fff; --text:#171b26; --muted:#535e74; --line:#dbe0ed; --accent:#4158bf; --soft:#edf0fc; background:var(--page); color:var(--text); }
+  :root[data-moon-theme=dark] { color-scheme:dark; --page:#171a22; --surface:#222635; --text:#edf0f7; --muted:#b6c0d5; --line:#3a435b; --accent:#acbbff; --soft:#303852; }
+  * { box-sizing:border-box; }
+  body { margin:0; }
+  main { max-width:820px; margin:auto; padding:42px clamp(20px,5vw,48px); }
+  h1 { margin:0; font-size:30px; }
+  p { color:var(--muted); }
+  h1+p { margin:5px 0 16px; }
+  #list { margin:16px 0; padding:0; list-style:none; border-radius:12px; background:var(--surface); }
+  #list:empty,#status:empty { display:none; }
+  li { border:1px solid var(--line); padding:15px; }
+  li + li { border-top:0; }
+  li:first-child { border-radius:12px 12px 0 0; }
+  li:last-child { border-radius:0 0 12px 12px; }
+  li:only-child { border-radius:12px; }
+  .details,.actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .actions { margin-top:12px; }
+  .name { flex:1; min-width:140px; }
+  .swatch { width:12px; height:12px; flex:none; margin-right:3px; border-radius:50%; }
+  small { color:var(--muted); }
+  input,select,button { font:inherit; color:inherit; border:1px solid var(--line); border-radius:8px; padding:7px 10px; background:var(--surface); }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { background:var(--soft); }
+  button:disabled { opacity:.55; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+</style>
+<main>
+  <h1>管理标签组</h1>
+  <p id="context"></p>
+  <button hidden id="ungroup">从组中移出本次选中的标签</button>
+  <ul id="list" aria-label="标签组"></ul>
+  <p id="status" role="status"></p>
+</main>
+<script>
+  const el=id=>document.getElementById(id);
+  const palette={
+    indigo:['靛蓝','#5269ca'],teal:['青绿','#237f72'],amber:['琥珀','#a46025'],
+    rose:['玫红','#a74878'],slate:['灰蓝','#66748b']
+  };
+  let sequence=0, busy=false;
+  async function host(method,params={}) {
+    const id='groups:'+ ++sequence;
+    const reply=JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0',id,method,params})));
+    if(reply.id!==id||reply.error) throw Error(reply.error?.message || 'INVALID_RESPONSE');
+    return reply.result;
+  }
+  function element(tag,text,attributes={}) {
+    const node=document.createElement(tag);
+    if(text!==null) node.textContent=text;
+    for(const [name,value] of Object.entries(attributes)) node.setAttribute(name,value);
+    return node;
+  }
+  async function change(method, params, message) {
+    if(busy) return;
+    busy=true;
+    try {
+      const result=await host(method,params);
+      if(result==='saved') { await render(); el('status').textContent=message; }
+      else el('status').textContent=result==='invalidName' ? '请填写 96 字节以内的组名称。' : '标签组已变化，请刷新后重试。';
+    } catch {
+      el('status').textContent='操作未完成，请检查插件权限。';
+    } finally { busy=false; }
+  }
+  async function render() {
+    const {groups,assigned,assignable}=await host('tabs.groups.list');
+    el('context').textContent=groups.length===0 ? '在侧栏右键点击标签，选择「新建标签组」。'
+      : assignable ? '选择「移入此组」可移动打开面板时选中的标签。' : '从标签的右键菜单打开此面板，可将该标签移入组。';
+    el('ungroup').hidden=!assignable||!assigned;
+    el('list').replaceChildren();
+    for(const group of groups) {
+      const row=element('li',null), form=element('form',null);
+      const details=element('div',null,{class:'details'}), actions=element('div',null,{class:'actions'});
+      const swatch=element('span',null,{class:'swatch','aria-hidden':'true'});
+      swatch.style.background=palette[group.color]?.[1];
+      const name=element('input',null,{class:'name','aria-label':'组名称',maxlength:'48',required:''});
+      name.value=group.name;
+      const color=element('select',null,{'aria-label':'组颜色'});
+      for(const [id,[label]] of Object.entries(palette)) color.append(element('option',label,{value:id}));
+      color.value=group.color;
+      const collapsed=element('input',null,{type:'checkbox'});
+      collapsed.checked=group.collapsed;
+      const fold=element('label','折叠');
+      fold.prepend(collapsed);
+      details.append(swatch,name,color,element('small',group.members+' 个标签'),fold);
+      actions.append(element('button','保存',{type:'submit'}));
+      form.onsubmit=event=>{
+        event.preventDefault();
+        change('tabs.groups.update',{id:group.id,name:name.value,color:color.value,collapsed:collapsed.checked},'已保存。');
+      };
+      if(assignable&&assigned!==group.id) {
+        const move=element('button','移入此组',{type:'button'});
+        move.onclick=()=>change('tabs.groups.assign',{id:group.id},'已移动标签。');
+        actions.append(move);
+      }
+      const dissolve=element('button','解散标签组',{type:'button'});
+      dissolve.onclick=()=>change('tabs.groups.dissolve',{id:group.id},'标签组已解散，标签仍然打开。');
+      actions.append(dissolve);
+      form.append(details,actions);
+      row.append(form);
+      el('list').append(row);
+    }
+  }
+  el('ungroup').onclick=()=>change('tabs.groups.assign',{id:0},'已移出标签组。');
+  async function refresh() {
+    if(busy) return;
+    try { await render(); } catch { el('status').textContent='请在插件管理中允许管理标签组。'; }
+  }
+  document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refresh(); });
+  refresh();
+</script>
+</html>

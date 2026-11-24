@@ -146,6 +146,7 @@ $docs = @(
     (Join-Path $repo 'examples\session\plugin.json')
     (Join-Path $repo 'examples\session\session.html')
     (Join-Path $repo 'examples\tab-tools\plugin.json')
+    (Join-Path $repo 'examples\tab-tools\groups.html')
     (Join-Path $repo 'examples\private-window\plugin.json')
     (Join-Path $repo 'examples\search\plugin.json')
     (Join-Path $repo 'examples\search\engines.html')
@@ -212,7 +213,7 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $sessionPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\session')).FullName
     Copy-Item -LiteralPath $session,(Join-Path $repo 'examples\session\plugin.json'),(Join-Path $repo 'examples\session\session.html') -Destination $sessionPackage
     $tabToolsPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\tab-tools')).FullName
-    Copy-Item -LiteralPath $tabTools,(Join-Path $repo 'examples\tab-tools\plugin.json') -Destination $tabToolsPackage
+    Copy-Item -LiteralPath $tabTools,(Join-Path $repo 'examples\tab-tools\plugin.json'),(Join-Path $repo 'examples\tab-tools\groups.html') -Destination $tabToolsPackage
     $privateWindowPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\private-window')).FullName
     Copy-Item -LiteralPath $privateWindow,(Join-Path $repo 'examples\private-window\plugin.json') -Destination $privateWindowPackage
     $searchPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\search')).FullName

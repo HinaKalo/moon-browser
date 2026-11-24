@@ -3,11 +3,15 @@ const sdk = @import("moon_plugin");
 const native = @import("native");
 const history = @import("history.zig");
 const settings = @import("extension_settings.zig");
+const tab_groups = @import("tab_groups.zig");
 
 pub const owner = "moon.session";
 pub const limit = 128;
-pub const Entry = struct { url: []const u8, title: []const u8 };
-pub const Snapshot = struct { version: u32 = 1, tabs: []const Entry, selected: ?usize = null };
+pub const Entry = struct { url: []const u8, title: []const u8, group: u32 = 0 };
+pub const Snapshot = struct {
+    version: u32 = 1, tabs: []const Entry, selected: ?usize = null,
+    groups: []const sdk.TabGroup = &.{},
+};
 
 const allocator = std.heap.page_allocator;
 var file: [4096:0]u8 = @splat(0);
@@ -40,14 +44,24 @@ pub fn configure(alloc: std.mem.Allocator, input: sdk.SessionPreferences, value:
 pub fn read() ?std.json.Parsed(Snapshot) {
     if (file[0]==0 or restored) return null;
     // A stored URL and title can grow after JSON escaping.
-    const data = allocator.alloc(u8,limit*(4096*2+512*6+64)+256) catch return null;
+    const data = allocator.alloc(u8,limit*(4096*2+512*6+80)+tab_groups.limit*(6*tab_groups.name_limit+96)+256) catch return null;
     defer allocator.free(data);
     if (!native.moon_read_text(&file,data.ptr,data.len)) return null;
     const parsed = std.json.parseFromSlice(Snapshot,allocator,std.mem.sliceTo(data,0),.{ .allocate=.alloc_always }) catch return null;
     const snapshot = parsed.value;
-    if (snapshot.version!=1 or snapshot.tabs.len>limit) {
+    if (snapshot.version!=1 or snapshot.tabs.len>limit or snapshot.groups.len>tab_groups.limit) {
         parsed.deinit();
         return null;
+    }
+    for (snapshot.groups,0..) |group,index| {
+        if (group.id==0 or !tab_groups.validName(group.name)) {
+            parsed.deinit();
+            return null;
+        }
+        for (snapshot.groups[0..index]) |prior| if (prior.id==group.id) {
+            parsed.deinit();
+            return null;
+        };
     }
     if (snapshot.selected) |selected| {
         if (selected>=snapshot.tabs.len) {
@@ -55,6 +69,8 @@ pub fn read() ?std.json.Parsed(Snapshot) {
             return null;
         }
     }
+    var seen_groups: [tab_groups.limit]bool = @splat(false);
+    var previous_group: u32 = 0;
     for (snapshot.tabs) |tab| {
         if (!history.validURL(tab.url) or tab.title.len>=512 or !std.unicode.utf8ValidateSlice(tab.title) or
             std.mem.indexOfScalar(u8,tab.title,0)!=null)
@@ -62,6 +78,21 @@ pub fn read() ?std.json.Parsed(Snapshot) {
             parsed.deinit();
             return null;
         }
+        if (tab.group!=0 and tab.group!=previous_group) {
+            for (snapshot.groups,0..) |group,index| {
+                if (group.id!=tab.group) continue;
+                if (seen_groups[index]) {
+                    parsed.deinit();
+                    return null;
+                }
+                seen_groups[index]=true;
+                break;
+            } else {
+                parsed.deinit();
+                return null;
+            }
+        }
+        previous_group=tab.group;
     }
     return parsed;
 }

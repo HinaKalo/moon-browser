@@ -12,7 +12,8 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params != .object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
-    const Action = enum { pin, mute, duplicate, copyAddress, closeOthers, closeBelow, openLink, copyLink, reorder };
+    const Action = enum { pin, mute, duplicate, copyAddress, closeOthers, closeBelow, openLink, copyLink, reorder,
+        groupCreate, groups, groupRemove };
     const operation = std.meta.stringToEnum(Action,action) orelse return error.InvalidCommand;
     const message = switch (operation) {
         .pin => try organize(&client,.@"tabs.togglePinned"),
@@ -24,8 +25,23 @@ pub fn main() !void {
         .openLink => try link(&client,.@"tabs.openLink"),
         .copyLink => try link(&client,.@"tabs.copyLink"),
         .reorder => try reorder(&client),
+        .groupCreate => try groupCommand(&client,.@"tabs.groups.create"),
+        .groups => try groupCommand(&client,.@"tabs.groups.open"),
+        .groupRemove => try groupCommand(&client,.@"tabs.groups.removeTab"),
     };
     try client.reply(id, sdk.CommandResult{ .message = message, .toast = true });
+}
+
+fn groupCommand(client: *sdk.Client, method: sdk.Method) !?[]const u8 {
+    const response=try client.call(method,.{});
+    const result=response.get("result") orelse return "请检查标签组插件权限。";
+    if (result==.bool and result.bool) return null;
+    const value=std.meta.stringToEnum(sdk.TabGroupResult,sdk.string(result) orelse "") orelse .unavailable;
+    return switch (value) {
+        .saved => null,
+        .limitReached => "已达到 24 个标签组上限。",
+        else => "此标签当前无法执行该分组操作。",
+    };
 }
 
 fn reorder(client: *sdk.Client) !?[]const u8 {

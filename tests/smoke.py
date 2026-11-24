@@ -316,7 +316,7 @@ class Fixture(BaseHTTPRequestHandler):
                 )
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
                         "pinned-first", "pinned-second", "session-first", "session-second", "session-pinned", "session-private",
-                        "session-external", "order-last", "order-edge"):
+                        "session-external", "order-last", "order-edge", "group-first", "group-second", "group-outside"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "chrome-window":
                 demo = (
@@ -656,6 +656,7 @@ def run_win32(exe, base, root):
     search_plugin = exe.parent / "plugins" / "search" / "MoonSearch.exe"
     session_plugin = exe.parent / "plugins" / "session" / "MoonSession.exe"
     tab_tools = exe.parent / "plugins" / "tab-tools" / "MoonTabTools.exe"
+    tab_groups = (tab_tools.parent / "groups.html").is_file()
     has_web_link_menu = tab_tools.exists() and '"linkMenu"' in tab_tools.with_name("plugin.json").read_text(encoding="utf-8")
     private_window = exe.parent / "plugins" / "private-window" / "MoonPrivateWindow.exe"
     if task_manager.exists():
@@ -1147,6 +1148,48 @@ def run_win32(exe, base, root):
             'catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "tasks.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
+    def install_group_fixture():
+        # Reuse the finished task contract's registration slot in this test profile.
+        (profile / "plugins" / "task-contract" / "plugin.json").unlink(missing_ok=True)
+        state_path = profile / "plugin-state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state.append({"id":"moon.group-fixture","enabled":True,"tabs_read":False,"tabs_groups":True})
+        state_path.write_text(json.dumps(state),encoding="utf-8")
+        fixture = profile / "plugins" / "tab-groups-contract"
+        fixture.mkdir(parents=True)
+        shutil.copy2(tab_tools,fixture / tab_tools.name)
+        manifest = json.loads((tab_tools.parent / "plugin.json").read_text(encoding="utf-8"))
+        manifest["id"] = "moon.group-fixture"
+        manifest["permissions"] = ["tabs.groups"]
+        manifest["contributes"]["commands"] = [{"id":"groups","label":"运行标签组验收","menu":"page"}]
+        (fixture / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+        document = (tab_tools.parent / "groups.html").read_text(encoding="utf-8")
+        script = """
+<script>(async()=>{
+  const api=window.webkit.messageHandlers.moonSettings;
+  const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));
+  try{
+    const state=await host("tabs.groups.list");
+    if(state.groups.length!==1||state.groups[0].members!==2||!state.assigned||!state.assignable)
+      throw Error("group membership "+JSON.stringify(state));
+    for(let n=0;!el("list").querySelector("form")&&n<40;n++)await new Promise(r=>setTimeout(r,50));
+    const form=el("list").querySelector("form");
+    form.querySelector(".name").value="工作 · 月亮";
+    form.querySelector("select").value="teal";
+    form.querySelector("[type=checkbox]").checked=true;
+    form.requestSubmit();
+    for(let n=0;n<80;n++){
+      const updated=await host("tabs.groups.list");
+      const group=updated.groups[0];
+      if(group.name==="工作 · 月亮"&&group.color==="teal"&&group.collapsed){
+        await emit({passed:true});return;
+      }
+      await new Promise(r=>setTimeout(r,50));
+    }
+    throw Error("renamed group did not persist in browser state");
+  }catch(error){await emit({error:String(error)});}
+})();</script>"""
+        (fixture / "groups.html").write_text(document.replace("</html>",script+"</html>"),encoding="utf-8")
     if commands.exists():
         fixture = profile / "plugins" / "command-contract"
         fixture.mkdir(parents=True)
@@ -2595,6 +2638,8 @@ def run_win32(exe, base, root):
             if tab_tools.exists():
                 expected["标签与页面"].update({"切换当前标签的固定状态","切换当前标签的静音状态",
                                                  "复制当前标签","复制当前标签网址","关闭其他标签","关闭下方标签"})
+            if tab_groups:
+                expected["标签与页面"].update({"新建标签组","管理标签组","移出当前标签组"})
             if search_plugin.exists():
                 expected["标签与页面"].add("管理搜索引擎")
             if session_plugin.exists():
@@ -2859,10 +2904,57 @@ def run_win32(exe, base, root):
                 raise RuntimeError("Auto-scrolling a background drag changed the active tab")
             click(px(110),px(148+37*(capacity-1)))
             wait_for(lambda: read_address()==edge,"Dropping after auto-scroll did not use the visible target")
+            if tab_groups:
+                install_group_fixture()
             proc,frame = restart_tabs()
             edit = user.GetDlgItem(frame,1001)
             home = user.GetDlgItem(frame,1002)
             print("tab_drag_system_plugin=ok background_target=ok escape_cancel=ok edge_scroll=ok pinned_boundary=ok pinned_order_restart=ok",flush=True)
+            if tab_groups:
+                wait_for(lambda: user.IsWindowVisible(home),"The tab group fixture did not start on a blank tab")
+                first_grouped=closed_page("group-first")
+                invoke("新建标签页")
+                wait_for(lambda: user.IsWindowVisible(home),"Could not open the second group tab")
+                second_grouped=closed_page("group-second")
+                tab_menu(2,"新建标签组")
+                wait_for(lambda: "管理标签组" in tab_menu(2),"The sidebar did not show a group header")
+                drag_tab(4,2)
+                sleep(0.35)
+                if read_address()!=second_grouped or "移出标签组" not in tab_menu(4):
+                    raise RuntimeError("Dropping onto the group header did not group the source tab")
+                invoke("运行标签组验收")
+                wait_for(lambda: read_address()=="extension://moon.group-fixture/groups.html",
+                         "The tab group plugin did not open the management panel")
+                library_result("moon.group-fixture")
+                invoke("新建标签页")
+                wait_for(lambda: user.IsWindowVisible(home),"Could not open an ungrouped tab")
+                outside=closed_page("group-outside")
+                if "移出标签组" in tab_menu(3):
+                    raise RuntimeError("A collapsed group still exposed its member rows")
+                if session_plugin.exists():
+                    proc,frame=restart_tabs()
+                    edit=user.GetDlgItem(frame,1001)
+                    home=user.GetDlgItem(frame,1002)
+                    saved_groups=read_settings(profile / "last-session.json")
+                    groups=saved_groups.get("groups",[])
+                    if (len(groups)!=1 or groups[0]["name"]!="工作 · 月亮" or groups[0]["color"]!="teal"
+                            or not groups[0]["collapsed"]):
+                        raise RuntimeError(f"Session checkpoint lost group metadata: {groups}")
+                    if {entry["url"] for entry in saved_groups["tabs"] if entry["group"]==groups[0]["id"]}!={first_grouped,second_grouped}:
+                        raise RuntimeError("Session checkpoint lost group members")
+                    wait_for(lambda: user.IsWindowVisible(home),"Could not reopen the group test browser")
+                    invoke("恢复上次会话")
+                    wait_for(lambda: read_address()==outside,"Session restore did not reactivate the ungrouped tab")
+                if "管理标签组" not in tab_menu(2):
+                    raise RuntimeError("The group header was lost")
+                click(px(110),px(148+37*2))
+                click(px(110),px(148+37*3))
+                wait_for(lambda: read_address()==first_grouped,"Clicking the group header did not reveal its first tab")
+                tab_menu(3,"移出标签组")
+                sleep(0.35)
+                if read_address()!=first_grouped or "移出标签组" in tab_menu(4):
+                    raise RuntimeError("Removing a tab from its group changed its page or left its membership")
+                print("tab_groups_plugin=ok create_background=ok drag_into_group=ok rename_color=ok collapse=ok member_removal=ok session_groups=ok",flush=True)
         if private_window.exists():
             private_title = "Moon Browser · 隐私浏览"
             kernel = ctypes.WinDLL("kernel32",use_last_error=True)

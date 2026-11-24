@@ -72,6 +72,8 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"window.toggleFullscreen" => .@"window.fullscreen",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.reorder" => .@"tabs.organize",
+        .@"tabs.groups.open", .@"tabs.groups.create", .@"tabs.groups.removeTab", .@"tabs.groups.list",
+        .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve" => .@"tabs.groups",
         .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup" => .@"tabs.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
@@ -192,6 +194,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
+        .@"tabs.groups.list", .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve" => {},
         .@"privacy.clear", .@"privacy.status" => {},
         .@"search.getConfig", .@"search.setConfig" => {},
         .@"tabs.session.status", .@"tabs.session.setPreferences", .@"tabs.session.restore", .@"tabs.session.forget" => {},
@@ -576,6 +579,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
             if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
             if (drop.consumed) return sdk.result(output,id,sdk.TabReorder.unavailable);
+            if (drop.context.into_group and !context.grants.contains(.@"tabs.groups"))
+                return sdk.failure(output,id,.PermissionDenied);
             drop.consumed = true;
             const outcome = native.moon_tabs_reorder(&drop.context);
             return sdk.result(output,id,std.enums.fromInt(sdk.TabReorder,outcome) orelse .unavailable);
@@ -588,6 +593,51 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!native.moon_tabs_close_group(context.target_tab_id,options.scope==.below,&counts))
                 return sdk.result(output,id,null);
             return sdk.result(output,id,sdk.TabCloseResult{ .closed=counts.closed,.kept=counts.kept });
+        },
+        .@"tabs.groups.open", .@"tabs.groups.create", .@"tabs.groups.removeTab" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+            if (method==.@"tabs.groups.open") {
+                const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+                return sdk.result(output,id,native.moon_group_panel(owner.ptr,context.target_tab_id));
+            }
+            const outcome=if (method==.@"tabs.groups.create") native.moon_group_create(context.target_tab_id)
+                else native.moon_group_remove_tab(context.target_tab_id);
+            return sdk.result(output,id,std.enums.fromInt(sdk.TabGroupResult,outcome) orelse .unavailable);
+        },
+        .@"tabs.groups.list" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            var rows: [native.MOON_MAX_GROUPS]native.MoonTabGroup=undefined;
+            var count: usize=0;
+            var assigned: u32=0;
+            var assignable: bool=false;
+            if (!native.moon_group_list(context.target_tab_id,owner.ptr,&rows,rows.len,&count,&assigned,&assignable))
+                return sdk.failure(output,id,.PermissionDenied);
+            var groups: [rows.len]struct {
+                id: u32, name: []const u8, color: sdk.TabGroupColor, members: u32, collapsed: bool,
+            }=undefined;
+            for (groups[0..count],rows[0..count]) |*group,*row| group.*=.{ .id=row.id,.name=std.mem.sliceTo(&row.name,0),
+                .color=@enumFromInt(row.color),.members=row.members,.collapsed=row.collapsed };
+            return sdk.result(output,id,.{ .groups=groups[0..count],.assigned=assigned,.assignable=assignable });
+        },
+        .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const panel=context.target_tab_id;
+            const result=if (method==.@"tabs.groups.update") update: {
+                const group=decode(sdk.TabGroup,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+                if (group.name.len>96 or std.mem.indexOfScalar(u8,group.name,0)!=null)
+                    return sdk.result(output,id,sdk.TabGroupResult.invalidName);
+                const name=try allocator.dupeSentinel(u8,group.name,0);
+                break :update native.moon_group_update(panel,owner.ptr,group.id,name.ptr,@intFromEnum(group.color),group.collapsed);
+            } else action: {
+                const options=decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+                break :action if (method==.@"tabs.groups.assign") native.moon_group_assign(panel,owner.ptr,options.id)
+                    else native.moon_group_dissolve(panel,owner.ptr,options.id);
+            };
+            return sdk.result(output,id,std.enums.fromInt(sdk.TabGroupResult,result) orelse .unavailable);
         },
         .@"tabs.closed.list" => {
             var items: [recent_tabs.limit]sdk.ClosedTab = undefined;

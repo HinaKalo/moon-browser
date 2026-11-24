@@ -32,6 +32,7 @@ pub const Permission = enum {
     @"popups.manage",
     @"window.fullscreen",
     @"page.save",
+    @"tabs.groups",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -112,6 +113,9 @@ pub const TabOrganization = enum(c_int) {
 pub const TabCloseScope = enum { others, below };
 pub const TabCloseResult = struct { closed: u32, kept: u32 };
 pub const TabReorder = enum(c_int) { moved, unavailable, saveFailed };
+pub const TabGroupColor = enum(c_uint) { indigo, teal, amber, rose, slate };
+pub const TabGroup = struct { id: u32, name: []const u8, color: TabGroupColor, collapsed: bool = false };
+pub const TabGroupResult = enum(c_int) { saved, unavailable, limitReached, invalidName };
 pub const search_custom_limit = 5;
 pub const SearchEngine = struct { alias: []const u8, name: []const u8, template: []const u8 };
 pub const SearchConfig = struct { preferred: []const u8 = "g", custom: []const SearchEngine = &.{} };
@@ -281,6 +285,13 @@ pub const Method = enum {
     @"tabs.copyLink",
     @"tabs.closeGroup",
     @"tabs.reorder",
+    @"tabs.groups.open",
+    @"tabs.groups.create",
+    @"tabs.groups.removeTab",
+    @"tabs.groups.list",
+    @"tabs.groups.assign",
+    @"tabs.groups.update",
+    @"tabs.groups.dissolve",
     @"privacy.clear",
     @"privacy.status",
     @"privacy.openPrivateWindow",

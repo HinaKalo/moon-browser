@@ -90,6 +90,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `tabs.reorder` | `tabs.organize` | 从 `tabDrop` 命令传入 `{}`，按用户指定的位置移动标签。结果为 `moved`、`unavailable` 或 `saveFailed`。参见[标签排序](./command-contributions#标签排序)。 |
 | `tabs.duplicate` / `tabs.copyAddress` / `tabs.closeGroup` | `tabs.manage` | 从用户命令复制标签、复制网址或选择范围批量关闭标签。参见[标签管理](./tab-tools)。 |
 | `tabs.openLink` / `tabs.copyLink` | `tabs.manage` | 从对应的 `linkMenu` 命令传入 `{}`。前者返回 `opened` 或 `limitReached`，后者返回 `copied` 或 `clipboardBusy`。失效的链接上下文返回 `unavailable`。 |
+| `tabs.groups.create` / `tabs.groups.removeTab` / `tabs.groups.open` | `tabs.groups` | 从用户命令传入 `{}`，创建标签组、移出标签或打开组管理页。参见[标签组 API](./tab-tools#标签组-api)。 |
+| `tabs.groups.list` / `tabs.groups.assign` / `tabs.groups.update` / `tabs.groups.dissolve` | `tabs.groups` | 在活动插件页面查看组，移动命令绑定的标签，更新组或解散组。参见[标签组 API](./tab-tools#标签组-api)。 |
 | `search.getConfig` / `search.setConfig` | `search.manage` | 读取和保存默认搜索引擎与自定义关键词。参见[搜索引擎](./search)。 |
 | `siteData.update` | `siteData.read`、`siteData.write` | 从已绑定的站点面板编辑或删除 Local Storage／Session Storage 条目，提交后查看新快照中的操作结果。参见[站点数据](./site-data)。 |
 | `siteData.create` | `siteData.read`、`siteData.write` | 已绑定的活动面板传入 `{ group, generation, key, value }`。现有同名条目会保留。 |

@@ -20,6 +20,7 @@ const plugin_manager = @import("plugin_manager.zig");
 const updater = @import("updater.zig");
 const search = @import("search.zig");
 const last_session = @import("session.zig");
+const tab_groups = @import("tab_groups.zig");
 
 const max_tabs = last_session.limit;
 const max_pinned = 24;
@@ -48,6 +49,7 @@ const Tab = struct {
     download_count: usize = 0,
     activity: bool = false,
     pinned: bool = false,
+    group: u32 = 0,
     muted: bool = false,
     opening: Opening = .none,
     requested_at: u64 = 0,
@@ -67,6 +69,8 @@ const PageSaveJob = struct {
 var page_save_job: ?PageSaveJob = null;
 var page_save_serial: u64 = 0;
 var site_clear_confirming = false;
+const GroupPanel = struct { tab: u64, source: u64 };
+var group_panel: ?GroupPanel = null;
 var next_id: u64 = 1;
 var pins_path: [4096:0]u8 = @splat(0);
 var pins_save_at: ?u64 = null;
@@ -447,6 +451,10 @@ fn restore(tab: *Tab) void {
     navigate(tab, slice(&url));
 }
 fn chooseTab(index: usize, notify: bool) void {
+    selectTab(index,notify,true);
+}
+
+fn selectTab(index: usize, notify: bool, expand_group: bool) void {
     if (index >= count or index == active) return;
     shortcut_capture = null;
     moon_find_dismiss(false);
@@ -455,6 +463,7 @@ fn chooseTab(index: usize, notify: bool) void {
     if (tabs[active].view) |view| native.moon_engine_show(view, false);
     active = index;
     const tab = &tabs[index];
+    if (expand_group) if (tab_groups.get(tab.group)) |group| { group.collapsed=false; };
     tab.last_used = now;
     updateChrome(true);
     if (tab.phase == .dormant) restore(tab) else if (tab.phase != .crashed and tab.phase != .failed) show(tab);
@@ -507,11 +516,21 @@ fn saveLastSession() void {
         if (tab.pinned or tab.unsafe_history or tab.loading or tab.opening!=.none or
             (tab.phase!=.live and tab.phase!=.dormant) or !readCommittedAddress(tab,&addresses[used])) continue;
         const title = slice(&tab.title);
-        entries[used] = .{ .title=if (std.unicode.utf8ValidateSlice(title)) title else "", .url=slice(&addresses[used]) };
+        entries[used] = .{ .title=if (std.unicode.utf8ValidateSlice(title)) title else "", .url=slice(&addresses[used]), .group=tab.group };
         if (index==active) selected = used;
         used += 1;
     }
-    _ = last_session.save(.{ .tabs=entries[0..used], .selected=selected });
+    var groups: [tab_groups.limit]sdk.TabGroup = undefined;
+    var group_count: usize = 0;
+    for (&tab_groups.groups) |*group| {
+        if (group.id==0) continue;
+        for (entries[0..used]) |entry| if (entry.group==group.id) {
+            groups[group_count] = group.describe();
+            group_count+=1;
+            break;
+        };
+    }
+    _ = last_session.save(.{ .tabs=entries[0..used], .selected=selected, .groups=groups[0..group_count] });
 }
 
 fn resumeLastSession() sdk.SessionRestore {
@@ -521,16 +540,29 @@ fn resumeLastSession() sdk.SessionRestore {
     const snapshot = saved.value;
     if (snapshot.tabs.len==0) return .empty;
     const current = &tabs[active];
-    const reuse = active==count-1 and !current.pinned and current.phase==.blank and current.opening==.none and current.view==null;
+    const reuse = active==count-1 and !current.pinned and current.group==0 and current.phase==.blank and current.opening==.none and current.view==null;
     const start = if (reuse) active else count;
     if (snapshot.tabs.len > tabs.len-count+@intFromBool(reuse)) return .tabLimit;
 
     const append_from: usize = if (reuse) 1 else 0;
     const appended_at = count;
     const now = native.moon_clock();
+    var remapped: [tab_groups.limit]u32 = @splat(0);
+    for (snapshot.groups,0..) |group,index| {
+        for (snapshot.tabs) |tab| if (tab.group==group.id) {
+            if (tab_groups.create(group)) |entry| remapped[index]=entry.id;
+            break;
+        };
+    }
     for (snapshot.tabs,0..) |saved_tab,offset| {
         const index = if (reuse and offset==0) start else appended_at+offset-append_from;
         var tab: Tab = .{ .id=next_id, .phase=.dormant, .has_document=true, .loaded=true, .last_used=now };
+        if (saved_tab.group!=0) for (snapshot.groups,0..) |group,group_index| {
+            if (group.id==saved_tab.group) {
+                tab.group=remapped[group_index];
+                break;
+            }
+        };
         _ = copy(&tab.url,saved_tab.url);
         _ = copy(&tab.title,saved_tab.title);
         tabs[index] = tab;
@@ -546,7 +578,7 @@ fn resumeLastSession() sdk.SessionRestore {
         updateChrome(false);
         plugins.changed(tabSnapshot());
     } else {
-        chooseTab(target,true);
+        selectTab(target,true,false);
     }
     return .restored;
 }
@@ -590,11 +622,180 @@ fn moveTab(from: usize, to: usize) void {
     active = tabIndex(active_id).?;
 }
 
+fn lastGroupMember(id: u32) ?usize {
+    if (id==0) return null;
+    var index=count;
+    while (index!=0) {
+        index-=1;
+        if (tabs[index].group==id) return index;
+    }
+    return null;
+}
+
+fn pruneTabGroup(id: u32) void {
+    const group=tab_groups.get(id) orelse return;
+    if (lastGroupMember(id)==null) group.*=.{};
+}
+
+fn assignTabGroup(index: usize, next: u32) void {
+    const old=tabs[index].group;
+    if (old==next) return;
+    const destination=if (lastGroupMember(next)) |anchor|
+        anchor+@intFromBool(index>anchor)
+    else lastGroupMember(old) orelse index;
+    tabs[index].group=next;
+    moveTab(index,destination);
+    pruneTabGroup(old);
+    native.moon_shell_refresh();
+}
+
+export fn moon_sidebar_rows(rows: [*c]native.MoonSidebarRow, capacity: usize, active_row: *usize) usize {
+    active_row.*=0;
+    if (stopped) return 0;
+    const can_collapse=plugins.systemEnabled(.@"tabs.groups");
+    var used: usize=0;
+    var index: usize=0;
+    while (index<count and used<capacity) {
+        const group=tab_groups.get(tabs[index].group);
+        const start=index;
+        index+=1;
+        if (group) |entry| {
+            while (index<count and tabs[index].group==entry.id) index+=1;
+            const contains_active=active>=start and active<index;
+            const collapsed=can_collapse and entry.collapsed;
+            if (collapsed and contains_active) active_row.*=used;
+            rows[used]=.{ .tab=start,.group=entry.id,.color=@intFromEnum(entry.color),.members=@intCast(index-start),
+                .header=true,.collapsed=collapsed,.active=collapsed and contains_active };
+            used+=1;
+            if (collapsed) continue;
+        }
+        for (start..index) |tab_index| {
+            if (used==capacity) return used;
+            if (tab_index==active) active_row.*=used;
+            rows[used]=.{ .tab=tab_index,.group=if (group) |entry| entry.id else 0,
+                .color=if (group) |entry| @intFromEnum(entry.color) else 0,.members=0,
+                .header=false,.collapsed=false,.active=tab_index==active };
+            used+=1;
+        }
+    }
+    return used;
+}
+
+export fn moon_group_name(id: u32) [*:0]const u8 {
+    const group=tab_groups.get(id) orelse return "";
+    return &group.name;
+}
+
+export fn moon_group_toggle(id: u32) void {
+    if (stopped or !plugins.systemEnabled(.@"tabs.groups")) return;
+    const group=tab_groups.get(id) orelse return;
+    group.collapsed=!group.collapsed;
+    native.moon_shell_refresh_tab_order(false);
+}
+
+export fn moon_group_panel(id: [*c]const u8, source: u64) bool {
+    if (stopped or tabIndex(source)==null or !plugins.hasGrant(slice(id),.@"tabs.groups")) return false;
+    if (!moon_plugin_open_page(id)) return false;
+    const panel=tabs[active].id;
+    group_panel=.{ .tab=panel,.source=if (panel!=source) source else if (group_panel) |previous|
+        (if (previous.tab==panel) previous.source else 0) else 0 };
+    return true;
+}
+
+export fn moon_group_create(source: u64) c_int {
+    if (stopped) return @intFromEnum(sdk.TabGroupResult.unavailable);
+    const index=tabIndex(source) orelse return @intFromEnum(sdk.TabGroupResult.unavailable);
+    if (tabs[index].pinned) return @intFromEnum(sdk.TabGroupResult.unavailable);
+    const group=tab_groups.create(null) orelse return @intFromEnum(sdk.TabGroupResult.limitReached);
+    assignTabGroup(index,group.id);
+    return @intFromEnum(sdk.TabGroupResult.saved);
+}
+
+export fn moon_group_remove_tab(source: u64) c_int {
+    if (stopped) return @intFromEnum(sdk.TabGroupResult.unavailable);
+    const index=tabIndex(source) orelse return @intFromEnum(sdk.TabGroupResult.unavailable);
+    if (tabs[index].group==0) return @intFromEnum(sdk.TabGroupResult.unavailable);
+    assignTabGroup(index,0);
+    return @intFromEnum(sdk.TabGroupResult.saved);
+}
+
+fn activeGroupPanel(panel: u64, owner: []const u8) bool {
+    if (stopped or count==0 or tabs[active].id!=panel or !tabs[active].extension or
+        !plugins.hasGrant(owner,.@"tabs.groups")) return false;
+    var buffer: [256]u8 = undefined;
+    const address=plugins.addressForId(owner,&buffer) orelse return false;
+    return equals(address,slice(&tabs[active].url));
+}
+
+fn groupPanelSource(panel: u64) ?usize {
+    const binding=group_panel orelse return null;
+    if (binding.tab!=panel) return null;
+    const index=tabIndex(binding.source) orelse return null;
+    return if (tabs[index].pinned) null else index;
+}
+
+export fn moon_group_list(panel: u64, owner: [*c]const u8, output: [*c]native.MoonTabGroup, capacity: usize,
+    total: *usize, assigned: *u32, assignable: *bool) bool {
+    if (!activeGroupPanel(panel,slice(owner))) return false;
+    const source=groupPanelSource(panel);
+    assignable.*=source!=null;
+    assigned.*=if (source) |index| tabs[index].group else 0;
+    total.*=0;
+    var index: usize=0;
+    while (index<count and total.*<capacity) {
+        const id=tabs[index].group;
+        index+=1;
+        const group=tab_groups.get(id) orelse continue;
+        var members: u32=1;
+        while (index<count and tabs[index].group==id) : (index+=1) members+=1;
+        output[total.*]=.{ .id=id,.color=@intFromEnum(group.color),.members=members,
+            .collapsed=group.collapsed,.name=group.name[0..group.name.len].* };
+        total.*+=1;
+    }
+    return true;
+}
+
+export fn moon_group_assign(panel: u64, owner: [*c]const u8, id: u32) c_int {
+    if (!activeGroupPanel(panel,slice(owner)) or (id!=0 and tab_groups.get(id)==null))
+        return @intFromEnum(sdk.TabGroupResult.unavailable);
+    const index=groupPanelSource(panel) orelse return @intFromEnum(sdk.TabGroupResult.unavailable);
+    assignTabGroup(index,id);
+    return @intFromEnum(sdk.TabGroupResult.saved);
+}
+
+export fn moon_group_update(panel: u64, owner: [*c]const u8, id: u32, name: [*c]const u8, color: c_uint, collapsed: bool) c_int {
+    if (!activeGroupPanel(panel,slice(owner))) return @intFromEnum(sdk.TabGroupResult.unavailable);
+    const group=tab_groups.get(id) orelse return @intFromEnum(sdk.TabGroupResult.unavailable);
+    const display=std.mem.trim(u8,slice(name)," ");
+    if (!tab_groups.validName(display)) return @intFromEnum(sdk.TabGroupResult.invalidName);
+    const tint=std.enums.fromInt(sdk.TabGroupColor,color) orelse return @intFromEnum(sdk.TabGroupResult.unavailable);
+    tab_groups.setName(group,display);
+    group.color=tint;
+    group.collapsed=collapsed;
+    native.moon_shell_refresh();
+    return @intFromEnum(sdk.TabGroupResult.saved);
+}
+
+export fn moon_group_dissolve(panel: u64, owner: [*c]const u8, id: u32) c_int {
+    if (!activeGroupPanel(panel,slice(owner))) return @intFromEnum(sdk.TabGroupResult.unavailable);
+    const group=tab_groups.get(id) orelse return @intFromEnum(sdk.TabGroupResult.unavailable);
+    for (tabs[0..count]) |*tab| if (tab.group==id) { tab.group=0; };
+    group.*=.{};
+    native.moon_shell_refresh();
+    return @intFromEnum(sdk.TabGroupResult.saved);
+}
+
 fn dropPosition(drop: *const native.MoonTabDrop) ?struct { from: usize, to: usize } {
     if (stopped or drop.source == drop.anchor) return null;
     const from = tabIndex(drop.source) orelse return null;
     const anchor = tabIndex(drop.anchor) orelse return null;
     if (tabs[from].pinned != tabs[anchor].pinned) return null;
+    if (drop.into_group) {
+        const group=tab_groups.get(tabs[anchor].group) orelse return null;
+        if (!plugins.systemEnabled(.@"tabs.groups") or tabs[from].group==group.id) return null;
+        return .{ .from=from,.to=anchor };
+    }
+    if (tabs[from].group!=tabs[anchor].group) return null;
     const to = if (drop.after) anchor+@intFromBool(from>anchor) else anchor-@intFromBool(from<anchor);
     return if (from==to) null else .{ .from=from, .to=to };
 }
@@ -617,11 +818,15 @@ export fn moon_tab_nudge(down: bool) void {
     if (!moon_tab_drop_enabled()) return;
     if ((down and active+1==count) or (!down and active==0)) return;
     const anchor = if (down) active+1 else active-1;
-    moon_tab_drop_run(&.{ .source=tabs[active].id,.anchor=tabs[anchor].id,.after=down });
+    moon_tab_drop_run(&.{ .source=tabs[active].id,.anchor=tabs[anchor].id,.after=down,.into_group=false });
 }
 
 export fn moon_tabs_reorder(drop: *const native.MoonTabDrop) c_int {
     const position = dropPosition(drop) orelse return @intFromEnum(sdk.TabReorder.unavailable);
+    if (drop.into_group) {
+        assignTabGroup(position.from,tabs[position.to].group);
+        return @intFromEnum(sdk.TabReorder.moved);
+    }
     const pinned = tabs[position.from].pinned;
     moveTab(position.from,position.to);
     if (pinned and !savePinnedTabs()) {
@@ -670,13 +875,17 @@ fn organizeTab(id: u64, action: sdk.TabOperation) sdk.TabOrganization {
         if (pinned_count==max_pinned) return .limitReached;
     }
     tab.pinned = !was_pinned;
+    const old_group=tab.group;
+    tab.group=0;
     const destination = if (was_pinned) pinned_count-1 else pinned_count;
     moveTab(index,destination);
     if (!savePinnedTabs()) {
         moveTab(destination,index);
         tabs[index].pinned = was_pinned;
+        tabs[index].group = old_group;
         return .saveFailed;
     }
+    pruneTabGroup(old_group);
     native.moon_shell_refresh();
     return if (was_pinned) .unpinned else .pinned;
 }
@@ -694,12 +903,15 @@ fn duplicateTab(index: usize) sdk.TabOrganization {
     if (count==tabs.len) return .limitReached;
     const session = if (source.view) |view| native.moon_engine_save(view)
         else native.moon_engine_retain_state(source.session);
+    const title=source.title;
+    const muted=source.muted;
+    const group=source.group;
     const destination = if (source.pinned) pinnedCount() else index+1;
     if (destination<count) std.mem.copyBackwards(Tab,tabs[destination+1..count+1],tabs[destination..count]);
     if (active>=destination) active += 1;
     tabs[destination] = .{
-        .id=next_id, .phase=.dormant, .url=address, .title=source.title,
-        .session=session, .muted=source.muted, .has_document=true, .loaded=true,
+        .id=next_id, .phase=.dormant, .url=address, .title=title,
+        .session=session, .muted=muted, .group=group, .has_document=true, .loaded=true,
         .last_used=native.moon_clock(),
     };
     count += 1;
@@ -741,11 +953,14 @@ fn closeTab(index: usize) void {
     page_source.closed(tabs[index].id);
     const was_active = index == active;
     const was_pinned = tabs[index].pinned;
+    const old_group = tabs[index].group;
+    if (group_panel) |binding| if (binding.tab==tabs[index].id) { group_panel=null; };
     rememberClosedTab(&tabs[index]);
     detach(&tabs[index]);
     forgetSession(&tabs[index]);
     count -= 1;
     if (index < count) std.mem.copyForwards(Tab, tabs[index..count], tabs[index + 1 .. count + 1]);
+    pruneTabGroup(old_group);
     if (was_pinned and !savePinnedTabs()) pins_save_at = native.moon_clock()+2000;
     if (count == 0) {
         active = 0;
@@ -1205,6 +1420,17 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             _ = plugins.namedCommand("moon.tab-tools",action,snapshotFor(&tabs[target]));
         },
         native.MOON_TAB_CLOSE_TARGET => closeTab(tabIndex(argument) orelse return),
+        native.MOON_TAB_GROUP_NEW, native.MOON_TAB_GROUP_PANEL, native.MOON_TAB_GROUP_REMOVE => {
+            if (!plugins.systemEnabled(.@"tabs.groups")) return;
+            const target=tabIndex(argument) orelse return;
+            const action: []const u8 = switch (command) {
+                native.MOON_TAB_GROUP_NEW => "groupCreate",
+                native.MOON_TAB_GROUP_PANEL => "groups",
+                native.MOON_TAB_GROUP_REMOVE => "groupRemove",
+                else => unreachable,
+            };
+            _=plugins.namedCommand("moon.tab-tools",action,snapshotFor(&tabs[target]));
+        },
         native.MOON_KEY_NEXT => chooseTab((active + 1) % count, true),
         native.MOON_KEY_PREV => chooseTab((active + count - 1) % count, true),
         native.MOON_ADDRESS => {
@@ -1498,7 +1724,8 @@ export fn moon_tab_id(index: usize) u64 {
 }
 export fn moon_tab_tools_permissions() c_uint {
     return (if (plugins.systemEnabled(.@"tabs.organize")) @as(c_uint,native.MOON_TAB_ORGANIZE) else 0) |
-        (if (plugins.systemEnabled(.@"tabs.manage")) @as(c_uint,native.MOON_TAB_MANAGE) else 0);
+        (if (plugins.systemEnabled(.@"tabs.manage")) @as(c_uint,native.MOON_TAB_MANAGE) else 0) |
+        (if (plugins.systemEnabled(.@"tabs.groups")) @as(c_uint,native.MOON_TAB_GROUPS) else 0);
 }
 export fn moon_controls() c_uint {
     if (count == 0) return 0;
@@ -1540,6 +1767,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"page.source" => "允许查看当前网页源代码",
         .@"page.save" => "允许通过文件对话框保存当前网页",
+        .@"tabs.groups" => "允许管理标签组",
         .@"popups.manage" => "允许管理网站弹窗",
         .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",

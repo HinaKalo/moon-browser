@@ -11,7 +11,7 @@ enum MoonCommand {
     MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES,
     MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_SETTINGS, MOON_MARKET,
     MOON_TAB_PIN, MOON_TAB_MUTE, MOON_TAB_CLOSE_TARGET, MOON_TAB_DUPLICATE, MOON_TAB_COPY_ADDRESS,
-    MOON_TAB_CLOSE_OTHERS, MOON_TAB_CLOSE_BELOW
+    MOON_TAB_CLOSE_OTHERS, MOON_TAB_CLOSE_BELOW, MOON_TAB_GROUP_NEW, MOON_TAB_GROUP_PANEL, MOON_TAB_GROUP_REMOVE
 };
 enum MoonEngineEvent {
     MOON_STARTED = 1, MOON_COMMITTED, MOON_FINISHED, MOON_FAILED, MOON_CHANGED,
@@ -171,7 +171,7 @@ enum {
     MOON_TAB_MUTED = 16, MOON_TAB_CAN_PIN = 32, MOON_TAB_CAN_MUTE = 64,
     MOON_TAB_CAN_DUPLICATE = 128, MOON_TAB_CAN_COPY_ADDRESS = 256, MOON_TAB_HAS_SITE = 512
 };
-enum { MOON_TAB_ORGANIZE = 1, MOON_TAB_MANAGE = 2 };
+enum { MOON_TAB_ORGANIZE = 1, MOON_TAB_MANAGE = 2, MOON_TAB_GROUPS = 4 };
 unsigned moon_tab_tools_permissions(void);
 unsigned moon_controls(void);
 size_t moon_plugin_count(void);
@@ -226,13 +226,35 @@ unsigned moon_plugin_link_action(size_t index, size_t command);
 bool moon_plugin_bound_action(size_t index, size_t command);
 void moon_link_menu_run(const MoonLinkContext *link, size_t index, size_t command);
 unsigned moon_link_open(const MoonLinkContext *link);
-typedef struct { uint64_t source, anchor; bool after; } MoonTabDrop;
+typedef struct { uint64_t source, anchor; bool after, into_group; } MoonTabDrop;
 bool moon_tab_drop_enabled(void);
 bool moon_tab_drop_valid(const MoonTabDrop *drop);
 void moon_tab_drop_run(const MoonTabDrop *drop);
 void moon_tab_nudge(bool down);
 int moon_tabs_reorder(const MoonTabDrop *drop);
 void moon_shell_refresh_tab_order(bool reveal_active);
+enum { MOON_MAX_GROUPS = 24, MOON_MAX_SIDEBAR_ROWS = 128 + MOON_MAX_GROUPS };
+typedef struct {
+    size_t tab;
+    uint32_t group, color, members;
+    bool header, collapsed, active;
+} MoonSidebarRow;
+typedef struct {
+    uint32_t id, color, members;
+    bool collapsed;
+    char name[97];
+} MoonTabGroup;
+size_t moon_sidebar_rows(MoonSidebarRow *rows, size_t capacity, size_t *active_row);
+const char *moon_group_name(uint32_t group);
+void moon_group_toggle(uint32_t group);
+bool moon_group_panel(const char *owner, uint64_t source);
+int moon_group_create(uint64_t source);
+int moon_group_remove_tab(uint64_t source);
+bool moon_group_list(uint64_t panel, const char *owner, MoonTabGroup *groups, size_t capacity,
+    size_t *count, uint32_t *assigned, bool *assignable);
+int moon_group_assign(uint64_t panel, const char *owner, uint32_t group);
+int moon_group_update(uint64_t panel, const char *owner, uint32_t group, const char *name, unsigned color, bool collapsed);
+int moon_group_dissolve(uint64_t panel, const char *owner, uint32_t group);
 bool moon_plugin_key(unsigned modifiers, unsigned key, bool repeated);
 bool moon_plugin_global_key(unsigned id, unsigned modifiers, unsigned key);
 bool moon_shell_register_hotkey(unsigned id, unsigned modifiers, unsigned key);

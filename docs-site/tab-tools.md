@@ -10,7 +10,19 @@
 - 「关闭其他标签」整理整个侧栏，「关闭下方标签」只处理所点标签下方的条目。固定标签和仍受保护的标签会保留。已关闭且可恢复的网页仍可从「最近关闭的标签」找回。
 - 右键点击网页中的 HTTP(S) 链接，可在后台标签打开或复制链接地址。新的后台标签在选中时加载，原页面保持当前状态。
 
-## 插件 API
+## 标签组
+
+从 0.1.0-preview.41 起，右键普通标签可新建标签组，再把其他标签拖到组标题或用「移入标签组」归类。点击组标题可折叠或展开，切换到组内标签会展开该组。也可将单个标签移出组。固定标签保持在独立分区。
+
+从组标题的右键菜单打开「管理标签组」，可以改名、选色、折叠或解散。解散保留组内的标签页。恢复上次会话时，会重建其中可恢复网页的分组、颜色和折叠状态。
+
+### 标签组 API
+
+`tabs.groups` 授权后，用户触发的原生命令传入 `{}`，可调用 `tabs.groups.create`、`tabs.groups.removeTab` 或 `tabs.groups.open`。宿主为命令绑定目标标签，`open` 将目标传给插件配置页。
+
+活动配置页调用 `tabs.groups.list` 获取 `{ groups, assigned, assignable }`，其中组含 `id`、`name`、`color`、`collapsed` 和 `members`。调用 `tabs.groups.assign({ id })` 移动绑定标签，`id: 0` 表示移出。用 `tabs.groups.update({ id, name, color, collapsed })` 修改，用 `tabs.groups.dissolve({ id })` 解散。颜色为 `indigo`、`teal`、`amber`、`rose` 或 `slate`。
+
+## 标签操作 API
 
 声明 `tabs.organize` 权限后，用户触发的 EXE 命令可以调用 `tabs.togglePinned` 和 `tabs.toggleMuted`，参数均为空对象。宿主绑定发起命令的标签。方法也可以通过命令清单绑定到主菜单入口。
 
