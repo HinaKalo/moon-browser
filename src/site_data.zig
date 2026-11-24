@@ -5,8 +5,15 @@ const native = @import("native");
 const Entry = struct { name: []const u8, value: []const u8, shortened: bool };
 const Group = struct { entries: []Entry, more: bool };
 const Snapshot = struct { cookies: ?Group, local: ?Group, session: ?Group, mutation: ?sdk.SiteDataMutation = null };
+const Catalog = struct {
+    indexedDB: @FieldType(sdk.SiteStorageCatalog,"indexedDB"),
+    cacheStorage: @FieldType(sdk.SiteStorageCatalog,"cacheStorage"),
+};
 const allocator = std.heap.page_allocator;
 var captured: ?std.json.Parsed(Snapshot) = null;
+var catalog: ?std.json.Parsed(Catalog) = null;
+var catalog_deadline: ?u64 = null;
+var catalog_requested = false;
 var source: u64 = 0;
 var panel: u64 = 0;
 var sequence: u64 = 0;
@@ -22,6 +29,10 @@ var origin_len: usize = 0;
 fn dropValues() void {
     if (captured) |result| result.deinit();
     captured = null;
+    if (catalog) |result| result.deinit();
+    catalog = null;
+    catalog_deadline = null;
+    catalog_requested = false;
 }
 
 pub fn reset() void {
@@ -151,6 +162,9 @@ pub fn complete(tab: u64, token: u64, json: []const u8) void {
 }
 
 pub fn tick(now: u64) void {
+    if (catalog_deadline) |expires| {
+        if (now >= expires) catalog_deadline = null;
+    }
     if (received == .pending and now >= deadline) {
         received=.unavailable;
         failure=.timedOut;
@@ -158,6 +172,42 @@ pub fn tick(now: u64) void {
         dropValues();
         received=.expired;
     }
+}
+
+pub fn requestCatalog(view: *native.MoonView) void {
+    if (received!=.ready or catalog_requested) return;
+    catalog_requested = true;
+    catalog_deadline = native.moon_clock()+5000;
+    if (!native.moon_engine_inspect_catalog(view,sequence)) catalog_deadline = null;
+}
+
+pub fn completeCatalog(tab: u64, token: u64, json: []const u8) void {
+    if (tab != source or token != sequence or received != .ready or catalog_deadline == null) return;
+    catalog_deadline = null;
+    const parsed = std.json.parseFromSlice(Catalog,allocator,json,.{ .allocate=.alloc_always }) catch return;
+    inline for (.{ parsed.value.indexedDB,parsed.value.cacheStorage }) |maybe| {
+        if (maybe) |section| {
+            if (section.entries.len>32) {
+                parsed.deinit();
+                return;
+            }
+            for (section.entries) |entry| {
+                if (entry.name.len>512) {
+                    parsed.deinit();
+                    return;
+                }
+            }
+        }
+    }
+    catalog = parsed;
+}
+
+pub fn catalogStatus(tab: u64, id: []const u8, group: sdk.SiteCatalogGroup) ?sdk.SiteStorageCatalog {
+    if (!owns(tab,id) or received != .ready or !catalog_requested) return null;
+    if (catalog) |result| return .{ .state=.ready,.generation=sequence,
+        .indexedDB=if (group==.indexedDB) result.value.indexedDB else null,
+        .cacheStorage=if (group==.cacheStorage) result.value.cacheStorage else null };
+    return .{ .state=if (catalog_deadline!=null) .pending else .unavailable,.generation=sequence };
 }
 
 fn resolve(kind: sdk.SiteDataGroup) ?Group {

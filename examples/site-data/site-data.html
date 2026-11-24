@@ -47,6 +47,8 @@
       <button data-group="cookies" aria-pressed="true">Cookie</button>
       <button data-group="local" aria-pressed="false">Local storage</button>
       <button data-group="session" aria-pressed="false">Session storage</button>
+      <button data-group="indexedDB" aria-pressed="false">IndexedDB</button>
+      <button data-group="cacheStorage" aria-pressed="false">Cache Storage</button>
     </div>
     <input class="search" id="search" type="search" aria-label="按名称筛选" placeholder="按名称筛选">
   </div>
@@ -72,7 +74,8 @@
   const status = el('status'), details = el('details'), rows = el('results'), search = el('search');
   const buttons = [...document.querySelectorAll('[data-group]')];
   const editor=el('editor'), feedback=el('feedback'), newValue=el('new-value'), commit=el('commit');
-  let seq=0, group='cookies', selected, page, request=0, latest, refreshing=false, writable=false, draft;
+  let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
+  const isCatalog=() => group==='indexedDB' || group==='cacheStorage';
   async function host(method,params={}) {
     const id='sites:' + ++seq;
     const reply=JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0',id,method,params})));
@@ -86,7 +89,7 @@
     editor.hidden=true;
     if (refocus && previous?.button.isConnected) previous.button.focus();
   }
-  function clear() { rows.replaceChildren(); rows.hidden=true; page=undefined; closeEditor(); }
+  function clear() { rows.replaceChildren(); rows.hidden=true; page=catalog=undefined; closeEditor(); }
   function lengthHint() {
     const length=new TextEncoder().encode(newValue.value).length;
     el('bytes').textContent=length + ' / 1024 字节';
@@ -133,6 +136,7 @@
     }
   };
   function render() {
+    if (isCatalog()) { renderCatalog(); return; }
     rows.replaceChildren();
     if (!page?.available) {
       rows.hidden=true;
@@ -188,14 +192,54 @@
     details.textContent=(group==='cookies' ? '此处显示网页可读的 Cookie。使用开发者工具可查看 HttpOnly Cookie 及完整属性。' : '') +
       (page.more ? ' 已显示前 32 条。' : '');
   }
+  function renderCatalog() {
+    rows.replaceChildren();
+    rows.hidden=true;
+    details.textContent='';
+    const label=group==='indexedDB' ? 'IndexedDB' : 'Cache Storage';
+    if (catalog?.state==='pending') { status.textContent='正在读取 ' + label + '…'; return; }
+    const section=catalog?.[group];
+    if (!section) { status.textContent='此网页无法读取 ' + label + '。'; return; }
+    const query=search.value.trim().toLocaleLowerCase();
+    for (const item of section.entries) {
+      if (query && !item.name.toLocaleLowerCase().includes(query)) continue;
+      const row=document.createElement('li'), name=document.createElement('code');
+      row.className='entry';
+      name.textContent=item.name || '（空名称）';
+      row.append(name);
+      const text=item.version != null ? `版本 ${item.version}` : '';
+      if (text || item.shortened) {
+        const caption=document.createElement('small');
+        caption.className='caption';
+        caption.textContent=[text,item.shortened ? '名称已截断' : ''].filter(Boolean).join(' · ');
+        row.append(caption);
+      }
+      rows.append(row);
+    }
+    rows.hidden=rows.children.length===0;
+    status.textContent=rows.hidden ? (query ? '没有匹配的条目。' : `此网页尚未创建 ${label} 条目。`) : '';
+    details.textContent=(section.more ? '已显示前 32 条。' : '') +
+      (group==='indexedDB' ? '在 WebKit 检查器的 Storage 面板查看对象仓库和记录。' : '');
+  }
   async function load() {
     const ticket=++request;
     try {
+      if (isCatalog()) {
+        const value=await host('siteData.catalog',{group});
+        if (ticket!==request) return;
+        catalog=value;
+        renderCatalog();
+        return;
+      }
       const value=await host('siteData.list',{group});
       if (ticket!==request) return;
       page=value;
       render();
-    } catch { if (ticket===request) clear(); }
+    } catch {
+      if (ticket!==request) return;
+      clear();
+      if (isCatalog()) renderCatalog();
+    }
   }
   const states={
     idle:'请回到要检查的网页，从命令面板选择「查看当前站点数据」。',
@@ -218,7 +262,10 @@
       const unavailable=['idle','stale','pending'].includes(current.state);
       el('refresh').disabled=el('inspector').disabled=unavailable;
       const identity=current.state + ':' + current.generation + ':' + writable;
-      if (identity===latest) return;
+      if (identity===latest) {
+        if (selected==='ready' && isCatalog() && (!catalog || catalog.state==='pending')) await load();
+        return;
+      }
       latest=identity;
       selected=current.state;
       request++;
@@ -241,7 +288,7 @@
     feedback.textContent='';
     if (selected==='ready') load();
   };
-  search.oninput=() => { if (page) render(); };
+  search.oninput=() => { if (page || catalog) render(); };
   el('refresh').onclick=async () => {
     try { if (!await host('siteData.refresh')) throw Error(); await update(); }
     catch { status.textContent='无法刷新。请回到目标网页重新打开面板。'; }

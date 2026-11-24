@@ -11,10 +11,13 @@ typedef const struct OpaqueJSContext *JSContextRef;
 typedef const struct OpaqueJSValue *JSValueRef;
 typedef struct OpaqueJSString *JSStringRef;
 typedef struct OpaqueJSValue *JSObjectRef;
+typedef JSValueRef (*JSFunctionCallback)(JSContextRef,JSObjectRef,JSObjectRef,size_t,const JSValueRef[],JSValueRef *);
 
 /* Only the worker's isolated world evaluates the fixed expression below. */
 static struct {
     WKBundleFrameRef (*main_frame)(WKBundlePageRef);
+    WKBundleFrameRef (*frame_for_context)(JSContextRef);
+    WKBundlePageRef (*page_for_frame)(WKBundleFrameRef);
     WKURLRef (*frame_url)(WKBundleFrameRef);
     WKBundleScriptWorldRef (*create_world)(void);
     JSContextRef (*global_context)(WKBundleFrameRef,WKBundleScriptWorldRef);
@@ -30,6 +33,8 @@ static struct {
     JSValueRef (*evaluate)(JSContextRef,JSStringRef,JSObjectRef,JSStringRef,int,JSValueRef *);
     JSObjectRef (*to_object)(JSContextRef,JSValueRef,JSValueRef *);
     JSValueRef (*make_string)(JSContextRef,JSStringRef);
+    JSValueRef (*make_undefined)(JSContextRef);
+    JSObjectRef (*make_callback)(JSContextRef,JSStringRef,JSFunctionCallback);
     JSValueRef (*call)(JSContextRef,JSObjectRef,JSObjectRef,size_t,const JSValueRef *,JSValueRef *);
     JSStringRef (*to_string)(JSContextRef,JSValueRef,JSValueRef *);
     size_t (*size)(JSStringRef);
@@ -44,6 +49,8 @@ static bool resolve(void) {
     if (!wk || !js) return false;
 #define GET(module,field,name) api.field=(__typeof__(api.field))GetProcAddress(module,#name); if (!api.field) return false;
     GET(wk,main_frame,WKBundlePageGetMainFrame)
+    GET(wk,frame_for_context,WKBundleFrameForJavaScriptContext)
+    GET(wk,page_for_frame,WKBundleFrameGetPage)
     GET(wk,frame_url,WKBundleFrameCopyURL)
     GET(wk,create_world,WKBundleScriptWorldCreateWorld)
     GET(wk,global_context,WKBundleFrameGetJavaScriptContextForWorld)
@@ -59,6 +66,8 @@ static bool resolve(void) {
     GET(js,evaluate,JSEvaluateScript)
     GET(js,to_object,JSValueToObject)
     GET(js,make_string,JSValueMakeString)
+    GET(js,make_undefined,JSValueMakeUndefined)
+    GET(js,make_callback,JSObjectMakeFunctionWithCallback)
     GET(js,call,JSObjectCallAsFunction)
     GET(js,to_string,JSValueToStringCopy)
     GET(js,size,JSStringGetMaximumUTF8CStringSize)
@@ -98,7 +107,49 @@ static const char snapshot_script[] =
     "return JSON.stringify({cookies:cookies(),local:storage(()=>localStorage),session:storage(()=>sessionStorage),mutation});"
     "})";
 
-static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char *expected,const char *change,const char **failure) {
+static const char catalog_script[] =
+    "((revision,url,reply) => {"
+    "if(globalThis.__moonSiteDataRevision!==revision)return JSON.stringify('sourceChanged');"
+    "const item=(full)=>{const name=full.slice(0,128).toWellFormed();return {name,shortened:name!==full};};"
+    "const section=async(read,describe)=>{try{const entries=await read();"
+        "return {entries:entries.slice(0,32).map(describe),more:entries.length>32};}catch{return null;}};"
+    "Promise.all([section(()=>indexedDB.databases(),db=>({ ...item(db.name),"
+        "version:Number.isSafeInteger(db.version)?db.version:null })),section(()=>caches.keys(),item)])"
+      ".then(([indexedDB,cacheStorage])=>{if(location.href===url&&globalThis.__moonSiteDataRevision===revision)"
+        "reply(revision+'\\n'+JSON.stringify({indexedDB,cacheStorage}));});"
+    "})";
+
+static void post_reply(WKBundlePageRef page,const char *channel,const char *text) {
+    WKStringRef name=api.new_string(channel), body=api.new_string(text);
+    if (name && body) api.post(page,name,body);
+    if (body) api.release(body);
+    if (name) api.release(name);
+}
+
+static JSValueRef catalog_finished(JSContextRef context,JSObjectRef function,JSObjectRef self,size_t argc,
+                                   const JSValueRef argv[],JSValueRef *exception) {
+    WKBundleFrameRef frame=api.frame_for_context(context);
+    WKBundlePageRef page=frame ? api.page_for_frame(frame) : NULL;
+    if (page && api.main_frame(page)==frame && argc==1) {
+        JSStringRef text=api.to_string(context,argv[0],exception);
+        if (text) {
+            const size_t capacity=api.size(text);
+            const size_t max=64*1024;
+            const size_t estimated=capacity<max ? capacity : max;
+            char *response=estimated ? malloc(estimated) : NULL;
+            if (response) {
+                const size_t bytes=api.utf8(text,response,estimated);
+                if (bytes>2 && response[bytes-2]=='}') post_reply(page,"MoonSiteCatalog",response);
+                free(response);
+            }
+            api.release_js(text);
+        }
+    }
+    return api.make_undefined(context);
+}
+
+static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char *expected,const char *change,
+                           bool catalog,bool *scheduled,const char **failure) {
     *failure="\"frameUnavailable\"";
     WKBundleFrameRef frame=api.main_frame(page);
     if (!frame) return NULL;
@@ -120,17 +171,21 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
     JSStringRef result=NULL;
     if (context) {
         *failure="\"evaluationFailed\"";
-        JSStringRef script=api.source(snapshot_script);
-        JSStringRef id=api.source(revision), payload=api.source(change);
+        JSStringRef script=api.source(catalog ? catalog_script : snapshot_script);
+        JSStringRef id=api.source(revision), payload=api.source(catalog ? expected : change);
         if (script && id && payload) {
             JSValueRef exception=NULL;
             JSValueRef function=api.evaluate(context,script,NULL,NULL,1,&exception);
             JSObjectRef callback=!exception && function ? api.to_object(context,function,&exception) : NULL;
             if (!exception && callback) {
-                const JSValueRef arguments[]={api.make_string(context,id),api.make_string(context,payload)};
-                JSValueRef value=api.call(context,callback,NULL,2,arguments,&exception);
+                const JSValueRef arguments[]={api.make_string(context,id),api.make_string(context,payload),
+                    catalog ? api.make_callback(context,NULL,catalog_finished) : NULL};
+                JSValueRef value=api.call(context,callback,NULL,catalog ? 3 : 2,arguments,&exception);
                 *failure="\"conversionFailed\"";
-                if (!exception && value) result=api.to_string(context,value,NULL);
+                if (!exception && value) {
+                    if (catalog) *scheduled=true;
+                    else result=api.to_string(context,value,NULL);
+                }
             }
         }
         if (script) api.release_js(script);
@@ -141,7 +196,9 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
 }
 
 void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRef name,WKTypeRef data,const void *info) {
-    if (!resolve() || !api.text_equals(name,"MoonInspectSite") || !data || api.type_id(data)!=api.string_type_id()) return;
+    if (!resolve() || !data || api.type_id(data)!=api.string_type_id()) return;
+    const bool catalog=api.text_equals(name,"MoonInspectCatalog");
+    if (!catalog && !api.text_equals(name,"MoonInspectSite")) return;
     char request[32*1024];
     const size_t n=api.read_string((WKStringRef)data,request,sizeof(request));
     if (!n || n>=sizeof(request) || strlen(request)+1!=n) return;
@@ -153,7 +210,9 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
     const char *failure;
     *split=0;
     *update=0;
-    JSStringRef snapshot=inspect(page,request,split+1,update+1,&failure);
+    bool scheduled=false;
+    JSStringRef snapshot=inspect(page,request,split+1,update+1,catalog,&scheduled,&failure);
+    if (scheduled) return;
     *split='\n';
     const size_t capacity=snapshot ? api.size(snapshot) : 0;
     const size_t limit=512*1024;
@@ -167,11 +226,7 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
             if (bytes<2 || (response[prefix+bytes-2]!='}' && response[prefix+bytes-2]!='"'))
                 strcpy(response+prefix,"\"invalidResult\"");
         }
-        WKStringRef message=api.new_string("MoonSiteSnapshot");
-        WKStringRef payload=api.new_string(response);
-        if (message && payload) api.post(page,message,payload);
-        if (payload) api.release(payload);
-        if (message) api.release(message);
+        post_reply(page,catalog ? "MoonSiteCatalog" : "MoonSiteSnapshot",response);
         free(response);
     }
     if (snapshot) api.release_js(snapshot);

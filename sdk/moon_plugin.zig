@@ -170,6 +170,15 @@ pub const SiteDataStatus = struct {
 pub const SiteDataEntry = struct { id: u32, name: []const u8, length: usize, shortened: bool };
 pub const SiteDataPage = struct { available: bool, entries: []const SiteDataEntry, more: bool, generation: u64 };
 pub const SiteDataItem = struct { group: SiteDataGroup, id: u32, generation: u64 };
+pub const SiteDatabase = struct { name: []const u8, version: ?u64, shortened: bool };
+pub const SiteCache = struct { name: []const u8, shortened: bool };
+pub const SiteCatalogGroup = enum { indexedDB, cacheStorage };
+pub const SiteStorageCatalog = struct {
+    state: enum { pending, ready, unavailable },
+    generation: u64,
+    indexedDB: ?struct { entries: []const SiteDatabase, more: bool } = null,
+    cacheStorage: ?struct { entries: []const SiteCache, more: bool } = null,
+};
 pub const site_data_value_limit = 1024;
 pub const SiteDataUpdate = struct { group: SiteDataGroup, id: u32, generation: u64, value: ?[]const u8 };
 pub const ZoomAction = enum { increase, decrease, reset };
@@ -229,6 +238,7 @@ pub const Method = enum {
     @"siteData.open",
     @"siteData.status",
     @"siteData.list",
+    @"siteData.catalog",
     @"siteData.value",
     @"siteData.refresh",
     @"siteData.openInspector",

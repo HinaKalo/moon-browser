@@ -17,7 +17,7 @@ const search = @import("search.zig");
 const session = @import("session.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
-pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false };
+pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8, bookmarkable: bool = false, navigation: u64 = 0 };
 pub const Context = struct {
     grants: Permissions,
     plugin_id: []const u8,
@@ -42,7 +42,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.update", .@"bookmarks.remove" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
-        .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.value",
+        .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"siteData.update" => .@"siteData.write",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
@@ -163,7 +163,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
-        .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
+        .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
@@ -441,6 +441,14 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const result = site_data.value(context.target_tab_id,context.plugin_id,options) orelse return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,result);
         },
+        .@"siteData.catalog" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(struct { group: sdk.SiteCatalogGroup },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            _ = native.moon_site_data_action(context.target_tab_id,owner.ptr,native.MOON_SITE_CATALOG);
+            const result = site_data.catalogStatus(context.target_tab_id,context.plugin_id,options.group) orelse return sdk.failure(output,id,.NotFound);
+            return sdk.result(output,id,result);
+        },
         .@"siteData.update" => {
             if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);
             const options = decode(sdk.SiteDataUpdate,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
@@ -456,7 +464,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"siteData.refresh", .@"siteData.openInspector" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
-            return sdk.result(output,id,native.moon_site_data_action(context.target_tab_id,owner.ptr,method == .@"siteData.openInspector"));
+            const action = if (method == .@"siteData.openInspector") native.MOON_SITE_INSPECTOR else native.MOON_SITE_REFRESH;
+            return sdk.result(output,id,native.moon_site_data_action(context.target_tab_id,owner.ptr,action));
         },
         .@"reading.find" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

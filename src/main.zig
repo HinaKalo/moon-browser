@@ -209,6 +209,7 @@ fn snapshotFor(tab: *const Tab) plugins.Snapshot {
     return .{
         .id = tab.id, .title = tab.title, .url = tab.url,
         .bookmarkable = tab.has_document and !tab.extension and !tab.loading,
+        .navigation = tab.navigation,
     };
 }
 fn tabIndex(id: u64) ?usize {
@@ -1708,14 +1709,18 @@ export fn moon_site_data_open(id: [*c]const u8, source: u64, expected: [*c]const
     return true;
 }
 
-export fn moon_site_data_action(panel: u64, id: [*c]const u8, inspector: bool) bool {
+export fn moon_site_data_action(panel: u64, id: [*c]const u8, action: c_int) bool {
     if (stopped or count == 0 or tabs[active].id != panel) return false;
     const source = site_data.selected(panel,slice(id)) orelse return false;
     const index = tabIndex(source) orelse return false;
     const tab = &tabs[index];
     const view = tab.view orelse return false;
     if (tab.extension or tab.loading or !tab.loaded) return false;
-    if (!inspector) return site_data.request(view);
+    if (action == native.MOON_SITE_REFRESH) return site_data.request(view);
+    if (action == native.MOON_SITE_CATALOG) {
+        site_data.requestCatalog(view);
+        return true;
+    }
     if (!plugins.systemEnabled(.@"page.inspect")) return false;
     chooseTab(index,true);
     return native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.resources),false);
@@ -1734,8 +1739,9 @@ export fn moon_site_data_update(panel: u64, id: [*c]const u8, session: bool, ent
     return site_data.update(view,panel,owner,target,if (value!=null) value[0..length] else null);
 }
 
-export fn moon_site_data_result(source: u64, request: u64, snapshot: [*c]const u8) void {
-    if (!stopped) site_data.complete(source,request,slice(snapshot));
+export fn moon_site_data_result(source: u64, request: u64, snapshot: [*c]const u8, catalog: bool) void {
+    if (stopped) return;
+    if (catalog) site_data.completeCatalog(source,request,slice(snapshot)) else site_data.complete(source,request,slice(snapshot));
 }
 
 fn checkFindGrant() void {

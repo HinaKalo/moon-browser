@@ -54,6 +54,7 @@ class Fixture(BaseHTTPRequestHandler):
     change_site_data_source = Event()
     change_site_data_entry = Event()
     site_data_entry_changed = Event()
+    site_data_catalog_ready = Event()
     change_page_source = Event()
     navigate_from_site_menu = Event()
     page_source_requests = 0
@@ -140,6 +141,9 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = action, "text/plain"
         elif path == "/site-data-entry-changed":
             self.site_data_entry_changed.set()
+            data, content_type = b"ok", "text/plain"
+        elif path == "/site-data-catalog-ready":
+            self.site_data_catalog_ready.set()
             data, content_type = b"ok", "text/plain"
         elif path == "/page-source-navigation":
             data, content_type = (b"change" if self.change_page_source.is_set() else b"wait"), "text/plain"
@@ -230,6 +234,15 @@ class Fixture(BaseHTTPRequestHandler):
                 demo = (
                     '<script>localStorage.setItem("moon-local","local-value");'
                     'sessionStorage.setItem("moon-session","session-value");'
+                    '(async()=>{await Promise.all(['
+                    'new Promise((ok,fail)=>{const request=indexedDB.open("moon-inventory",3);'
+                    'request.onupgradeneeded=()=>request.result.createObjectStore("records");'
+                    'request.onsuccess=()=>{request.result.close();ok()};request.onerror=fail}),'
+                    '(async()=>{await caches.open("moon-request-cache");await caches.open("月".repeat(150));'
+                    'await Promise.all(Array.from({length:32},(_,i)=>caches.open("cache-"+i)))})()]);'
+                    'IDBFactory.prototype.databases=async()=>[{name:"forged",version:88}];'
+                    'CacheStorage.prototype.keys=async()=>["forged"];'
+                    'fetch("/site-data-catalog-ready");})().catch(()=>{});'
                     'Object.defineProperty(document,"cookie",{get:()=>"forged=other"});'
                     'Storage.prototype.getItem=()=>"forged";'
                     'let changed=false;setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
@@ -879,6 +892,24 @@ def run_win32(exe, base, root):
             'row.querySelector("button").click();'
             '}const cookies=await host("siteData.list",{group:"cookies"});'
             'if(cookies.entries.some(row=>row.name==="moon-http-only"||row.name==="forged"))throw Error("cookie scope");'
+            'if(document.querySelector("[data-group=indexedDB]")){'
+            'const inventory=(group)=>wait(async()=>{const value=await host("siteData.catalog",{group});'
+            'return value.state!=="pending"&&value;},"storage catalog "+group);'
+            'document.querySelector("[data-group=indexedDB]").click();'
+            'const databases=await inventory("indexedDB");'
+            'if(databases.state!=="ready"||databases.generation!==result.generation||databases.cacheStorage||'
+            '!databases.indexedDB?.entries.some(entry=>entry.name==="moon-inventory"&&entry.version===3)||'
+            'databases.indexedDB.entries.some(entry=>entry.name==="forged"))throw Error("database catalog "+JSON.stringify(databases));'
+            'await wait(()=>el("results").textContent.includes("版本 3"),"rendered database version");'
+            'document.querySelector("[data-group=cacheStorage]").click();'
+            'const cached=(await inventory("cacheStorage")).cacheStorage;'
+            'if(!cached?.more||cached.entries.length!==32||!cached.entries.some(entry=>entry.name==="moon-request-cache")||'
+            '!cached.entries.some(entry=>entry.shortened&&entry.name==="月".repeat(128))||'
+            'cached.entries.some(entry=>entry.name==="forged"))throw Error("cache catalog "+JSON.stringify(cached));'
+            'await wait(()=>el("results").textContent.includes("moon-request-cache"),"rendered cache");'
+            'el("search").value="moon-request";el("search").dispatchEvent(new Event("input"));'
+            'if(el("results").children.length!==1)throw Error("catalog search");'
+            'el("search").value="";el("search").dispatchEvent(new Event("input"));}'
             'let cookieRejected=false;try{await host("siteData.update",{group:"cookies",id:0,generation:cookies.generation,value:"forbidden"});}'
             'catch(error){cookieRejected=error.message==="INVALID_PARAMS";}if(!cookieRejected)throw Error("cookie mutation");'
             'const rowFor=key=>[...document.querySelectorAll("#results li")].find(r=>r.querySelector("code").textContent===key);'
@@ -923,6 +954,9 @@ def run_win32(exe, base, root):
             'await wait(()=>!document.querySelector("#results li"),"clear rows");'
             'let rejected=false;try{await host("siteData.value",{group:"cookies",id:0,generation:result.generation});}'
             'catch(error){rejected=error.message==="NOT_FOUND";}if(!rejected)throw Error("stale credential read");'
+            'if(document.querySelector("[data-group=indexedDB]")){let staleCatalog=false;'
+            'try{await host("siteData.catalog",{group:"indexedDB"});}catch(error){staleCatalog=error.message==="NOT_FOUND";}'
+            'if(!staleCatalog)throw Error("catalog after navigation");}'
             'let writeRejected=false;try{await host("siteData.update",{...target,value:"after-navigation"});}'
             'catch(error){writeRejected=error.message==="NOT_FOUND";}if(!writeRejected)throw Error("mutation after navigation");'
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
@@ -1678,6 +1712,10 @@ def run_win32(exe, base, root):
             user.PostMessageW(edit,0x0100,0x0D,1)
             wait_for(lambda: ("Moon fixture site-data-contract",) in history_rows("SELECT title FROM visits WHERE url=?",(target,)),
                      "Site data fixture did not finish loading")
+            has_catalog = 'data-group="indexedDB"' in (site_data.parent / "site-data.html").read_text(encoding="utf-8")
+            if has_catalog:
+                if not Fixture.site_data_catalog_ready.wait(8):
+                    raise RuntimeError("The IndexedDB and Cache Storage fixture was not seeded")
             invoke("查看当前站点数据")
             wait_for(lambda: read_address() == "extension://moon.site-data/site-data.html",
                      "The bundled site data plugin did not open its page")
@@ -1707,6 +1745,8 @@ def run_win32(exe, base, root):
                               "The site data contract reported no navigation result",15)
             if not result.get("passed"):
                 raise RuntimeError(f"Site data invalidation: {result}")
+            if has_catalog:
+                print("site_catalog=ok indexeddb_version=ok cache_limit=ok isolated_apis=ok catalog_search=ok stale_catalog=ok",flush=True)
             print("site_data_system_plugin=ok isolated_storage=ok storage_edit=ok storage_remove=ok stale_write_rejected=ok conflict_preserved=ok site_data_navigation_cleanup=ok",flush=True)
         if page_source.exists():
             target = base + "/page/source-contract"

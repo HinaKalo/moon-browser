@@ -102,6 +102,7 @@ bool moon_engine_page_window(void *window);
 enum { MOON_SOURCE_LIMIT = 512 * 1024 };
 bool moon_engine_page_source(MoonView *view, uint64_t generation);
 bool moon_engine_inspect_site(MoonView *view, uint64_t request);
+bool moon_engine_inspect_catalog(MoonView *view, uint64_t request);
 bool moon_engine_update_site(MoonView *view, uint64_t request, const char *update);
 void moon_engine_find(MoonView *view, const char *query, bool backwards);
 void moon_engine_hide_find(MoonView *view);
@@ -187,10 +188,11 @@ void moon_web_popup(uint64_t source, const char *opener, const char *target, boo
 bool moon_popups_open(const char *owner, uint64_t source);
 bool moon_popups_open_blocked(const char *owner, uint64_t panel, uint64_t notice_id);
 bool moon_popups_change_allowed(const char *owner, uint64_t panel, const char *origin, bool allow);
-bool moon_site_data_action(uint64_t panel, const char *id, bool inspector);
+enum MoonSiteDataAction { MOON_SITE_REFRESH, MOON_SITE_INSPECTOR, MOON_SITE_CATALOG };
+bool moon_site_data_action(uint64_t panel, const char *id, int action);
 bool moon_site_data_update(uint64_t panel, const char *id, bool session, uint32_t entry, uint64_t generation,
     const char *value, size_t length);
-void moon_site_data_result(uint64_t source, uint64_t request, const char *snapshot);
+void moon_site_data_result(uint64_t source, uint64_t request, const char *snapshot, bool catalog);
 bool moon_plugin_open_page(const char *id);
 enum MoonPluginMenu {
     MOON_MENU_NONE, MOON_MENU_PINNED, MOON_MENU_PAGE, MOON_MENU_LIBRARY,

@@ -520,27 +520,28 @@ static bool add_message_handler(MoonView *view, const char *name, WKScriptMessag
 }
 static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef body,const void *context) {
     const MoonView *view=context;
-    if (!wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot") || !body ||
+    const bool catalog=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteCatalog");
+    if ((!catalog && !wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot")) || !body ||
         wk.WKGetTypeID(body)!=wk.WKStringGetTypeID()) return;
-    const size_t cap=512*1024+32;
+    const size_t cap=(catalog ? 64 : 512)*1024+32;
     char *response=malloc(cap);
     if (!response) return;
     const size_t n=wk.WKStringGetUTF8CString((WKStringRef)body,response,cap);
     if (n && n<cap && strlen(response)+1==n) {
         char *end=NULL;
         const uint64_t request=strtoull(response,&end,10);
-        if (end!=response && *end=='\n') moon_site_data_result(view->token,request,end+1);
+        if (end!=response && *end=='\n') moon_site_data_result(view->token,request,end+1,catalog);
     }
     free(response);
 }
-static bool send_site_request(MoonView *view,uint64_t request,const char *change) {
+static bool send_site_request(MoonView *view,uint64_t request,const char *change,bool catalog) {
     if (!filter_bundle_available || !view || view->extension_address) return false;
     char url[4096], payload[32*1024];
     moon_engine_committed_url(view,url,sizeof(url));
     if (!*url) return false;
     const int length=snprintf(payload,sizeof(payload),"%" PRIu64 "\n%s\n%s",request,url,change);
     if (length<0 || (size_t)length>=sizeof(payload)) return false;
-    WKStringRef name=wk.WKStringCreateWithUTF8CString("MoonInspectSite");
+    WKStringRef name=wk.WKStringCreateWithUTF8CString(catalog ? "MoonInspectCatalog" : "MoonInspectSite");
     WKStringRef body=wk.WKStringCreateWithUTF8CString(payload);
     const bool ok=name && body;
     if (ok) wk.WKPagePostMessageToInjectedBundle(view->page,name,body);
@@ -549,10 +550,13 @@ static bool send_site_request(MoonView *view,uint64_t request,const char *change
     return ok;
 }
 bool moon_engine_inspect_site(MoonView *view,uint64_t request) {
-    return send_site_request(view,request,"null");
+    return send_site_request(view,request,"null",false);
+}
+bool moon_engine_inspect_catalog(MoonView *view,uint64_t request) {
+    return send_site_request(view,request,"null",true);
 }
 bool moon_engine_update_site(MoonView *view,uint64_t request,const char *update) {
-    return send_site_request(view,request,update);
+    return send_site_request(view,request,update,false);
 }
 
 static MoonView *open_view(uint64_t token, const char *extension_id, const char *address) {

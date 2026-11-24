@@ -72,6 +72,7 @@ const Task = struct {
 };
 const MenuOverride = enum { default, pinned, hidden };
 const UserShortcut = struct { plugin: []const u8, command: []const u8, shortcut: []const u8 };
+const PendingShortcut = struct { action: usize, tab: u64, navigation: u64 };
 const Command = struct {
     id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false,
     shortcut: ?sdk.Shortcut = null,
@@ -104,6 +105,7 @@ const Plugin = struct {
     epoch: std.atomic.Value(u32) = .init(0),
     work: ?*Task = null,
     queued_change: bool = false,
+    pending_shortcut: ?PendingShortcut = null,
     hotkey: ?Hotkey = null,
 };
 
@@ -461,6 +463,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
     };
     _ = plugin.epoch.fetchAdd(1, .acq_rel);
     plugin.queued_change = false;
+    plugin.pending_shortcut = null;
     return .saved;
 }
 
@@ -797,13 +800,23 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
     };
 }
 
+fn runShortcut(index: usize, command_index: usize, snapshot: ?Snapshot, repeated: bool) void {
+    const plugin = &all[index];
+    if (plugin.work==null) {
+        _ = launch(index,command_index,.command,snapshot);
+    } else if (!repeated) {
+        const tab = snapshot orelse return;
+        plugin.pending_shortcut = .{ .action=command_index,.tab=tab.id,.navigation=tab.navigation };
+    }
+}
+
 pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snapshot) bool {
     for (all[0..len],0..) |*plugin,index| {
         if (!plugin.enabled) continue;
         for (plugin.actions[0..plugin.action_count]) |entry| {
             const key = entry.user_shortcut orelse continue;
             if (key.mods != mods or key.key != vk) continue;
-            if (!repeated and plugin.work == null) _ = launch(index,key.action,.command,snapshot);
+            if (!repeated) runShortcut(index,key.action,snapshot,false);
             return true;
         }
     }
@@ -811,7 +824,7 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
         const key = plugin.hotkey orelse continue;
         if (!canContribute(plugin) or key.scope!=.browser or key.mods!=mods or key.key!=vk) continue;
         if (plugin.actions[key.action].user_shortcut != null) continue;
-        if (!repeated and plugin.work==null) _ = launch(index,key.action,.command,snapshot);
+        if (!repeated) runShortcut(index,key.action,snapshot,false);
         return true;
     }
     const key = defaultShortcut(mods,vk) orelse return false;
@@ -819,7 +832,7 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
         if (!plugin.enabled) continue;
         for (plugin.actions[0..plugin.action_count],0..) |entry,command_index| {
             if (entry.shortcut!=key or entry.user_shortcut!=null or registeredShortcut(index,command_index)!=null) continue;
-            if (plugin.work==null) command(index,command_index,snapshot);
+            runShortcut(index,command_index,snapshot,repeated);
             return true;
         }
     }
@@ -989,6 +1002,12 @@ pub fn tick(snapshot: ?Snapshot, smoking: bool) void {
         }
         if (task.rpc) |rpc| allocator.destroy(rpc);
         allocator.destroy(task);
+        if (plugin.pending_shortcut) |pending| {
+            plugin.pending_shortcut = null;
+            if (snapshot) |tab| {
+                if (tab.id==pending.tab and tab.navigation==pending.navigation and launch(index,pending.action,.command,snapshot)) continue;
+            }
+        }
         if (plugin.queued_change) {
             plugin.queued_change = false;
             _ = launch(index, 0, .changed, snapshot);
