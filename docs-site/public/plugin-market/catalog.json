@@ -18,7 +18,7 @@
     {
       "id": "moon.search",
       "name": "搜索引擎",
-      "description": "设置默认搜索引擎，并在地址栏使用自定义关键词。",
+      "description": "设置默认搜索引擎和关键词，选择地址栏的本机历史与书签建议。",
       "permission": "查看和修改浏览器搜索引擎",
       "url": "https://docs.browser.moonl.cloud/search.html"
     },

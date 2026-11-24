@@ -312,7 +312,7 @@ class Fixture(BaseHTTPRequestHandler):
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
                         "pinned-first", "pinned-second", "session-first", "session-second", "session-pinned", "session-private",
                         "session-external", "order-last", "order-edge", "group-first", "group-second", "group-outside",
-                        "shell-cold", "shell-warm", "shell-plain"):
+                        "shell-cold", "shell-warm", "shell-plain", "address-visited", "address-saved"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "chrome-window":
                 demo = (
@@ -669,6 +669,7 @@ def run_win32(exe, base, root):
     task_manager = exe.parent / "plugins" / "task-manager" / "MoonTaskManager.exe"
     commands = exe.parent / "plugins" / "ui-commands" / "MoonCommandExample.exe"
     search_plugin = exe.parent / "plugins" / "search" / "MoonSearch.exe"
+    search_suggestions = search_plugin.exists() and 'id="suggest-history"' in search_plugin.with_name("engines.html").read_text(encoding="utf-8")
     session_plugin = exe.parent / "plugins" / "session" / "MoonSession.exe"
     has_default_browser = session_plugin.is_file() and "browser.defaultApp" in json.loads(
         session_plugin.with_name("plugin.json").read_text(encoding="utf-8"))["permissions"]
@@ -1263,6 +1264,8 @@ def run_win32(exe, base, root):
             'for(const field of row.querySelectorAll("[data-field]")){field.value=engine[field.dataset.field];'
             'field.dispatchEvent(new Event("input",{bubbles:true}));}}'
             'preferred.value=rows()[0].dataset.key;'
+            'if(el("suggest-history")){if(!el("suggest-history").checked||!el("suggest-bookmarks").checked)'
+            'throw Error("local suggestion defaults");el("suggest-history").click();}'
             'if(!el("settings").checkValidity())throw Error("form rejected a valid engine");'
             'el("settings").requestSubmit();await wait(()=>!save.disabled&&status.textContent.length,"save did not finish");'
             'const state=await call("search.getConfig");'
@@ -1276,6 +1279,10 @@ def run_win32(exe, base, root):
             'if(await call("search.setConfig",{preferred:"g",custom:[{...first,alias:"g"}]})!=="duplicateAlias")'
             'throw Error("accepted a reserved alias");'
             'if((await call("search.getConfig")).config.preferred!=="probe")throw Error("invalid save changed the active configuration");'
+            'if(el("suggest-history")){'
+            'if(state.config.suggestHistory!==false||state.config.suggestBookmarks!==true)throw Error("source preferences did not save");'
+            'if(await call("search.setConfig",{preferred:"probe",custom:state.config.custom})!=="saved"||'
+            '(await call("search.getConfig")).config.suggestHistory!==false)throw Error("legacy save reset source preference");}'
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "engines.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
@@ -1445,6 +1452,38 @@ def run_win32(exe, base, root):
 
         def read_address():
             return read_control(edit)
+
+        def suggestion_popup(owner):
+            candidate=None
+            while candidate := user.FindWindowExW(None,candidate,"MoonAddressSuggestions",None):
+                if user.GetWindow(candidate,4)==owner and user.IsWindowVisible(candidate):
+                    return candidate
+            return None
+
+        def suggestions_for(control, query):
+            if control==edit:
+                user.PostMessageW(frame,0x0100,0x75,1)  # F6 focuses the toolbar address field.
+            else:
+                user.PostMessageW(control,0x0201,1,4|(4<<16))
+                user.PostMessageW(control,0x0202,0,4|(4<<16))
+            sleep(.15)
+            set_control(control,query)
+            popup=wait_for(lambda: suggestion_popup(frame),"Local address suggestions did not open")
+            bounds,anchor=wt.RECT(),wt.RECT()
+            user.GetWindowRect(popup,ctypes.byref(bounds))
+            user.GetWindowRect(control,ctypes.byref(anchor))
+            if min(abs(bounds.top-anchor.bottom),abs(bounds.bottom-anchor.top))>px(10) or \
+                    not (bounds.left<anchor.right and bounds.right>anchor.left):
+                raise RuntimeError("The suggestions did not follow their input anchor")
+            listing=user.FindWindowExW(popup,None,"ListBox",None)
+            count=user.SendMessageW(listing,0x018B,0,0)  # LB_GETCOUNT
+            entries=[]
+            for index in range(count):
+                label=ctypes.create_unicode_buffer(4630)
+                if user.SendMessageW(listing,0x0189,index,ctypes.addressof(label)) < 0:
+                    raise RuntimeError("Could not read the native address suggestion list")
+                entries.append(label.value)
+            return listing,entries
 
         def visible_children(parent):
             child = None
@@ -3084,6 +3123,14 @@ def run_win32(exe, base, root):
                 close_private(guest)
                 guest = open_private()
                 private_probe(guest,"private-reopened","")
+                if search_suggestions:
+                    guest_edit=user.GetDlgItem(guest,1001)
+                    user.PostMessageW(guest,0x0100,0x75,1)
+                    sleep(.15)
+                    set_control(guest_edit,"pinned-")
+                    sleep(.35)
+                    if suggestion_popup(guest):
+                        raise RuntimeError("The private window displayed ordinary-profile suggestions")
                 close_private(guest)
             finally:
                 for window in private_frames()-previous_private:
@@ -3095,6 +3142,33 @@ def run_win32(exe, base, root):
                   "cookies=ok local_storage=ok indexed_db=ok cache_isolation=ok no_history=ok "
                   f"private_cache_shared={'yes' if shared_cache else 'no'}",flush=True)
         if search_plugin.exists():
+            if search_suggestions:
+                saved=closed_page("address-saved")
+                invoke("将当前页加入书签")
+                wait_for(lambda: owned_window("#32770","书签"),"Could not save the local suggestion fixture")
+                visited=closed_page("address-visited")
+                listing,entries=suggestions_for(edit,"address-")
+                if len(entries)!=2 or not entries[0].endswith(saved) or not entries[1].endswith(visited):
+                    raise RuntimeError(f"Incorrect local ordering or duplicate URLs: {entries}")
+                user.PostMessageW(edit,0x0100,0x1B,1)
+                wait_for(lambda: not suggestion_popup(frame),"Escape did not close the suggestions")
+                if read_address()!="address-":
+                    raise RuntimeError("Dismissing the suggestion list changed the input")
+                listing,entries=suggestions_for(edit,"address-s")
+                if len(entries)!=1 or not entries[0].endswith(saved):
+                    raise RuntimeError(f"The changed query returned stale suggestions: {entries}")
+                user.PostMessageW(edit,0x0100,0x28,1)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: read_address()==saved and not suggestion_popup(frame),"Keyboard selection did not open the saved suggestion")
+                invoke("新建标签页")
+                home=user.GetDlgItem(frame,1002)
+                wait_for(lambda: user.IsWindowVisible(home),"The suggestions test could not open a new tab")
+                listing,entries=suggestions_for(home,"address-")
+                if len(entries)!=2:
+                    raise RuntimeError(f"The new tab did not show both suggestion sources: {entries}")
+                row_height=user.SendMessageW(listing,0x01A1,0,0)  # LB_GETITEMHEIGHT
+                user.PostMessageW(listing,0x0202,0,8|((row_height+7)<<16))
+                wait_for(lambda: read_address()==visited and not suggestion_popup(frame),"Mouse selection did not open the history suggestion")
             invoke("管理搜索引擎")
             wait_for(lambda: read_address()=="extension://moon.search/engines.html","The search command did not open its packaged settings page")
             set_control(edit,"extension://moon.search-fixture/engines.html")
@@ -3127,6 +3201,15 @@ def run_win32(exe, base, root):
             frame = browser_frame(proc)
             edit = user.GetDlgItem(frame,1001)
             wait_for(lambda: user.IsWindowVisible(user.GetDlgItem(frame,1002)),"Restarted shell did not initialize")
+            if search_suggestions:
+                listing,entries=suggestions_for(edit,"address-")
+                if len(entries)!=1 or not entries[0].endswith(saved):
+                    raise RuntimeError(f"The saved history preference did not survive restart: {entries}")
+                user.PostMessageW(listing,0x0200,0,8|(8<<16))  # Hover leaves Enter bound to the original input.
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: read_address()=="https://search-test.invalid/find?q=address-&scope=title",
+                         "Enter on an unselected list did not submit the typed search")
+                print("address_suggestions=ok keyboard=ok mouse=ok home=ok dedup=ok anchor=ok escape=ok plain_enter=ok source_preferences=ok",flush=True)
             search_input(edit,query,expected)
             print("search_engines=ok live_config=ok custom_default=ok palette_alias=ok home_search=ok utf8_encoding=ok validation=ok restart=ok",flush=True)
         if session_plugin.exists():

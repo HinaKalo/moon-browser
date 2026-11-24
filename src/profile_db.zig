@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const Database = opaque {};
 pub const Statement = opaque {};
+pub const Link = struct { title: []const u8, url: []const u8 };
 const Sqlite = struct {
     sqlite3_open: *const fn ([*:0]const u8,*?*Database) callconv(.c) c_int,
     sqlite3_close: *const fn (*Database) callconv(.c) c_int,
@@ -68,4 +69,29 @@ pub fn bindText(statement: *Statement, index: c_int, value: []const u8) !void {
 pub fn columnText(statement: *Statement, index: c_int) ![]const u8 {
     const value = sqlite.sqlite3_column_text(statement,index) orelse return error.IOError;
     return value[0..@intCast(sqlite.sqlite3_column_bytes(statement,index))];
+}
+
+pub fn findLinks(allocator: std.mem.Allocator, db: *Database, sql: [:0]const u8,
+    query: []const u8, output: []Link) ![]Link {
+    // Suggestions can be skipped if another process is holding the profile database.
+    _=sqlite.sqlite3_busy_timeout(db,0);
+    defer _=sqlite.sqlite3_busy_timeout(db,25);
+    const statement=try prepare(db,sql);
+    defer _=sqlite.sqlite3_finalize(statement);
+    try bindText(statement,1,query);
+    if (sqlite.sqlite3_bind_int64(statement,2,@intCast(output.len))!=ok) return error.IOError;
+    var length: usize=0;
+    while (length<output.len) {
+        switch (sqlite.sqlite3_step(statement)) {
+            done => break,
+            row => {},
+            else => return error.IOError,
+        }
+        const title=try columnText(statement,0);
+        const url=try columnText(statement,1);
+        if (title.len>511 or url.len>4095) continue;
+        output[length]=.{ .title=try allocator.dupe(u8,title),.url=try allocator.dupe(u8,url) };
+        length+=1;
+    }
+    return output[0..length];
 }

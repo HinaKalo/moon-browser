@@ -19,6 +19,7 @@ const market = @import("market.zig");
 const plugin_manager = @import("plugin_manager.zig");
 const updater = @import("updater.zig");
 const search = @import("search.zig");
+const profile_db = @import("profile_db.zig");
 const last_session = @import("session.zig");
 const tab_groups = @import("tab_groups.zig");
 
@@ -215,6 +216,48 @@ export fn moon_external_url_open(text: [*c]const u8) bool {
         addTab(url,true);
     }
     return true;
+}
+
+fn appendSuggestions(output: []native.MoonAddressSuggestion, length: *usize,
+    matches: []const profile_db.Link, bookmark: bool) void {
+    for (matches) |match| {
+        if (length.*==output.len) return;
+        if (!history.validURL(match.url)) continue;
+        for (output[0..length.*]) |*existing| {
+            if (equals(slice(&existing.url),match.url)) break;
+        } else {
+            const entry=&output[length.*];
+            if (!copy(&entry.url,match.url)) continue;
+            entry.title[0]=0;
+            if (std.unicode.utf8ValidateSlice(match.title) and std.mem.indexOfAny(u8,match.title,"\r\n\t")==null)
+                _=copy(&entry.title,match.title);
+            entry.bookmark=bookmark;
+            length.*+=1;
+        }
+    }
+}
+
+export fn moon_suggest_collect(input: [*c]const u8, rows: [*c]native.MoonAddressSuggestion, capacity: usize) usize {
+    if (stopped or input==null or rows==null or capacity==0 or native.moon_shell_private() or !plugins.systemEnabled(.@"search.manage")) return 0;
+    const query=std.mem.trim(u8,slice(input)," ");
+    if (query.len==0 or query.len>256 or query[0]=='@' or !std.unicode.utf8ValidateSlice(query)) return 0;
+    for (query) |byte| if (std.ascii.isControl(byte)) return 0;
+    const output=rows[0..@min(capacity,native.MOON_ADDRESS_SUGGESTION_LIMIT)];
+    const enabled=search.suggestionSources();
+    var arena=std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator=arena.allocator();
+    var matches: [native.MOON_ADDRESS_SUGGESTION_LIMIT*2]profile_db.Link=undefined;
+    var length: usize=0;
+    if (enabled.bookmarks and plugins.systemEnabled(.@"bookmarks.manage")) {
+        const results: []const profile_db.Link=bookmarks.suggest(allocator,query,matches[0..output.len]) catch &.{};
+        appendSuggestions(output,&length,results,true);
+    }
+    if (length<output.len and enabled.history and plugins.systemEnabled(.@"history.manage")) {
+        const results: []const profile_db.Link=history.suggest(allocator,query,&matches) catch &.{};
+        appendSuggestions(output,&length,results,false);
+    }
+    return length;
 }
 fn applySettings(profile: []const u8) void {
     var path: [4096]u8 = undefined;

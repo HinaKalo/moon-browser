@@ -8,6 +8,12 @@
 
 隐私窗口使用独立会话，地址栏采用浏览器内置的默认搜索规则。
 
+## 地址栏建议
+
+从 0.1.0-preview.44 起，普通窗口的地址栏和新标签页搜索框会匹配本机书签及浏览历史的标题和网址。用 ↑、↓ 选择后按 Enter 打开，也可直接点击。Esc 收起列表并保留输入。未选择建议时按 Enter，仍会使用输入的网址或提交搜索。
+
+进入「管理搜索引擎 → 地址栏建议」可以分别关闭书签和历史来源。建议不请求网络服务。隐私窗口关闭建议。
+
 ## 插件 API
 
 声明 `search.manage` 并获得授权后，可以调用以下方法。设置页与用户触发的原生命令均可保存配置。
@@ -15,6 +21,6 @@
 | 方法 | 参数与结果 |
 | --- | --- |
 | `search.getConfig` | 传入 `{}`，返回 `{ config, builtins, customLimit }`。 |
-| `search.setConfig` | 传入 `{ preferred, custom }`。默认引擎用关键词指定，自定义条目使用 `{ alias, name, template }`。返回 `saved` 或对应的校验结果。 |
+| `search.setConfig` | 传入 `{ preferred, custom, suggestHistory?, suggestBookmarks? }`。后两个字段省略时保留原有设置。返回 `saved` 或对应的校验结果。 |
 
 无效配置会保留当前设置。校验结果包括 `invalidAlias`、`duplicateAlias`、`invalidName`、`invalidTemplate`、`invalidDefault`、`tooMany` 和 `unavailable`。

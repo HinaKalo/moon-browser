@@ -115,6 +115,15 @@ pub fn list(allocator: std.mem.Allocator, options: sdk.HistoryQuery, buffer: *[2
     }
 }
 
+pub fn suggest(allocator: std.mem.Allocator, query: []const u8, output: []db_api.Link) ![]db_api.Link {
+    const db=try connection();
+    return db_api.findLinks(allocator,db,
+        \\SELECT title,url FROM bookmarks
+        \\WHERE instr(lower(title),lower(?1)) OR instr(lower(url),lower(?1))
+        \\ORDER BY (instr(lower(title),lower(?1))=1) DESC, id DESC LIMIT ?2
+    ,query,output);
+}
+
 fn importFile(allocator: std.mem.Allocator, file: [:0]const u8) !sdk.BookmarkTransfer {
     const input = try allocator.alloc(u8,html.byte_limit+1);
     defer allocator.free(input);

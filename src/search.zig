@@ -19,6 +19,8 @@ const State = struct {
     preferred: [17:0]u8 = @splat(0),
     custom: [sdk.search_custom_limit]StoredEngine = @splat(.{}),
     count: usize = 0,
+    suggest_history: bool = true,
+    suggest_bookmarks: bool = true,
 };
 var active: State = .{};
 
@@ -80,6 +82,8 @@ fn validated(config: sdk.SearchConfig, next: *State) sdk.SearchSave {
     }
     if (!validAlias(config.preferred) or templateFor(next,config.preferred)==null) return .invalidDefault;
     store(&next.preferred,config.preferred);
+    next.suggest_history = config.suggestHistory orelse active.suggest_history;
+    next.suggest_bookmarks = config.suggestBookmarks orelse active.suggest_bookmarks;
     return .saved;
 }
 
@@ -98,14 +102,22 @@ pub fn get(buffer: *[sdk.search_custom_limit]sdk.SearchEngine) sdk.SearchConfig 
         slot.* = .{ .alias=text(&engine.alias), .name=text(&engine.name), .template=text(&engine.template) };
     }
     const preferred = text(&active.preferred);
-    return .{ .preferred=if (preferred.len!=0) preferred else "g", .custom=buffer[0..active.count] };
+    return .{ .preferred=if (preferred.len!=0) preferred else "g", .custom=buffer[0..active.count],
+        .suggestHistory=active.suggest_history,.suggestBookmarks=active.suggest_bookmarks };
+}
+
+pub fn suggestionSources() struct { history: bool, bookmarks: bool } {
+    return .{ .history=active.suggest_history,.bookmarks=active.suggest_bookmarks };
 }
 
 pub fn save(allocator: std.mem.Allocator, config: sdk.SearchConfig, value: std.json.Value) sdk.SearchSave {
     var next: State = .{};
     const status = validated(config,&next);
     if (status!=.saved) return status;
-    settings.write(allocator,owner,value) catch return .unavailable;
+    var saved=value;
+    saved.object.put(allocator,"suggestHistory",.{ .bool=next.suggest_history }) catch return .unavailable;
+    saved.object.put(allocator,"suggestBookmarks",.{ .bool=next.suggest_bookmarks }) catch return .unavailable;
+    settings.write(allocator,owner,saved) catch return .unavailable;
     active = next;
     return .saved;
 }

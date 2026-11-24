@@ -72,6 +72,9 @@ enum { MOON_DEFAULT_APPS_OPENED, MOON_DEFAULT_APPS_INSTALL_REQUIRED, MOON_DEFAUL
 int moon_shell_open_default_apps(void);
 bool moon_external_url_valid(const char *url);
 bool moon_external_url_open(const char *url);
+enum { MOON_ADDRESS_SUGGESTION_LIMIT = 6 };
+typedef struct { char title[512], url[4096]; bool bookmark; } MoonAddressSuggestion;
+size_t moon_suggest_collect(const char *query, MoonAddressSuggestion *output, size_t capacity);
 const char *moon_app_dir(void);
 uint64_t moon_clock(void);
 uint64_t moon_wall_ms(void);

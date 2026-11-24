@@ -39,6 +39,7 @@ static ID2D1SolidColorBrush *brush;
 static ULONG_PTR gdiplus;
 static bool force_fallback, quitting, private_window;
 static bool show_home, focus_mode, tracking_mouse;
+static bool syncing_address;
 static POINT hover = {-1,-1};
 static struct {
     uint64_t source;
@@ -654,6 +655,7 @@ static void chrome_frame(HWND hwnd) {
     EndPaint(hwnd,&paint);
 }
 static void layout(void) {
+    moon_suggest_hide();
     RECT r;
     GetClientRect(frame,&r);
     int width=client_width(), height=client_height();
@@ -766,7 +768,12 @@ void moon_shell_address(const char *value, bool force) {
     if (!moon_utf16(value,wide,ARRAYSIZE(wide))) return;
     wchar_t current[4096];
     GetWindowTextW(address,current,ARRAYSIZE(current));
-    if (wcscmp(current,wide)!=0) SetWindowTextW(address,wide);
+    if (force) moon_suggest_hide();
+    if (wcscmp(current,wide)!=0) {
+        syncing_address=true;
+        SetWindowTextW(address,wide);
+        syncing_address=false;
+    }
 }
 void moon_shell_status(const char *value) {
     moon_utf16(value,content_status,ARRAYSIZE(content_status));
@@ -1397,8 +1404,12 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             }
             return 0;
         case WM_MOVE: case WM_EXITSIZEMOVE:
+            moon_suggest_hide();
             queue_presentation(hwnd);
             return 0;
+        case WM_ACTIVATE:
+            if (LOWORD(wp)==WA_INACTIVE) moon_suggest_hide();
+            break;
         case WM_DISPLAYCHANGE: case WM_DWMCOMPOSITIONCHANGED:
             release_target();
             if (msg==WM_DISPLAYCHANGE && fullscreen) fit_fullscreen(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST));
@@ -1431,6 +1442,10 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             SetTextColor((HDC)wp,rgb(theme->text));
             return (LRESULT)address_brush;
         case WM_COMMAND:
+            if ((HWND)lp==address || (HWND)lp==home_edit) {
+                if (HIWORD(wp)==EN_CHANGE && !syncing_address) moon_suggest_change((HWND)lp);
+                else if (HIWORD(wp)==EN_KILLFOCUS) moon_suggest_hide();
+            }
             if (LOWORD(wp)==FULLSCREEN_EXIT_CONTROL && HIWORD(wp)==BN_CLICKED && (HWND)lp==fullscreen_exit)
                 moon_shell_leave_fullscreen();
             if (HIWORD(wp)==EN_SETFOCUS || HIWORD(wp)==EN_KILLFOCUS) InvalidateRect(hwnd,NULL,FALSE);
@@ -1498,6 +1513,10 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             }
             return 0;
         case WM_TIMER:
+            if (wp==MOON_SUGGEST_TIMER) {
+                moon_suggest_update();
+                return 0;
+            }
             if (wp==MAINTENANCE_TIMER) moon_command(MOON_TICK,0,NULL);
             if (wp==TAB_DRAG_TIMER) scroll_tab_drag();
             if (wp==PRESENTATION_TIMER) {
@@ -1558,7 +1577,10 @@ static bool keyboard(MSG *msg) {
         if (!repeated) moon_shell_leave_fullscreen();
         return true;
     }
-    if ((msg->hwnd==address || msg->hwnd==home_edit) && msg->wParam==VK_RETURN && !ctrl && !alt && !moon_ime_composing(msg->hwnd)) {
+    const bool in_address=msg->hwnd==address || msg->hwnd==home_edit;
+    if (in_address && !modifiers && !moon_ime_composing(msg->hwnd) && moon_suggest_key(msg->hwnd,msg->wParam)) return true;
+    if (in_address && msg->wParam==VK_RETURN && !ctrl && !alt && !moon_ime_composing(msg->hwnd)) {
+        moon_suggest_hide();
         wchar_t wide[4096];
         char value[16384];
         GetWindowTextW(msg->hwnd,wide,ARRAYSIZE(wide));

@@ -26,4 +26,9 @@ enum { MOON_FIND_MATCH_LIMIT = 999 };
 void moon_find_layout(void);
 bool moon_find_key(MSG *message);
 bool moon_ime_composing(HWND input);
+enum { MOON_SUGGEST_TIMER = 5 };
+void moon_suggest_change(HWND input);
+void moon_suggest_hide(void);
+void moon_suggest_update(void);
+bool moon_suggest_key(HWND input, WPARAM key);
 #endif

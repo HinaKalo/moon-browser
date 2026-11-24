@@ -120,7 +120,12 @@ pub const TabGroupResult = enum(c_int) { saved, unavailable, limitReached, inval
 pub const DefaultAppsResult = enum(c_int) { opened, installRequired, unavailable };
 pub const search_custom_limit = 5;
 pub const SearchEngine = struct { alias: []const u8, name: []const u8, template: []const u8 };
-pub const SearchConfig = struct { preferred: []const u8 = "g", custom: []const SearchEngine = &.{} };
+pub const SearchConfig = struct {
+    preferred: []const u8 = "g",
+    custom: []const SearchEngine = &.{},
+    suggestHistory: ?bool = null,
+    suggestBookmarks: ?bool = null,
+};
 pub const SearchState = struct { config: SearchConfig, builtins: []const SearchEngine, customLimit: usize };
 pub const SearchSave = enum { saved, invalidAlias, duplicateAlias, invalidName, invalidTemplate, invalidDefault, tooMany, unavailable };
 pub const PrivacySelection = struct { history: bool = false, siteData: bool = false, cache: bool = false };

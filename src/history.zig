@@ -126,3 +126,12 @@ pub fn clear() !void {
     const db = try connection();
     if (sqlite.sqlite3_exec(db,"DELETE FROM visits",null,null,null) != ok) return error.IOError;
 }
+
+pub fn suggest(allocator: std.mem.Allocator, query: []const u8, output: []db_api.Link) ![]db_api.Link {
+    const db=try connection();
+    return db_api.findLinks(allocator,db,
+        \\SELECT title,url,MAX(id) FROM visits
+        \\WHERE instr(lower(title),lower(?1)) OR instr(lower(url),lower(?1))
+        \\GROUP BY url ORDER BY (instr(lower(title),lower(?1))=1) DESC, MAX(id) DESC LIMIT ?2
+    ,query,output);
+}
