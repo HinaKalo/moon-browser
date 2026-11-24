@@ -185,7 +185,7 @@ uint64_t moon_tab_id(size_t index);
 enum {
     MOON_TAB_DORMANT = 1, MOON_TAB_FAILED = 2, MOON_TAB_LOADING = 4, MOON_TAB_PINNED = 8,
     MOON_TAB_MUTED = 16, MOON_TAB_CAN_PIN = 32, MOON_TAB_CAN_MUTE = 64,
-    MOON_TAB_CAN_DUPLICATE = 128, MOON_TAB_CAN_COPY_ADDRESS = 256, MOON_TAB_HAS_SITE = 512
+    MOON_TAB_CAN_DUPLICATE = 128, MOON_TAB_CAN_COPY_ADDRESS = 256, MOON_TAB_HAS_SITE = 512, MOON_TAB_SITE_MUTED = 1024
 };
 enum { MOON_TAB_ORGANIZE = 1, MOON_TAB_MANAGE = 2, MOON_TAB_GROUPS = 4 };
 unsigned moon_tab_tools_permissions(void);
@@ -220,6 +220,13 @@ enum { MOON_AUTOPLAY_DEFAULT, MOON_AUTOPLAY_ALLOW, MOON_AUTOPLAY_MUTED, MOON_AUT
 bool moon_autoplay_rules_active(void);
 unsigned moon_autoplay_mode(const char *url);
 bool moon_autoplay_change_allowed(const char *owner, uint64_t panel, const char *origin, bool allow);
+bool moon_site_sound_rules_active(void);
+bool moon_site_sound_mutes(const char *url);
+bool moon_site_sound_panel_allowed(const char *owner, uint64_t panel);
+unsigned moon_site_sound_toggle(const char *owner, uint64_t tab, uint64_t navigation);
+void moon_site_sound_update(void);
+void moon_engine_site_mute(MoonView *view, bool muted);
+bool moon_engine_site_muted(const MoonView *view);
 enum MoonSiteDataAction { MOON_SITE_REFRESH, MOON_SITE_INSPECTOR, MOON_SITE_CATALOG };
 bool moon_site_data_action(uint64_t panel, const char *id, int action);
 bool moon_site_data_cookie_url(uint64_t panel, const char *id, char *url, size_t cap);
@@ -236,7 +243,7 @@ enum MoonPluginMenu {
 };
 unsigned moon_plugin_action_menu(size_t index, size_t command);
 bool moon_plugin_action_site_menu(size_t index, size_t command);
-typedef struct { uint64_t tab_id, navigation; char origin[320]; } MoonSiteContext;
+typedef struct { uint64_t tab_id, navigation; bool site_muted, tab_muted; char origin[320]; } MoonSiteContext;
 bool moon_site_context(MoonSiteContext *site);
 void moon_site_menu_run(const MoonSiteContext *site, size_t index, size_t command);
 enum MoonLinkMenu { MOON_LINK_OPEN = 1, MOON_LINK_COPY, MOON_LINK_BOOKMARK, MOON_LINK_MENU_STRIDE = 12 };

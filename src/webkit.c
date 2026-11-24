@@ -134,6 +134,7 @@ struct MoonView {
     InspectorPicker picker;
     uint64_t picker_deadline;
     bool docked, inspector_visible;
+    bool tab_muted, site_muted;
     uint64_t token;
     uintptr_t extension_serial;
     WKUserContentControllerRef extension_controller;
@@ -202,14 +203,18 @@ static bool safe_method(WKURLRequestRef request) {
     release(method);
     return safe;
 }
-static WKWebsitePoliciesRef autoplay_policies(WKNavigationActionRef action, WKURLRequestRef request) {
-    if (!request || !moon_autoplay_rules_active()) return NULL;
+static WKWebsitePoliciesRef media_policies(MoonView *view, WKNavigationActionRef action, WKURLRequestRef request) {
+    const bool autoplay=moon_autoplay_rules_active(), sound=moon_site_sound_rules_active();
+    if (!request || (!autoplay && !sound)) return NULL;
     WKFrameInfoRef frame=wk.WKNavigationActionCopyTargetFrameInfo(action);
     const bool main=frame && wk.WKFrameInfoGetIsMainFrame(frame);
     release(frame);
     if (!main) return NULL;
     char url[4096];
     copy_url(wk.WKURLRequestCopyURL(request),url,sizeof(url));
+    // Mute before the new document starts. Restore sound at commit when leaving a muted site.
+    if (sound && moon_site_sound_mutes(url)) moon_engine_site_mute(view,true);
+    if (!autoplay) return NULL;
     enum WKWebsiteAutoplayPolicy policy;
     switch (moon_autoplay_mode(url)) {
         case MOON_AUTOPLAY_ALLOW: policy=kWKWebsiteAutoplayPolicyAllow; break;
@@ -225,7 +230,7 @@ static WKWebsitePoliciesRef autoplay_policies(WKNavigationActionRef action, WKUR
 static void navigation_action(WKPageRef page, WKNavigationActionRef action, WKFramePolicyListenerRef listener,
                               WKTypeRef user, const void *client) {
     WKURLRequestRef request = wk.WKNavigationActionCopyRequest(action);
-    const MoonView *view = client;
+    MoonView *view = (MoonView *)client;
     if (view->extension_address) {
         char url[4096];
         copy_url(request ? wk.WKURLRequestCopyURL(request) : NULL,url,sizeof(url));
@@ -249,7 +254,7 @@ static void navigation_action(WKPageRef page, WKNavigationActionRef action, WKFr
     if (!allowed) wk.WKFramePolicyListenerIgnore(listener);
     else if (wk.WKNavigationActionShouldPerformDownload(action)) wk.WKFramePolicyListenerDownload(listener);
     else {
-        WKWebsitePoliciesRef policies=autoplay_policies(action,request);
+        WKWebsitePoliciesRef policies=media_policies(view,action,request);
         if (policies) wk.WKFramePolicyListenerUseWithPolicies(listener,policies);
         else wk.WKFramePolicyListenerUse(listener);
         release(policies);
@@ -1133,9 +1138,20 @@ bool moon_engine_restore(MoonView *view, const void *state) {
 const void *moon_engine_retain_state(const void *state) { return state ? wk.WKRetain(state) : NULL; }
 void moon_engine_release_state(const void *state) { release(state); }
 uint32_t moon_engine_pid(MoonView *view) { return (uint32_t)wk.WKPageGetProcessIdentifier(view->page); }
-void moon_engine_mute(MoonView *view, bool muted) {
-    wk.WKPageSetMuted(view->page, muted ? kWKMediaAudioMuted : kWKMediaNoneMuted);
+static void apply_audio_mute(MoonView *view) {
+    wk.WKPageSetMuted(view->page, view->tab_muted || view->site_muted ? kWKMediaAudioMuted : kWKMediaNoneMuted);
 }
+void moon_engine_mute(MoonView *view, bool muted) {
+    if (view->tab_muted==muted) return;
+    view->tab_muted=muted;
+    apply_audio_mute(view);
+}
+void moon_engine_site_mute(MoonView *view, bool muted) {
+    if (view->site_muted==muted) return;
+    view->site_muted=muted;
+    apply_audio_mute(view);
+}
+bool moon_engine_site_muted(const MoonView *view) { return view->site_muted; }
 bool moon_engine_media(MoonView *view) {
     WKMediaState state = wk.WKPageGetMediaState(view->page);
     return state & (kWKMediaIsPlayingAudio | kWKMediaIsPlayingVideo | kWKMediaHasActiveAudioCaptureDevice |

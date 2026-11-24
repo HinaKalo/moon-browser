@@ -12,6 +12,7 @@ const site_data = @import("site_data.zig");
 const page_source = @import("page_source.zig");
 const popups = @import("popup_policy.zig");
 const autoplay = @import("autoplay_policy.zig");
+const site_sound = @import("site_sound.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const privacy = @import("privacy.zig");
 const search = @import("search.zig");
@@ -63,6 +64,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"page.saveHtml" => .@"page.save",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
         .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => .@"siteSettings.autoplay",
+        .@"siteSettings.sound.get", .@"siteSettings.sound.set", .@"siteSettings.sound.toggle" => .@"siteSettings.sound",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
@@ -198,6 +200,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
+        .@"siteSettings.sound.get", .@"siteSettings.sound.set" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         .@"tabs.groups.list", .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve" => {},
         .@"privacy.clear", .@"privacy.status" => {},
@@ -217,6 +220,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.bar.toggle", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find", .@"pageSource.open", .@"pageSource.status",
         .@"popups.open", .@"popups.status", .@"siteSettings.autoplay.get", .@"downloads.clearCompleted", .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink",
+        .@"siteSettings.sound.get", .@"siteSettings.sound.toggle",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig",
         .@"tabs.session.status", .@"tabs.session.restore", .@"tabs.session.forget" => {
@@ -401,6 +405,30 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                 else => .InternalError,
             });
             return sdk.result(output,id,true);
+        },
+        .@"siteSettings.sound.get" => {
+            if (!context.from_page or native.moon_shell_private()) return sdk.failure(output,id,.PermissionDenied);
+            var buffer: site_sound.Buffer = undefined;
+            return sdk.result(output,id,site_sound.status(context.target_tab_id,context.plugin_id,&buffer));
+        },
+        .@"siteSettings.sound.set" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const rule = decode(sdk.SiteSoundRule,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const key = popups.origin(rule.origin) orelse return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (!native.moon_site_sound_panel_allowed(owner.ptr,context.target_tab_id)) return sdk.failure(output,id,.PermissionDenied);
+            site_sound.save(allocator,key,rule.muted) catch |err| return sdk.failure(output,id,switch (err) {
+                error.LimitExceeded => .LimitExceeded,
+                else => .InternalError,
+            });
+            native.moon_site_sound_update();
+            return sdk.result(output,id,true);
+        },
+        .@"siteSettings.sound.toggle" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const changed = native.moon_site_sound_toggle(owner.ptr,context.target_tab_id,context.target_navigation);
+            return sdk.result(output,id,std.enums.fromInt(sdk.SiteSoundResult,changed) orelse .unavailable);
         },
         .@"ui.openPage" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

@@ -28,6 +28,7 @@ pub const Permission = enum {
     @"siteData.write",
     @"siteData.cookieDetails",
     @"siteSettings.autoplay",
+    @"siteSettings.sound",
     @"tabs.session.manage",
     @"bookmarks.transfer",
     @"page.source",
@@ -106,6 +107,9 @@ pub const PopupRule = struct { origin: []const u8, mode: PopupMode };
 pub const AutoplayMode = enum(c_uint) { automatic, allow, muted, block };
 pub const AutoplayRule = struct { origin: []const u8, mode: AutoplayMode };
 pub const AutoplaySettings = struct { currentOrigin: ?[]const u8, rules: []const AutoplayRule };
+pub const SiteSoundRule = struct { origin: []const u8, muted: bool };
+pub const SiteSoundSettings = struct { currentOrigin: ?[]const u8, muted: []const []const u8 };
+pub const SiteSoundResult = enum(c_uint) { unavailable, muted, unmuted, limitReached };
 pub const PopupNotice = struct { id: u64, count: u32, targetOrigin: []const u8 };
 pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
 pub const TabChange = struct { tabId: ?[]const u8 };
@@ -271,6 +275,9 @@ pub const Method = enum {
     @"popups.openBlocked",
     @"siteSettings.autoplay.get",
     @"siteSettings.autoplay.set",
+    @"siteSettings.sound.get",
+    @"siteSettings.sound.set",
+    @"siteSettings.sound.toggle",
     @"ui.openPage",
     @"history.list",
     @"history.remove",

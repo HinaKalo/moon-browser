@@ -720,6 +720,7 @@ def run_win32(exe, base, root):
     popup_manifest = json.loads(popups.with_name("plugin.json").read_text(encoding="utf-8")) if popups.exists() else {}
     popup_command = popup_manifest.get("contributes",{}).get("commands",[{}])[0].get("label","管理网站弹窗")
     autoplay_settings = "siteSettings.autoplay" in popup_manifest.get("permissions",[])
+    sound_settings = "siteSettings.sound" in popup_manifest.get("permissions",[])
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     recent = exe.parent / "plugins" / "recent-tabs" / "MoonRecentTabs.exe"
     privacy = exe.parent / "plugins" / "privacy" / "MoonPrivacy.exe"
@@ -753,7 +754,7 @@ def run_win32(exe, base, root):
             {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
             {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
             {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True,
-             "popups_manage": popups.exists(), "site_settings_autoplay": autoplay_settings},
+             "popups_manage": popups.exists(), "site_settings_autoplay": autoplay_settings, "site_settings_sound": sound_settings},
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
@@ -814,6 +815,9 @@ def run_win32(exe, base, root):
             ('const autoplayDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"12",method:"siteSettings.autoplay.get",params:{}}));'
              'if(JSON.parse(autoplayDenied).error?.code!==-32001)return;' if autoplay_settings else '') +
+            ('const soundDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"13",method:"siteSettings.sound.get",params:{}}));'
+             'if(JSON.parse(soundDenied).error?.code!==-32001)return;' if sound_settings else '') +
             ('const downloadsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"10",method:"downloads.clearCompleted",params:{}}));'
              'if(JSON.parse(downloadsDenied).error?.code!==-32001)return;'
@@ -838,7 +842,8 @@ def run_win32(exe, base, root):
             "id": "moon.history-fixture", "name": "History API fixture", "version": "1.0.0",
             "apiVersion": 2, "runtime": "native", "entry": "Unused.exe", "settingsPage": "history.html",
             "permissions": ["history.manage"] + (["popups.manage"] if popups.exists() else []) +
-                           (["siteSettings.autoplay"] if autoplay_settings else []),
+                           (["siteSettings.autoplay"] if autoplay_settings else []) +
+                           (["siteSettings.sound"] if sound_settings else []),
             "contributes": {"commands": [{"id": "open", "label": "History fixture"}]},
         }), encoding="utf-8")
         bundled_page = (history.parent / "history.html").read_text(encoding="utf-8")
@@ -851,6 +856,9 @@ def run_win32(exe, base, root):
             'if(el)return el;await new Promise(resolve=>setTimeout(resolve,50));}throw new Error("UI timeout");};'
             'try{'
             'const options=JSON.parse(await api.moonSettings.postMessage(JSON.stringify({op:"read"}))).value;'
+            'if(options?.sound){const change=await call("siteSettings.sound.set",options.sound);'
+            'const state=await call("siteSettings.sound.get");'
+            'await api.moonSettings.postMessage(JSON.stringify({op:"write",value:{soundResult:change.result??false,muted:state.result?.muted}}));return;}'
             'if(options?.autoplayMode){const reply=await call("siteSettings.autoplay.set",{origin:options.origin,mode:options.autoplayMode});'
             'const autoplayResult=reply.result===true?"saved":reply.error?.data?.reason||"unexpected";'
             'const rules=(await call("siteSettings.autoplay.get")).result?.rules;'
@@ -2407,6 +2415,67 @@ def run_win32(exe, base, root):
                 if rules != [{"origin":allow_origin,"mode":"allow"}]:
                     raise RuntimeError(f"Unexpected persisted autoplay rules: {rules}")
                 print("site_settings_autoplay=ok allow_confirmation=ok muted=ok strict_block=ok redirect_scope=ok reset=ok persisted=ok",flush=True)
+            if sound_settings:
+                def visit_sound(url):
+                    set_control(edit,url)
+                    user.PostMessageW(edit,0x0100,0x0D,1)
+                    wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(url,)),"The sound fixture page did not load")
+
+                def sound_menu(choose=None):
+                    bounds=wt.RECT()
+                    user.GetWindowRect(edit,ctypes.byref(bounds))
+                    trigger=wt.POINT(bounds.left-px(16),bounds.top+px(10))
+                    user.ScreenToClient(frame,ctypes.byref(trigger))
+                    return native_entries(trigger=lambda: click(trigger.x,trigger.y),choose=choose)
+
+                def set_sound_rule(origin, muted, expected):
+                    config=profile/f'extension-{sha256(b"moon.history-fixture").hexdigest()}.json'
+                    pending=config.with_suffix(".sound-signal")
+                    pending.write_text(json.dumps({"sound":{"origin":origin,"muted":muted}}),encoding="utf-8")
+                    pending.replace(config)
+                    set_control(edit,"extension://moon.history-fixture/history.html")
+                    user.PostMessageW(edit,0x0100,0x0D,1)
+                    result=wait_for(lambda: (state:=read_settings(config)) and "soundResult" in state and state,"The site sound settings did not respond")
+                    if result!={"soundResult":True,"muted":expected}:
+                        raise RuntimeError(f"Unexpected sound rules from the settings API: {result}")
+
+                first, second = base+"/page/site-sound-one", base+"/page/site-sound-two"
+                visit_sound(first)
+                sound_menu("切换网站静音")
+                muted_sites=profile/"muted-sites.json"
+                wait_for(lambda: muted_sites.exists(),"The sound command did not persist its rule")
+                if json.loads(muted_sites.read_text(encoding="utf-8"))!=[base] or "此网站已静音" not in sound_menu():
+                    raise RuntimeError("Muting did not apply to the current page")
+                invoke("新建标签页")
+                wait_for(lambda: user.IsWindowVisible(home),"The second site sound tab did not open")
+                visit_sound(second)
+                if "此网站已静音" not in sound_menu():
+                    raise RuntimeError("A new tab at the same origin was not muted")
+                visit_sound(allow_origin+"/page/site-sound-other")
+                if "此网站已静音" in sound_menu():
+                    raise RuntimeError("The mute followed the tab across origins")
+                invoke("Moon fixture site-sound-one")
+                wait_for(lambda: read_address()==first,"Could not switch to the first muted tab")
+                if tab_tools.exists():
+                    invoke("切换当前标签的静音状态")
+                    wait_for(lambda: "此标签页已静音" in sound_menu(),"The tab mute did not show separately from the site mute")
+                sound_menu("切换网站静音")
+                wait_for(lambda: read_settings(muted_sites)==[],"The sound command did not clear its rule")
+                menu=sound_menu()
+                if "此网站已静音" in menu or (tab_tools.exists() and "此标签页已静音" not in menu):
+                    raise RuntimeError("Clearing the site rule changed independent tab mute state")
+                if tab_tools.exists():
+                    invoke("切换当前标签的静音状态")
+                    wait_for(lambda: "此标签页已静音" not in sound_menu(),"Tab mute did not clear independently")
+                invoke("新建标签页")
+                wait_for(lambda: user.IsWindowVisible(home),"The site sound settings test tab did not open")
+                set_sound_rule(base+"/ignored",True,[base])
+                invoke("Moon fixture site-sound-one")
+                wait_for(lambda: read_address()==first,"Could not check the existing tab after changing its sound permission")
+                if "此网站已静音" not in sound_menu():
+                    raise RuntimeError("Saving from a settings page did not mute an existing background tab")
+                set_sound_rule(base,False,[])
+                print("site_settings_sound=ok site_menu=ok cross_tab=ok origin_isolation=ok tab_mute_independent=ok persisted=ok",flush=True)
         if reading.exists():
             def navigate_reading(url):
                 set_control(edit,url)

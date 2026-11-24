@@ -531,8 +531,9 @@ static void paint_sidebar(Canvas c,int height) {
         }
         wchar_t label[512];
         if (!moon_utf16(moon_tab_label(tab),label,ARRAYSIZE(label))) wcscpy(label,L"\u6807\u7b7e\u9875");
-        text_at(c,label,x+indent+38,y,w-indent-71-((flags&MOON_TAB_MUTED)?20:0),ROW-3,selected?theme->text:theme->muted,false);
-        if (flags&MOON_TAB_MUTED)
+        const bool audio_muted=flags&(MOON_TAB_MUTED|MOON_TAB_SITE_MUTED);
+        text_at(c,label,x+indent+38,y,w-indent-71-(audio_muted?20:0),ROW-3,selected?theme->text:theme->muted,false);
+        if (audio_muted)
             text_at(c,L"\xd83d\xdd07",x+w-51,y+3,20,ROW-9,theme->muted,true);
         if ((selected || hot) && !(flags&MOON_TAB_PINNED)) icon_button(c,L"\xd7",x+w-29,y+3,25,ROW-9,true);
     }
@@ -997,6 +998,8 @@ static bool site_menu(HWND hwnd) {
     AppendMenuW(popup,MF_STRING|MF_GRAYED,0,origin);
     if (!strncmp(site.origin,"http://",7)) AppendMenuW(popup,MF_STRING|MF_GRAYED,0,L"HTTP · 未加密");
     if (!strncmp(site.origin,"https://",8)) AppendMenuW(popup,MF_STRING|MF_GRAYED,0,L"HTTPS · 证书详情不可用");
+    if (site.site_muted) AppendMenuW(popup,MF_STRING|MF_GRAYED,0,L"此网站已静音");
+    if (site.tab_muted) AppendMenuW(popup,MF_STRING|MF_GRAYED,0,L"此标签页已静音");
 
     const int header=GetMenuItemCount(popup);
     for (size_t i=0;i<moon_plugin_count();++i)

@@ -34,10 +34,10 @@
   #status { color:var(--accent); margin-top:10px; }
   #status:empty,.empty { display:none; }
   #results:empty+.empty { display:block; }
-  #autoplay-results:empty+.empty { display:block; }
-  #autoplay-list { margin-top:14px; }
-  #autoplay-status { margin-top:10px; color:var(--accent); }
-  #autoplay-status:empty { display:none; }
+  #autoplay-results:empty+.empty,#sound-results:empty+.empty { display:block; }
+  #autoplay-list,#sound-list { margin-top:14px; }
+  #autoplay-status,#sound-status { margin-top:10px; color:var(--accent); }
+  #autoplay-status:empty,#sound-status:empty { display:none; }
 </style>
 <main>
   <header><h1>站点设置</h1><p>按网站保存规则。HTTP、HTTPS 和不同端口各自设置。</p></header>
@@ -85,6 +85,18 @@
       <p class="empty">暂无自动播放例外。</p>
     </div>
   </section>
+  <section id="sound" hidden>
+    <h2>网站声音</h2>
+    <form id="sound-form">
+      <input id="sound-origin" required spellcheck="false" inputmode="url" aria-label="网站 URL" placeholder="https://example.com">
+      <button id="sound-save" type="submit">静音此网站</button>
+    </form>
+    <p id="sound-status" role="status"></p>
+    <div id="sound-list">
+      <ul id="sound-results" aria-label="静音网站"></ul>
+      <p class="empty">暂无静音网站。</p>
+    </div>
+  </section>
 </main>
 <script>
   const get = id => document.getElementById(id);
@@ -92,6 +104,8 @@
   const labels = {allow:'允许自动弹窗', block:'阻止新窗口'};
   const autoplayInput = get('autoplay-origin'), autoplayMode = get('autoplay-mode'), autoplayStatus = get('autoplay-status');
   const autoplayLabels = {allow:'允许自动播放',muted:'仅允许静音自动播放',block:'阻止自动播放'};
+  const soundInput = get('sound-origin'), soundStatus = get('sound-status');
+  let soundOrigin, soundBusy = false;
   const messages = {
     INVALID_PARAMS:'请输入有效的 HTTP 或 HTTPS 网站地址。',
     LIMIT_EXCEEDED:'网站例外已达上限，请先移除不再需要的规则。',
@@ -203,9 +217,42 @@
     } finally { autoplayBusy = get('autoplay-save').disabled = false; }
   }
   get('autoplay-form').onsubmit = event => { event.preventDefault(); saveAutoplay(autoplayInput.value.trim(),autoplayMode.value); };
+  async function refreshSound() {
+    const site = await host('siteSettings.sound.get');
+    if (soundOrigin !== site.currentOrigin) {
+      soundOrigin = site.currentOrigin;
+      soundInput.value = soundOrigin || '';
+    }
+    get('sound').hidden = false;
+    const list = get('sound-results');
+    list.replaceChildren();
+    for (const origin of site.muted.sort((a,b) => a.localeCompare(b))) {
+      const row = document.createElement('li'), text = document.createElement('code'), restore = document.createElement('button');
+      text.className = 'origin';
+      text.textContent = origin;
+      restore.textContent = '取消静音';
+      restore.setAttribute('aria-label','取消 ' + origin + ' 的网站静音');
+      restore.onclick = () => saveSound(origin,false);
+      row.append(text,restore);
+      list.append(row);
+    }
+  }
+  async function saveSound(origin, muted) {
+    if (soundBusy) return;
+    soundBusy = get('sound-save').disabled = true;
+    try {
+      await host('siteSettings.sound.set',{origin,muted});
+      await refreshSound();
+      soundStatus.textContent = muted ? '此网站已静音。' : '已取消网站静音。';
+    } catch (error) {
+      soundStatus.textContent = messages[error.message] || '暂时无法修改网站静音。';
+    } finally { soundBusy = get('sound-save').disabled = false; }
+  }
+  get('sound-form').onsubmit = event => { event.preventDefault(); saveSound(soundInput.value.trim(),true); };
   function load() {
     refresh().catch(error => { status.textContent = messages[error.message] || '暂时无法读取网站设置。'; });
     refreshAutoplay().catch(() => { get('autoplay').hidden = true; });
+    refreshSound().catch(() => { get('sound').hidden = true; });
   }
   document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });
   load();

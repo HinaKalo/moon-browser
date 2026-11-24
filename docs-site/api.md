@@ -56,6 +56,9 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `popups.openBlocked` | `popups.manage` | 由绑定且活动的插件页传入 `{ id }`。用户确认后打开该链接，返回是否接受请求。 |
 | `siteSettings.autoplay.get` | `siteSettings.autoplay` | 普通窗口的插件页传入 `{}`，获得 `{ currentOrigin, rules }`。通过 `popups.open` 绑定网页后返回当前来源。 |
 | `siteSettings.autoplay.set` | `siteSettings.autoplay` | 活动插件页传入 `{ origin, mode }`。模式为 `automatic`、`allow`、`muted`、`block`。首次设置有声自动播放例外时由系统确认。 |
+| `siteSettings.sound.get` | `siteSettings.sound` | 普通窗口插件页传入 `{}`，返回 `{ currentOrigin, muted }`。`muted` 为已静音的来源列表。 |
+| `siteSettings.sound.set` | `siteSettings.sound` | 活动插件页传入 `{ origin, muted }`。`muted` 为布尔值，成功后立即同步该来源的已打开标签页。 |
+| `siteSettings.sound.toggle` | `siteSettings.sound` | 用户在网页触发命令时传入 `{}`。目标由浏览器绑定到触发命令的活动网页。返回 `muted`、`unmuted`、`limitReached` 或 `unavailable`。 |
 | `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
 | `history.list` | `history.manage` | 传入 `{ query?, before? }`。返回 `{ visits, next }`，每条访问记录为 `{ id, title, url, visitedAt }`。时间为 Unix 毫秒。使用 `next` 作为下一页的 `before`。 |
 | `history.remove` | `history.manage` | 传入 `{ id }` 移除单条记录，成功返回 `null`。 |

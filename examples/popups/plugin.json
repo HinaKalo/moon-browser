@@ -1,13 +1,16 @@
 {
   "id": "moon.popups",
   "name": "站点设置",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonPopups.exe",
   "settingsPage": "popups.html",
   "contributes": {
-    "commands": [{ "id": "open", "label": "站点设置", "menu": "privacy", "siteMenu": true }]
+    "commands": [
+      { "id": "open", "label": "站点设置", "menu": "privacy", "siteMenu": true },
+      { "id": "sound", "label": "切换网站静音", "siteMenu": true }
+    ]
   },
-  "permissions": ["popups.manage", "siteSettings.autoplay"]
+  "permissions": ["popups.manage", "siteSettings.autoplay", "siteSettings.sound"]
 }

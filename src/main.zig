@@ -14,6 +14,7 @@ const site_data = @import("site_data.zig");
 const page_source = @import("page_source.zig");
 const popups = @import("popup_policy.zig");
 const autoplay = @import("autoplay_policy.zig");
+const site_sound = @import("site_sound.zig");
 const reading = @import("reading.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const market = @import("market.zig");
@@ -1367,6 +1368,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         reading.init(profile);
         popups.init(profile);
         autoplay.init(profile);
+        site_sound.init(profile);
         userscripts.init(profile);
         search.init();
     }
@@ -1581,6 +1583,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             tab.phase = .live;
             sync(tab);
             if (tab.view) |view| {
+                applySiteSound(view,tab.extension);
                 var url: [4096:0]u8 = @splat(0);
                 if (!native.moon_shell_private()) {
                     const percent = if (zoomOrigin(tab,&url)) |key| reading.load(key) else 100;
@@ -1607,6 +1610,9 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             if (index == active) _ = copy(&error_text, message);
             tab.loading = false;
             tab.loaded = tab.has_document;
+            if (tab.has_document) {
+                if (tab.view) |view| applySiteSound(view,tab.extension);
+            }
             if (tab.phase == .restoring) {
                 tab.deadline = 1;
             } else if (tab.phase != .crashed and !tab.has_document and tab.download_count == 0) {
@@ -1724,6 +1730,7 @@ export fn moon_tab_flags(index: usize) c_uint {
         (if (tab.loading) @as(c_uint,native.MOON_TAB_LOADING) else 0) |
         (if (tab.pinned) @as(c_uint,native.MOON_TAB_PINNED) else 0) |
         (if (tab.muted) @as(c_uint,native.MOON_TAB_MUTED) else 0) |
+        (if (tab.view!=null and native.moon_engine_site_muted(tab.view.?)) @as(c_uint,native.MOON_TAB_SITE_MUTED) else 0) |
         (if (!native.moon_shell_private() and (tab.pinned or (!tab.extension and tab.has_document and !tab.unsafe_history and !tab.loading and safeURL(slice(&tab.url)))))
             @as(c_uint,native.MOON_TAB_CAN_PIN) else 0) |
         (if (tab.muted or (!tab.extension and safeURL(slice(&tab.url)))) @as(c_uint,native.MOON_TAB_CAN_MUTE) else 0) |
@@ -1748,7 +1755,8 @@ export fn moon_site_context(site: *native.MoonSiteContext) bool {
     var url: [4096:0]u8 = @splat(0);
     native.moon_engine_committed_url(tab.view.?,&url,url.len);
     const origin = popups.origin(slice(&url)) orelse return false;
-    site.* = .{ .tab_id=tab.id, .navigation=tab.navigation, .origin=origin[0..site.origin.len].* };
+    site.* = .{ .tab_id=tab.id, .navigation=tab.navigation, .site_muted=native.moon_engine_site_muted(tab.view.?),
+        .tab_muted=tab.muted, .origin=origin[0..site.origin.len].* };
     return true;
 }
 
@@ -1852,6 +1860,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"browser.defaultApp" => "允许打开 Windows 默认应用设置",
         .@"popups.manage" => "允许管理网站弹窗",
         .@"siteSettings.autoplay" => "允许管理媒体自动播放",
+        .@"siteSettings.sound" => "允许管理网站静音",
         .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",
         .@"window.fullscreen" => "允许切换浏览器全屏",
@@ -1909,6 +1918,7 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     if (permission == null or permission == .@"tabs.closed.manage") checkClosedTabGrant();
     if (permission == null or permission == .@"tabs.organize") checkTabToolsGrant();
     if (permission == null or permission == .@"bookmarks.manage") native.moon_shell_bookmarks_changed();
+    if (permission == null or permission == .@"siteSettings.sound") moon_site_sound_update();
     native.moon_shell_refresh();
     return result;
 }
@@ -2210,6 +2220,51 @@ export fn moon_autoplay_change_allowed(owner: [*c]const u8, panel: u64, origin: 
     var body: [640]u8 = undefined;
     const message = std.fmt.bufPrintSentinel(&body,"允许 {s} 自动播放有声音的媒体？",.{slice(origin)},0) catch return false;
     return native.moon_shell_confirm("允许有声自动播放？",message.ptr) and autoplayPanelAllowed(id,panel);
+}
+
+export fn moon_site_sound_rules_active() bool {
+    return !stopped and site_sound.hasRules() and !native.moon_shell_private() and plugins.systemEnabled(.@"siteSettings.sound");
+}
+
+export fn moon_site_sound_mutes(url: [*c]const u8) bool {
+    if (!moon_site_sound_rules_active()) return false;
+    const key = popups.origin(slice(url)) orelse return false;
+    return site_sound.muted(slice(&key));
+}
+
+fn applySiteSound(view: *native.MoonView, extension: bool) void {
+    if (extension) return;
+    var url: [4096:0]u8 = @splat(0);
+    if (moon_site_sound_rules_active()) native.moon_engine_committed_url(view,&url,url.len);
+    native.moon_engine_site_mute(view,moon_site_sound_mutes(&url));
+}
+
+export fn moon_site_sound_update() void {
+    for (tabs[0..count]) |*tab| {
+        if (tab.document_committed) {
+            if (tab.view) |view| applySiteSound(view,tab.extension);
+        }
+    }
+    native.moon_shell_refresh();
+}
+
+export fn moon_site_sound_panel_allowed(owner: [*c]const u8, panel: u64) bool {
+    return !stopped and count!=0 and tabs[active].id==panel and tabs[active].extension and
+        !native.moon_shell_private() and plugins.hasGrant(slice(owner),.@"siteSettings.sound");
+}
+
+export fn moon_site_sound_toggle(owner: [*c]const u8, id: u64, navigation: u64) c_uint {
+    if (native.moon_shell_private() or !plugins.hasGrant(slice(owner),.@"siteSettings.sound") or
+        !plugins.systemEnabled(.@"siteSettings.sound")) return @intFromEnum(sdk.SiteSoundResult.unavailable);
+    const view = devtoolsTarget(id,navigation) orelse return @intFromEnum(sdk.SiteSoundResult.unavailable);
+    var url: [4096:0]u8 = @splat(0);
+    native.moon_engine_committed_url(view,&url,url.len);
+    const key = popups.origin(slice(&url)) orelse return @intFromEnum(sdk.SiteSoundResult.unavailable);
+    const muted = !site_sound.muted(slice(&key));
+    site_sound.save(std.heap.page_allocator,key,muted) catch |err| return @intFromEnum(if (err==error.LimitExceeded)
+        sdk.SiteSoundResult.limitReached else .unavailable);
+    moon_site_sound_update();
+    return @intFromEnum(if (muted) sdk.SiteSoundResult.muted else .unmuted);
 }
 
 export fn moon_popups_change_allowed(owner: [*c]const u8, panel: u64, origin: [*c]const u8, allow: bool) bool {
