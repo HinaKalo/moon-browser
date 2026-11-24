@@ -574,6 +574,7 @@ def run_win32(exe, base, root):
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
     bookmark_transfer = bookmarks.exists() and '"bookmarks.transfer"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
+    has_bulk_clear = downloads.exists() and "clear-completed" in (downloads.parent / "downloads.html").read_text(encoding="utf-8")
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
     popups = exe.parent / "plugins" / "popups" / "MoonPopups.exe"
@@ -656,6 +657,10 @@ def run_win32(exe, base, root):
             ('const popupDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"9",method:"popups.status",params:{}}));'
              'if(JSON.parse(popupDenied).error?.code!==-32001)return;' if popups.exists() else '') +
+            ('const downloadsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"10",method:"downloads.clearCompleted",params:{}}));'
+             'if(JSON.parse(downloadsDenied).error?.code!==-32001)return;'
+             if has_bulk_clear else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -774,6 +779,17 @@ def run_win32(exe, base, root):
             'const wait=async(fn)=>{for(let i=0;i<90;i++){const v=fn();if(v)return v;'
             'await new Promise(r=>setTimeout(r,50));}throw Error("downloads UI timeout");};'
             'try{await wait(()=>document.querySelector("progress")?.value>0);'
+            'const clear=document.getElementById("clear-completed");'
+            'if(clear){const dialog=document.getElementById("clear-dialog");'
+            'clear.click();if(!dialog.open)throw Error("missing clear confirmation");'
+            'document.getElementById("cancel-clear").click();await wait(()=>!dialog.open);'
+            'if(!(await host("downloads.list",{})).downloads.some(item=>item.state==="complete"))throw Error("clear cancel");'
+            'const input=document.getElementById("search");input.value="slow-test";input.dispatchEvent(new Event("input"));'
+            'await wait(()=>!document.querySelector("#results").textContent.includes("completed-proof.txt"));'
+            'clear.click();document.getElementById("confirm-clear").click();'
+            'await wait(()=>document.getElementById("feedback").textContent.includes("已清除 1 条"));'
+            'const remaining=(await host("downloads.list",{})).downloads.map(item=>item.state).sort();'
+            'if(remaining.join(",")!=="failed,transferring")throw Error("unexpected download states: "+remaining);}'
             'const cancel=await wait(()=>document.querySelector(\'button[data-control$=":cancel"]\'));cancel.click();'
             'await wait(()=>document.querySelector("#results").textContent.includes("已取消"));'
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
@@ -1566,16 +1582,29 @@ def run_win32(exe, base, root):
             user.SendMessageW(dialog,0x0468,0x0480,ctypes.addressof(filename))  # CDM_SETCONTROLTEXT / edt1
             user.PostMessageW(dialog,0x0111,1,0)  # IDOK
             wait_for(lambda: not user.IsWindow(dialog),"Saving the download did not close the dialog")
+            downloads_db = profile / "downloads.sqlite3"
+            saved_download = profile / "completed-proof.txt"
+            if has_bulk_clear:
+                saved_download.write_bytes(b"completed download fixture")
+                with closing(sqlite3.connect(downloads_db)) as db, db:
+                    db.execute("INSERT INTO downloads(path,state,started,owner_pid,owner_birth) VALUES (?,2,1,0,0)",
+                               (str(saved_download),))
+                    db.execute("INSERT INTO downloads(path,state,started,owner_pid,owner_birth) VALUES ('failed-proof.txt',3,1,0,0)")
             invoke("查看下载")
             wait_for(lambda: read_address() == "extension://moon.downloads/downloads.html",
                      "The download system executable did not open its page")
             set_control(edit,"extension://moon.download-fixture/downloads.html")
             user.PostMessageW(edit,0x0100,0x0D,1)
             library_result("moon.download-fixture")
-            with closing(sqlite3.connect(profile / "downloads.sqlite3")) as db:
-                row = db.execute("SELECT state,received FROM downloads ORDER BY id DESC LIMIT 1").fetchone()
+            with closing(sqlite3.connect(downloads_db)) as db:
+                row = db.execute("SELECT state,received FROM downloads WHERE state=4 ORDER BY id DESC LIMIT 1").fetchone()
+                states = db.execute("SELECT state FROM downloads ORDER BY state").fetchall()
             if not row or row[0] != 4 or not 0 < row[1] < 8 * 64 * 1024:
                 raise RuntimeError(f"Download cancellation and progress were not recorded: {row}")
+            if has_bulk_clear:
+                if states != [(3,),(4,)] or saved_download.read_bytes() != b"completed download fixture":
+                    raise RuntimeError(f"Clearing completed downloads changed a file or other record: {states}")
+                print("download_bulk_clear=ok search_scope=ok file_retained=ok active_transfer_retained=ok clear_cancel=ok",flush=True)
             print("download_system_plugin=ok download_live_progress=ok download_cancel=ok",flush=True)
         if site_data.exists():
             target = base + "/page/site-data-contract"

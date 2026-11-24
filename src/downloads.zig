@@ -207,6 +207,16 @@ pub fn remove(id: u32) !void {
     if (sqlite.sqlite3_changes(db) == 0) return error.NotFound;
 }
 
+pub fn clearCompleted() !u32 {
+    flush();
+    const db = try connection();
+    const statement = try db_api.prepare(db,"DELETE FROM downloads WHERE state=?1");
+    defer _ = sqlite.sqlite3_finalize(statement);
+    try bind(statement,1,@intFromEnum(State.complete));
+    if (sqlite.sqlite3_step(statement) != db_api.done) return error.IOError;
+    return @intCast(sqlite.sqlite3_changes(db));
+}
+
 pub fn reveal(allocator: std.mem.Allocator, id: u32) !void {
     const statement = try db_api.prepare(try connection(),"SELECT path FROM downloads WHERE id=?1 AND state=2");
     defer _ = sqlite.sqlite3_finalize(statement);

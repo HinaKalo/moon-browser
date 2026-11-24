@@ -222,6 +222,7 @@ pub const Method = enum {
     @"downloads.list",
     @"downloads.cancel",
     @"downloads.remove",
+    @"downloads.clearCompleted",
     @"downloads.reveal",
     @"siteData.open",
     @"siteData.status",

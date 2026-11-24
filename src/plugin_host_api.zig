@@ -41,7 +41,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.update", .@"bookmarks.remove" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
-        .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => .@"downloads.manage",
+        .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"siteData.update" => .@"siteData.write",
@@ -162,7 +162,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"history.list", .@"history.remove", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
-        .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => {},
+        .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => {},
@@ -183,7 +183,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find", .@"pageSource.open", .@"pageSource.status",
-        .@"popups.open", .@"popups.status",
+        .@"popups.open", .@"popups.status", .@"downloads.clearCompleted",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig",
         .@"tabs.session.status", .@"tabs.session.restore", .@"tabs.session.forget" => {
@@ -411,6 +411,10 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             };
             action catch |err| return sdk.failure(output,id,libraryReason(err));
             break :change sdk.result(output,id,null);
+        },
+        .@"downloads.clearCompleted" => clear: {
+            const count = downloads.clearCompleted() catch |err| return sdk.failure(output,id,libraryReason(err));
+            break :clear sdk.result(output,id,.{ .removed=count });
         },
         .@"siteData.open" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

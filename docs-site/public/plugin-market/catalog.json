@@ -88,7 +88,7 @@
     {
       "id": "moon.downloads",
       "name": "下载",
-      "description": "查看 WebKit 下载进度、取消传输、在文件夹中显示文件。",
+      "description": "查看下载进度、取消传输、在文件夹中显示文件，或批量清理已完成的记录。",
       "permission": "管理下载",
       "url": "https://docs.browser.moonl.cloud/library.html"
     },

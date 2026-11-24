@@ -9,7 +9,7 @@
   * { box-sizing:border-box; }
   body { margin:0; }
   main { max-width:900px; margin:auto; padding:42px clamp(20px,5vw,48px); }
-  h1 { margin:0 0 20px; font-size:30px; }
+  h1 { margin:0; font-size:30px; }
   input,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
   input { width:100%; }
   button { cursor:pointer; }
@@ -25,20 +25,37 @@
   progress { display:block; margin-top:7px; width:100%; max-width:240px; height:8px; accent-color:var(--accent); }
   .actions { display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; }
   .actions button { border-color:transparent; }
+  .toolbar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; justify-content:space-between; margin-bottom:20px; }
+  dialog { width:min(400px,calc(100% - 40px)); padding:20px; color:var(--text); background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+  dialog::backdrop { background:#151b3760; }
+  dialog h2 { margin:0; font-size:18px; }
+  dialog p { margin:8px 0 16px; color:var(--muted); }
+  dialog .actions { gap:8px; }
+  dialog .actions button { border-color:var(--line); }
+  #confirm-clear { background:var(--accent); color:var(--page); }
   #more { margin-top:14px; }
   #feedback:empty,#status:empty { display:none; }
 </style>
 <main>
-  <h1>下载</h1>
+  <header class="toolbar"><h1>下载</h1><button id="clear-completed" type="button">清除已完成</button></header>
   <input id="search" type="search" placeholder="搜索下载" aria-label="搜索下载" maxlength="64">
   <p id="status" role="status">正在读取下载…</p>
   <p id="feedback" role="status"></p>
   <ul id="results" aria-label="下载列表" hidden></ul>
   <button id="more" hidden>加载更多</button>
+  <dialog id="clear-dialog" aria-labelledby="clear-title">
+    <h2 id="clear-title">清除已完成的下载记录？</h2>
+    <p>已下载的文件和其他状态的记录会保留。</p>
+    <div class="actions">
+      <form method="dialog"><button id="cancel-clear" autofocus>取消</button></form>
+      <button id="confirm-clear" type="button">清除记录</button>
+    </div>
+  </dialog>
 </main>
 <script>
   const el = id => document.getElementById(id);
   const search = el('search'), list = el('results'), status = el('status'), more = el('more'), feedback = el('feedback');
+  const clear = el('clear-completed'), dialog = el('clear-dialog'), confirmClear = el('confirm-clear');
   const names = { choosing:'等待保存位置', transferring:'下载中', complete:'已完成', failed:'失败', cancelled:'已取消', interrupted:'已中断' };
   const date = new Intl.DateTimeFormat('zh-CN',{ month:'short',day:'numeric',hour:'2-digit',minute:'2-digit' });
   const numeric = new Intl.NumberFormat('zh-CN',{ maximumFractionDigits:1 });
@@ -146,6 +163,24 @@
     timer = setTimeout(() => load(false,true),120);
   };
   more.onclick = () => load(true);
+  clear.onclick = () => dialog.showModal();
+  dialog.oncancel = event => { if (confirmClear.disabled) event.preventDefault(); };
+  confirmClear.onclick = async () => {
+    confirmClear.disabled = el('cancel-clear').disabled = true;
+    list.dataset.working = 'true';
+    try {
+      const { removed } = await host('downloads.clearCompleted',{});
+      dialog.close();
+      await load(false,true);
+      feedback.textContent = removed ? `已清除 ${removed} 条下载记录。` : '没有已完成的下载记录。';
+    } catch {
+      dialog.close();
+      feedback.textContent = '无法清除已完成的下载记录。';
+    } finally {
+      confirmClear.disabled = el('cancel-clear').disabled = false;
+      delete list.dataset.working;
+    }
+  };
   document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });
   setInterval(() => { if (!document.hidden && !busy && !list.dataset.working) load(); },1000);
   load();
