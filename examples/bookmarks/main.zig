@@ -12,6 +12,15 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params != .object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
+    if (std.mem.eql(u8,action,"bar")) {
+        const response=try client.call(.@"bookmarks.bar.toggle",.{});
+        const outcome=std.meta.stringToEnum(sdk.BookmarksBarChange,sdk.string(response.get("result")) orelse "") orelse .unavailable;
+        try client.reply(id,sdk.CommandResult{
+            .message=if (outcome==.unavailable) "无法更新书签栏，请检查插件权限和配置目录。" else null,
+            .toast=true,
+        });
+        return;
+    }
     if (std.mem.eql(u8,action,"open")) {
         const response = try client.call(.@"ui.openPage",.{});
         const value = response.get("result") orelse std.json.Value.null;

@@ -31,6 +31,10 @@ static wchar_t content_status[512];
 static size_t first_tab;
 static MoonSidebarRow sidebar_rows[MOON_MAX_SIDEBAR_ROWS];
 static size_t sidebar_count;
+static MoonBookmarkBarEntry bookmark_roots[MOON_BOOKMARK_BAR_PAGE];
+static wchar_t bookmark_labels[MOON_BOOKMARK_BAR_PAGE][512];
+static size_t bookmark_count;
+static bool bookmark_visible, bookmark_more;
 static ID2D1Factory *drawing;
 static IDWriteFactory *writing;
 static IDWriteTextFormat *font_left, *font_center, *font_hero;
@@ -50,6 +54,7 @@ static struct {
 } tab_drag;
 static bool ignore_tab_release;
 static void cancel_tab_drag(void);
+static void queue_presentation(HWND hwnd);
 
 typedef struct Theme {
     unsigned frame, panel, field, hover, line, outline, text, muted, accent, soft, danger, loading;
@@ -64,7 +69,7 @@ static const Theme dark = {
 };
 static const Theme *theme = &light;
 
-enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
+enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48, BOOKMARK_HEIGHT = 32 };
 enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, FULLSCREEN_HINT_TIMER = 3, TAB_DRAG_TIMER = 4,
        ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
 enum { MENU_ADD = 11, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_MANAGE_PLUGINS,
@@ -389,6 +394,8 @@ static int client_height(void) {
     return MulDiv(r.bottom,96,dpi);
 }
 static int pane_left(void) { return focus_mode ? PAD : PAD + SIDEBAR + PAD; }
+static bool bookmark_bar_drawn(void) { return bookmark_visible && !fullscreen; }
+static int pane_top(void) { return TOP+(bookmark_bar_drawn()?BOOKMARK_HEIGHT:0); }
 static int home_left(int width) {
     int available = width - pane_left() - PAD;
     return pane_left() + (available > 768 ? (available-720)/2 : 24);
@@ -397,7 +404,7 @@ static int home_width(int width) {
     int available = width - PAD - home_left(width) - 24;
     return available > 720 ? 720 : available;
 }
-static int home_top(int height) { return TOP + (height > 520 ? 70 : 32); }
+static int home_top(int height) { return pane_top() + (height > 520 ? 70 : 32); }
 static int address_left(void) { return pane_left()+106; }
 static int address_right(int width) { return width-222; }
 static bool pointed(int x,int y,int w,int h) {
@@ -570,6 +577,50 @@ static void paint_home(Canvas c,int width,int height) {
             text_at(c,title,left+47,top,tile-52,61,theme->text,false);
     }
 }
+typedef struct { int x, width; size_t index; } BookmarkButton;
+enum { BOOKMARK_OVERFLOW=MOON_BOOKMARK_BAR_PAGE, BOOKMARK_MANAGE=MOON_BOOKMARK_BAR_PAGE+1 };
+
+static size_t bookmark_buttons(int width, BookmarkButton *output, size_t *shown) {
+    const int right=width-PAD-4;
+    int x=pane_left()+4;
+    *shown=0;
+    if (!bookmark_count) {
+        output[0]=(BookmarkButton){x,104,BOOKMARK_MANAGE};
+        return 1;
+    }
+    while (*shown<bookmark_count) {
+        const int item_width=min(182,max(62,32+(int)wcslen(bookmark_labels[*shown])*8));
+        if (x+item_width>right-35) break;
+        output[*shown]=(BookmarkButton){x,item_width,*shown};
+        x+=item_width+3;
+        ++*shown;
+    }
+    if (*shown<bookmark_count || bookmark_more) {
+        output[*shown]=(BookmarkButton){right-30,30,BOOKMARK_OVERFLOW};
+        return *shown+1;
+    }
+    return *shown;
+}
+
+static void paint_bookmark_bar(Canvas c,int width) {
+    BookmarkButton buttons[MOON_BOOKMARK_BAR_PAGE+1];
+    size_t shown;
+    const size_t count=bookmark_buttons(width,buttons,&shown);
+    for (size_t i=0;i<count;++i) {
+        const BookmarkButton item=buttons[i];
+        const int top=TOP+1,height=BOOKMARK_HEIGHT-5;
+        if (pointed(item.x,top,item.width,height)) fill(c,item.x,top,item.width,height,theme->hover,6);
+        if (item.index==BOOKMARK_OVERFLOW) {
+            text_at(c,L"\xbb",item.x,top,item.width,height,theme->accent,true);
+        } else {
+            const bool folder=item.index!=BOOKMARK_MANAGE && bookmark_roots[item.index].id==0;
+            const wchar_t *label=item.index==BOOKMARK_MANAGE?L"管理书签":bookmark_labels[item.index];
+            text_at(c,folder?L"\x25b8":L"\x2606",item.x+4,top,18,height,theme->accent,true);
+            text_at(c,label,item.x+25,top,item.width-30,height,theme->text,false);
+        }
+    }
+}
+
 static void paint_chrome(Canvas c,int width,int height) {
     if (fullscreen) {
         fill(c,0,0,width,height,theme->panel,0);
@@ -577,9 +628,11 @@ static void paint_chrome(Canvas c,int width,int height) {
     }
     fill(c,0,0,width,height,theme->frame,0);
     int left=pane_left();
+    const int top=pane_top();
     if (!focus_mode) paint_sidebar(c,height);
-    fill(c,left,TOP,width-left-PAD,height-TOP-PAD,theme->line,12);
-    fill(c,left+1,TOP+1,width-left-PAD-2,height-TOP-PAD-2,theme->panel,11);
+    if (bookmark_bar_drawn()) paint_bookmark_bar(c,width);
+    fill(c,left,top,width-left-PAD,height-top-PAD,theme->line,12);
+    fill(c,left+1,top+1,width-left-PAD-2,height-top-PAD-2,theme->panel,11);
     unsigned controls=moon_controls();
     icon_button(c,L"\x2190",left,8,31,32,controls&1);
     icon_button(c,L"\x2192",left+34,8,31,32,controls&2);
@@ -608,7 +661,7 @@ static void paint_chrome(Canvas c,int width,int height) {
     text_at(c,L"\xd7",width-50,0,44,TOP,pointed(width-50,0,44,TOP)?0xffffff:theme->text,true);
     if (show_home) paint_home(c,width,height);
     else if (moon_tab_count() && (moon_tab_flags(moon_active_index())&MOON_TAB_LOADING))
-        fill(c,left+8,TOP+1,74,2,theme->accent,1);
+        fill(c,left+8,top+1,74,2,theme->accent,1);
 }
 
 static void release_target(void) {
@@ -659,7 +712,7 @@ static void layout(void) {
     RECT r;
     GetClientRect(frame,&r);
     int width=client_width(), height=client_height();
-    int left=fullscreen?0:px(pane_left()+1), top=fullscreen?0:px(TOP+1), margin=fullscreen?0:px(PAD+1);
+    int left=fullscreen?0:px(pane_left()+1), top=fullscreen?0:px(pane_top()+1), margin=fullscreen?0:px(PAD+1);
     int pane_width=r.right-left-margin, pane_height=r.bottom-top-margin;
     MoveWindow(content,left,top,pane_width>0?pane_width:0,pane_height>0?pane_height:0,TRUE);
     if (fullscreen) {
@@ -686,6 +739,24 @@ static void layout(void) {
     }
     clamp_tab_strip(!tab_drag.active);
     InvalidateRect(frame,NULL,FALSE);
+}
+
+void moon_shell_bookmarks_changed(void) {
+    if (!frame || !content || quitting) return;
+    moon_bookmark_menu_cancel();
+    const bool before=bookmark_bar_drawn();
+    bookmark_visible=moon_bookmark_bar_visible();
+    bookmark_more=false;
+    bookmark_count=bookmark_visible?moon_bookmark_bar_entries("",0,bookmark_roots,ARRAYSIZE(bookmark_roots),&bookmark_more):0;
+    for (size_t i=0;i<bookmark_count;++i) {
+        if (!moon_utf16(bookmark_roots[i].text,bookmark_labels[i],ARRAYSIZE(bookmark_labels[i]))) bookmark_labels[i][0]=0;
+    }
+    if (before!=bookmark_bar_drawn()) {
+        layout();
+        queue_presentation(frame);
+    } else if (bookmark_bar_drawn()) {
+        InvalidateRect(frame,NULL,FALSE);
+    }
 }
 static bool fit_fullscreen(HMONITOR monitor) {
     MONITORINFO info={.cbSize=sizeof(info)};
@@ -753,7 +824,7 @@ unsigned moon_shell_test_dpi(void) {
     SendMessageW(frame,WM_DPICHANGED,MAKELONG(requested,requested),(LPARAM)&outer);
     bool correct = dpi == requested && GetClientRect(frame,&parent) && GetClientRect(content,&child) &&
         parent.right-child.right == px(pane_left()+1)+px(PAD+1) &&
-        parent.bottom-child.bottom == px(TOP+1)+px(PAD+1);
+        parent.bottom-child.bottom == px(pane_top()+1)+px(PAD+1);
     SendMessageW(frame,WM_DPICHANGED,MAKELONG(original,original),(LPARAM)&outer);
     return correct ? requested : 0;
 }
@@ -1309,6 +1380,22 @@ static void click(HWND hwnd,int psx,int psy) {
         }
         return;
     }
+    if (bookmark_bar_drawn() && y<pane_top() && x>=left) {
+        BookmarkButton buttons[MOON_BOOKMARK_BAR_PAGE+1];
+        size_t shown;
+        const size_t count=bookmark_buttons(width,buttons,&shown);
+        for (size_t i=0;i<count;++i) {
+            const BookmarkButton item=buttons[i];
+            if (!within(x,y,item.x,TOP+1,item.width,BOOKMARK_HEIGHT-5)) continue;
+            const RECT anchor=rectangle(item.x,TOP+1,item.width,BOOKMARK_HEIGHT-5);
+            if (item.index==BOOKMARK_MANAGE) (void)moon_plugin_open_page("moon.bookmarks");
+            else if (item.index==BOOKMARK_OVERFLOW) moon_bookmark_menu_show("",shown,anchor);
+            else if (!bookmark_roots[item.index].id) moon_bookmark_menu_show(bookmark_roots[item.index].folder,0,anchor);
+            else (void)moon_bookmark_bar_open(bookmark_roots[item.index].id,GetKeyState(VK_CONTROL)<0);
+            break;
+        }
+        return;
+    }
     if (show_home) {
         int home_x=home_left(width), search=home_top(height)+98;
         if (within(x,y,home_x,search,home_width(width),44)) { SetFocus(home_edit); return; }
@@ -1360,6 +1447,9 @@ static void queue_presentation(HWND hwnd) {
 }
 static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     switch (msg) {
+        case WM_INITMENUPOPUP:
+            if (moon_bookmark_menu_init((HMENU)wp)) return 0;
+            break;
         case WM_COPYDATA: return !quitting && moon_instance_accept(hwnd,(const COPYDATASTRUCT *)lp);
         case WM_NCDESTROY:
             moon_instance_remove(hwnd);
@@ -1590,7 +1680,7 @@ static bool keyboard(MSG *msg) {
     if (ctrl && shift && msg->wParam == 'L') { moon_shell_toggle_theme(); return true; }
     if ((ctrl && msg->wParam == 'L') || msg->wParam == VK_F6) { moon_shell_focus_address(); return true; }
     if (ctrl && msg->wParam == 'K') { open_palette(); return true; }
-    if (ctrl && msg->wParam == 'B') { moon_shell_toggle_sidebar(); return true; }
+    if (modifiers==MOD_CONTROL && msg->wParam == 'B') { moon_shell_toggle_sidebar(); return true; }
     if (ctrl && !shift && !alt && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
     if (ctrl && msg->wParam == 'W') { moon_command(MOON_CLOSE,moon_active_index(),NULL); return true; }
     if (ctrl && msg->wParam == VK_TAB) { moon_command(shift ? MOON_KEY_PREV : MOON_KEY_NEXT,0,NULL); return true; }

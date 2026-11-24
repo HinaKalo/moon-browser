@@ -312,7 +312,7 @@ class Fixture(BaseHTTPRequestHandler):
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
                         "pinned-first", "pinned-second", "session-first", "session-second", "session-pinned", "session-private",
                         "session-external", "order-last", "order-edge", "group-first", "group-second", "group-outside",
-                        "shell-cold", "shell-warm", "shell-plain", "address-visited", "address-saved"):
+                        "shell-cold", "shell-warm", "shell-plain", "address-visited", "address-saved", "bookmark-bar-live"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "chrome-window":
                 demo = (
@@ -654,6 +654,7 @@ def run_win32(exe, base, root):
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
     bookmark_transfer = bookmarks.exists() and '"bookmarks.transfer"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
+    bookmark_bar = bookmarks.exists() and '"id": "bar"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     has_bulk_clear = downloads.exists() and "clear-completed" in (downloads.parent / "downloads.html").read_text(encoding="utf-8")
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
@@ -2706,6 +2707,8 @@ def run_win32(exe, base, root):
                 expected["标签与页面"].add("网页另存为 HTML\tCtrl+S")
             if bookmark_transfer:
                 expected["浏览资料"].update({"导入 HTML 书签","导出 HTML 书签"})
+            if bookmark_bar:
+                expected["浏览资料"].add("显示或隐藏书签栏\tCtrl+Shift+B")
             if private_window.exists():
                 expected["隐私与安全"].add("新建隐私窗口\tCtrl+Shift+N")
             if popups.exists():
@@ -3382,6 +3385,110 @@ def run_win32(exe, base, root):
             if read_address()!=plain or palette_rows()!=before+2:
                 raise RuntimeError("A rejected shell activation changed the existing window")
             print("default_browser_plugin=ok installer_hint=ok external_cold=ok external_handoff=ok launcher_reuse=ok invalid_url_rejected=ok",flush=True)
+        if bookmark_bar:
+            user.PostMessageW(frame,0x0010,0,0)
+            if proc.wait(8)!=0:
+                raise RuntimeError("Could not close the browser before the bookmark bar fixture")
+            bar_env=preview_env(root / "bookmark-bar")
+            bar_profile=Path(bar_env["MOON_BROWSER_PROFILE_DIR"])
+            bar_profile.mkdir(parents=True)
+            root_url=base + "/page/bookmark-bar-root"
+            nested_url=base + "/page/bookmark-bar-nested"
+            with closing(sqlite3.connect(bar_profile / "bookmarks.sqlite3")) as connection:
+                connection.execute("CREATE TABLE bookmarks(id INTEGER PRIMARY KEY AUTOINCREMENT,title TEXT NOT NULL,url TEXT NOT NULL UNIQUE,folder TEXT NOT NULL)")
+                records=[("根页",root_url,""),("子目录网页",nested_url,"工作 / 资料"),
+                         ("文件夹网页",base+"/page/bookmark-bar-folder","工作")]
+                connection.executemany("INSERT INTO bookmarks(title,url,folder) VALUES(?,?,?)",records)
+                connection.commit()
+
+            def viewport_top(owner):
+                child=user.FindWindowExW(owner,None,"MoonContent",None)
+                origin,layout=wt.POINT(),wt.POINT()
+                user.ClientToScreen(owner,ctypes.byref(origin))
+                user.ClientToScreen(child,ctypes.byref(layout))
+                return layout.y-origin.y if child else -1
+
+            def popup_handle(target=None):
+                window=None
+                while window := user.FindWindowExW(None,window,"#32768",None):
+                    pid=wt.DWORD()
+                    user.GetWindowThreadProcessId(window,ctypes.byref(pid))
+                    if pid.value==proc.pid and user.IsWindowVisible(window):
+                        handle=user.SendMessageW(window,0x01E1,0,0)
+                        if not target or handle==target:
+                            return window,handle
+                return None
+
+            proc=subprocess.Popen([str(exe),"--gdi"],env=bar_env)
+            frame=browser_frame(proc)
+            edit=user.GetDlgItem(frame,1001)
+            collapsed=px(49)
+            expanded=px(81)
+            wait_for(lambda: viewport_top(frame)==collapsed,"The bookmark bar must start hidden in a fresh profile")
+            invoke("显示或隐藏书签栏")
+            wait_for(lambda: viewport_top(frame)==expanded,"Showing bookmarks did not reflow the native viewport")
+            click(px(303),px(62))
+            wait_for(lambda: read_address()==root_url,"Clicking a root bookmark did not open its page")
+
+            click(px(371),px(62))
+            outer,menu=wait_for(popup_handle,"The bookmark folder menu did not open")
+            anchor,bounds=wt.POINT(px(349),px(76)),wt.RECT()
+            user.ClientToScreen(frame,ctypes.byref(anchor))
+            user.GetWindowRect(outer,ctypes.byref(bounds))
+            if abs(bounds.left-anchor.x)>px(16) or abs(bounds.top-anchor.y)>px(16):
+                raise RuntimeError("The bookmark folder menu was not anchored to its button")
+            submenu=user.GetSubMenu(menu,0)
+            if not submenu:
+                raise RuntimeError("The bookmark folder did not contain its nested folder")
+            user.SendMessageW(outer,0x0100,0x28,1)
+            user.PostMessageW(outer,0x0100,0x27,1)
+            inner,handle=wait_for(lambda: popup_handle(submenu),"The nested bookmark menu did not open")
+            title=ctypes.create_unicode_buffer(300)
+            user.GetMenuStringW(handle,0,title,len(title),0x400)
+            if title.value!="子目录网页":
+                raise RuntimeError(f"The nested menu did not load its bookmark: {title.value!r}")
+            if not user.GetMenuState(handle,0,0x400)&0x80:
+                user.SendMessageW(inner,0x0100,0x28,1)
+            user.PostMessageW(inner,0x0100,0x0D,1)
+            wait_for(lambda: read_address()==nested_url and not popup_handle(),"Selecting the nested bookmark did not navigate")
+
+            with closing(sqlite3.connect(bar_profile / "bookmarks.sqlite3")) as connection:
+                connection.executemany("INSERT INTO bookmarks(title,url,folder) VALUES(?,?,?)",
+                    [(f"其他书签 {n}",base+f"/page/bookmark-bar-{n}","") for n in range(45)])
+                connection.commit()
+            live_url=base+"/page/bookmark-bar-live"
+            set_control(edit,live_url)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: read_address()==live_url and Fixture.closed_loaded.get("bookmark-bar-live"),
+                     "The live bookmark fixture did not load")
+            invoke("将当前页加入书签")
+            wait_for(lambda: owned_window("#32770","书签"),"Saving a bookmark did not refresh the bar")
+            dimensions=wt.RECT()
+            user.GetClientRect(frame,ctypes.byref(dimensions))
+            overflow=native_entries(trigger=lambda: click(dimensions.right-px(24),px(62)))
+            if "更多书签" not in overflow or "管理全部书签" not in overflow:
+                raise RuntimeError(f"The bookmark overflow was missing its continuation or manager: {overflow}")
+            if reading.exists():
+                invoke("切换浏览器全屏")
+                wait_for(lambda: viewport_top(frame)==0,"Entering fullscreen left the bookmark bar on screen")
+                user.PostMessageW(frame,0x0100,0x1B,1)
+                wait_for(lambda: viewport_top(frame)==expanded,"Leaving fullscreen did not restore the bookmark bar")
+            if private_window.exists():
+                guest=open_private()
+                try:
+                    wait_for(lambda: viewport_top(guest)==collapsed,"A private window showed the ordinary bookmark bar")
+                finally:
+                    close_private(guest)
+            user.PostMessageW(frame,0x0010,0,0)
+            if proc.wait(8)!=0:
+                raise RuntimeError("The bookmark bar fixture did not shut down")
+            proc=subprocess.Popen([str(exe),"--gdi"],env=bar_env)
+            frame=browser_frame(proc)
+            edit=user.GetDlgItem(frame,1001)
+            wait_for(lambda: viewport_top(frame)==expanded,"Bookmark bar visibility did not survive restart")
+            invoke("显示或隐藏书签栏")
+            wait_for(lambda: viewport_top(frame)==collapsed,"Hiding the bookmark bar did not restore the viewport")
+            print("bookmarks_bar=ok session_preference=ok nested_menu=ok direct_navigation=ok menu_anchor=ok live_refresh=ok overflow=ok fullscreen=ok private=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

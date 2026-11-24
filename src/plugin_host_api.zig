@@ -63,7 +63,8 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
-        .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove" => .@"bookmarks.manage",
+        .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
+        .@"bookmarks.bar.toggle" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value",
@@ -210,7 +211,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     const params = object.get("params");
     switch (method) {
         .@"host.getInfo", .@"browser.openDefaultApps", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
-        .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
+        .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.bar.toggle", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find", .@"pageSource.open", .@"pageSource.status",
         .@"popups.open", .@"popups.status", .@"downloads.clearCompleted", .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
@@ -429,6 +430,11 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const outcome = bookmarks.save(.{ .title=std.mem.sliceTo(&tab.title,0),.url=url }) catch |err|
                 return sdk.failure(output,id,libraryReason(err));
             break :save sdk.result(output,id,outcome);
+        },
+        .@"bookmarks.bar.toggle" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const change: sdk.BookmarksBarChange = @enumFromInt(native.moon_bookmark_bar_toggle());
+            return sdk.result(output,id,change);
         },
         .@"bookmarks.save" => save: {
             const value = decode(sdk.BookmarkInput,allocator,params) catch return sdk.failure(output,id,.InvalidParams);

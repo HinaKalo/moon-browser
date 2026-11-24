@@ -1428,6 +1428,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         else |_| pins_path[0] = 0;
     }
     addTab(null, false);
+    if (smoke==.off) native.moon_shell_bookmarks_changed();
     if (smoke != .off) {
         smoke_deadline = native.moon_clock() + 300000;
         _ = std.fmt.bufPrintSentinel(&smoke_download, "{s}\\smoke-download.txt", .{profile}, 0) catch return false;
@@ -1775,16 +1776,20 @@ export fn moon_link_menu_run(link: *const native.MoonLinkContext, index: usize, 
 }
 
 export fn moon_link_open(link: *const native.MoonLinkContext) c_uint {
-    if (count==tabs.len) return @intFromEnum(sdk.LinkResult.limitReached);
     var address: [4096:0]u8 = @splat(0);
     var label: [512:0]u8 = @splat(0);
     _ = copy(&address,slice(&link.url));
     _ = copy(&label,slice(&link.label));
+    return @intFromEnum(if (addBackgroundTab(address,label)) sdk.LinkResult.opened else .limitReached);
+}
+
+fn addBackgroundTab(address: [4096:0]u8, label: [512:0]u8) bool {
+    if (count==tabs.len) return false;
     tabs[count] = .{ .id=next_id,.phase=.dormant,.url=address,.title=label,.last_used=native.moon_clock() };
     count += 1;
     next_id += 1;
     native.moon_shell_refresh();
-    return @intFromEnum(sdk.LinkResult.opened);
+    return true;
 }
 export fn moon_tab_id(index: usize) u64 {
     return if (index<count) tabs[index].id else 0;
@@ -1891,6 +1896,7 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     }
     if (permission == null or permission == .@"tabs.closed.manage") checkClosedTabGrant();
     if (permission == null or permission == .@"tabs.organize") checkTabToolsGrant();
+    if (permission == null or permission == .@"bookmarks.manage") native.moon_shell_bookmarks_changed();
     native.moon_shell_refresh();
     return result;
 }
@@ -1983,6 +1989,42 @@ export fn moon_bookmark_transfer_allowed(source: u64, owner: [*c]const u8) bool 
     if (stopped or count==0 or tabs[active].id!=source or native.moon_shell_private()) return false;
     const id = slice(owner);
     return plugins.hasGrant(id,.@"bookmarks.manage") and plugins.hasGrant(id,.@"bookmarks.transfer");
+}
+
+fn bookmarkBarAllowed() bool {
+    return !stopped and !native.moon_shell_private() and plugins.systemEnabled(.@"bookmarks.manage");
+}
+
+export fn moon_bookmark_bar_visible() bool {
+    return bookmarkBarAllowed() and bookmarks.show_bar;
+}
+
+export fn moon_bookmark_bar_toggle() c_int {
+    const change=if (bookmarkBarAllowed()) bookmarks.toggleBar() else sdk.BookmarksBarChange.unavailable;
+    return @intFromEnum(change);
+}
+
+export fn moon_bookmark_bar_entries(folder: [*c]const u8, offset: usize,
+    output: [*c]native.MoonBookmarkBarEntry, capacity: usize, more: *bool) usize {
+    more.*=false;
+    if (!moon_bookmark_bar_visible() or folder==null or output==null or capacity==0) return 0;
+    return bookmarks.barEntries(slice(folder),offset,output[0..@min(capacity,native.MOON_BOOKMARK_BAR_PAGE)],more) catch 0;
+}
+
+export fn moon_bookmark_bar_open(id: u32, background: bool) bool {
+    if (count==0 or !moon_bookmark_bar_visible() or id==0) return false;
+    var address: [4096:0]u8 = @splat(0);
+    var label: [512:0]u8 = @splat(0);
+    bookmarks.barTarget(id,&address,&label) catch return false;
+    if (background) {
+        if (!addBackgroundTab(address,label)) {
+            native.moon_shell_toast("书签","标签已满。关闭一页后可在后台打开书签。");
+            return false;
+        }
+    } else {
+        navigate(&tabs[active],slice(&address));
+    }
+    return true;
 }
 
 export fn moon_plugin_open_page(id: [*c]const u8) bool {

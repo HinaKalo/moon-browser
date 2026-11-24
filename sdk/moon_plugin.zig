@@ -47,6 +47,7 @@ pub const Shortcut = enum {
     F11,
     @"Ctrl+Shift+C",
     @"Ctrl+S",
+    @"Ctrl+Shift+B",
 };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
 pub const LinkMenuAction = enum(c_uint) { open = 1, copy, bookmark };
@@ -163,6 +164,7 @@ pub const HistoryPage = struct { visits: []const HistoryVisit, next: ?u32 };
 pub const BookmarkInput = struct { title: []const u8, url: []const u8, folder: []const u8 = "" };
 pub const BookmarkEdit = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 = "" };
 pub const Bookmark = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 };
+pub const BookmarksBarChange = enum(c_int) { shown, hidden, unavailable };
 pub const BookmarkPage = struct { bookmarks: []const Bookmark, next: ?u32 };
 pub const BookmarkTransferState = enum { done, cancelled, invalidFile, limitExceeded, unavailable };
 pub const BookmarkTransfer = struct { state: BookmarkTransferState, count: usize = 0, skipped: usize = 0 };
@@ -255,6 +257,7 @@ pub const Method = enum {
     @"bookmarks.list",
     @"bookmarks.save",
     @"bookmarks.saveActive",
+    @"bookmarks.bar.toggle",
     @"bookmarks.saveLink",
     @"bookmarks.update",
     @"bookmarks.remove",

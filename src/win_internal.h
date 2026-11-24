@@ -31,4 +31,7 @@ void moon_suggest_change(HWND input);
 void moon_suggest_hide(void);
 void moon_suggest_update(void);
 bool moon_suggest_key(HWND input, WPARAM key);
+bool moon_bookmark_menu_init(HMENU menu);
+void moon_bookmark_menu_cancel(void);
+void moon_bookmark_menu_show(const char *folder, size_t offset, RECT anchor);
 #endif

@@ -5,14 +5,33 @@ const history = @import("history.zig");
 const html = @import("bookmark_html.zig");
 const native = @import("native");
 const userscripts = @import("userscripts.zig");
+const settings = @import("extension_settings.zig");
 
 const sqlite = &db_api.sqlite;
 var database: ?*db_api.Database = null;
 var path: [4096:0]u8 = @splat(0);
 var transferring = false;
+const bar_settings_owner = "moon.bookmarks";
+pub var show_bar = false;
 
 pub fn init(profile: []const u8) void {
     _ = std.fmt.bufPrintSentinel(&path,"{s}\\bookmarks.sqlite3",.{profile},0) catch return;
+    var arena=std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const state=settings.read(arena.allocator(),bar_settings_owner) catch return;
+    if (state.object.get("showBar")) |value| if (value==.bool) { show_bar=value.bool; };
+}
+
+pub fn toggleBar() sdk.BookmarksBarChange {
+    var arena=std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator=arena.allocator();
+    var state=settings.read(allocator,bar_settings_owner) catch return .unavailable;
+    state.object.put(allocator,"showBar",.{ .bool=!show_bar }) catch return .unavailable;
+    settings.write(allocator,bar_settings_owner,state) catch return .unavailable;
+    show_bar=!show_bar;
+    native.moon_shell_bookmarks_changed();
+    return if (show_bar) .shown else .hidden;
 }
 
 fn connection() !*db_api.Database {
@@ -55,7 +74,9 @@ pub fn save(input: sdk.BookmarkInput) !sdk.BookmarkSave {
     defer _ = sqlite.sqlite3_finalize(statement);
     try bindBookmark(statement,input.title,input.url,input.folder);
     if (sqlite.sqlite3_step(statement) != db_api.done) return error.IOError;
-    return if (sqlite.sqlite3_changes(db) == 0) .alreadySaved else .saved;
+    if (sqlite.sqlite3_changes(db)==0) return .alreadySaved;
+    native.moon_shell_bookmarks_changed();
+    return .saved;
 }
 
 pub fn update(input: sdk.BookmarkEdit) !void {
@@ -68,6 +89,7 @@ pub fn update(input: sdk.BookmarkEdit) !void {
     if (status == 19) return error.AlreadyExists; // UNIQUE(url).
     if (status != db_api.done) return error.IOError;
     if (sqlite.sqlite3_changes(db) == 0) return error.NotFound;
+    native.moon_shell_bookmarks_changed();
 }
 
 pub fn remove(id: u32) !void {
@@ -77,6 +99,71 @@ pub fn remove(id: u32) !void {
     if (sqlite.sqlite3_bind_int64(statement,1,id) != db_api.ok or sqlite.sqlite3_step(statement) != db_api.done)
         return error.IOError;
     if (sqlite.sqlite3_changes(db) == 0) return error.NotFound;
+    native.moon_shell_bookmarks_changed();
+}
+
+pub fn barEntries(folder: []const u8, offset: usize, output: []native.MoonBookmarkBarEntry, more: *bool) !usize {
+    if (!validLabel(folder,160)) return error.InvalidParams;
+    const db=try connection();
+    const statement=try db_api.prepare(db,
+        \\WITH items AS (
+        \\  SELECT id,title,url,CASE WHEN folder=?1 THEN '' WHEN ?1='' THEN folder
+        \\    ELSE substr(folder,length(?1||?2)+1) END AS tail
+        \\  FROM bookmarks WHERE folder=?1 OR ?1='' OR substr(folder,1,length(?1||?2))=?1||?2
+        \\), children AS (
+        \\  SELECT id,title,url,CASE WHEN instr(tail,?2)>1 THEN substr(tail,1,instr(tail,?2)-1) ELSE tail END AS child
+        \\  FROM items
+        \\)
+        \\SELECT CASE WHEN child='' THEN id ELSE 0 END AS entry,child,title,url,MIN(id)
+        \\FROM children GROUP BY child,entry ORDER BY MIN(id) LIMIT ?3 OFFSET ?4
+    );
+    defer _=sqlite.sqlite3_finalize(statement);
+    try db_api.bindText(statement,1,folder);
+    try db_api.bindText(statement,2,html.separator);
+    if (sqlite.sqlite3_bind_int64(statement,3,@intCast(output.len+1))!=db_api.ok or
+        sqlite.sqlite3_bind_int64(statement,4,std.math.cast(i64,offset) orelse return error.InvalidParams)!=db_api.ok) return error.IOError;
+    var length: usize=0;
+    while (true) {
+        const status=sqlite.sqlite3_step(statement);
+        if (status==db_api.done) return length;
+        if (status!=db_api.row) return error.IOError;
+        if (length==output.len) {
+            more.*=true;
+            return length;
+        }
+        const entry=&output[length];
+        const id=std.math.cast(u32,sqlite.sqlite3_column_int64(statement,0)) orelse continue;
+        entry.id=id;
+        if (id==0) {
+            const child=try db_api.columnText(statement,1);
+            if (child.len==0 or !validLabel(child,160)) continue;
+            const prefix=if (folder.len==0) "" else html.separator;
+            _=std.fmt.bufPrintSentinel(&entry.folder,"{s}{s}{s}",.{folder,prefix,child},0) catch continue;
+            _=std.fmt.bufPrintSentinel(&entry.text,"{s}",.{child},0) catch continue;
+        } else {
+            const title=try db_api.columnText(statement,2);
+            const url=try db_api.columnText(statement,3);
+            if (!history.validURL(url) or !validLabel(title,511)) continue;
+            entry.folder[0]=0;
+            const label=if (title.len==0) url else title;
+            var end=@min(label.len,entry.text.len-1);
+            while (end<label.len and label[end]&0xc0==0x80) end-=1;
+            _=std.fmt.bufPrintSentinel(&entry.text,"{s}",.{label[0..end]},0) catch continue;
+        }
+        length+=1;
+    }
+}
+
+pub fn barTarget(id: u32, address: *[4096:0]u8, label: *[512:0]u8) !void {
+    const db=try connection();
+    const statement=try db_api.prepare(db,"SELECT url,title FROM bookmarks WHERE id=?1");
+    defer _=sqlite.sqlite3_finalize(statement);
+    if (sqlite.sqlite3_bind_int64(statement,1,id)!=db_api.ok or sqlite.sqlite3_step(statement)!=db_api.row) return error.NotFound;
+    const url=try db_api.columnText(statement,0);
+    const title=try db_api.columnText(statement,1);
+    if (!history.validURL(url) or !validLabel(title,511)) return error.InvalidParams;
+    _=try std.fmt.bufPrintSentinel(address,"{s}",.{url},0);
+    _=try std.fmt.bufPrintSentinel(label,"{s}",.{title},0);
 }
 
 pub fn list(allocator: std.mem.Allocator, options: sdk.HistoryQuery, buffer: *[24]sdk.Bookmark) !sdk.BookmarkPage {
@@ -144,6 +231,7 @@ fn importFile(allocator: std.mem.Allocator, file: [:0]const u8) !sdk.BookmarkTra
         if (sqlite.sqlite3_reset(statement)!=db_api.ok) return error.IOError;
     }
     if (sqlite.sqlite3_exec(db,"COMMIT",null,null,null)!=db_api.ok) return error.IOError;
+    if (result.count!=0) native.moon_shell_bookmarks_changed();
     return result;
 }
 

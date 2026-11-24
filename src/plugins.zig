@@ -882,6 +882,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
             else => null,
         },
         ctrl_shift => switch (vk) {
+            'B' => .@"Ctrl+Shift+B",
             'C' => .@"Ctrl+Shift+C",
             'I' => .F12,
             'J' => .@"Ctrl+Shift+J",
