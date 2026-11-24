@@ -30,7 +30,14 @@ pub const Shortcut = enum {
     @"Ctrl+Shift+Delete",
     @"Ctrl+Shift+M",
 };
-pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false, shortcut: ?Shortcut = null };
+pub const MenuGroup = enum { page, library, privacy, developer, extensions };
+pub const Command = struct {
+    id: []const u8,
+    label: []const u8,
+    interactive: bool = false,
+    shortcut: ?Shortcut = null,
+    menu: ?MenuGroup = null,
+};
 pub const ShortcutScope = enum { browser, global };
 pub const RegisteredShortcut = struct { id: []const u8, shortcut: []const u8, scope: ShortcutScope = .browser };
 pub const UiRegistration = enum(c_uint) { saved, notFound, conflict, reserved, invalidShortcut, limitReached, cancelled, unavailable };

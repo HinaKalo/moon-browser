@@ -7,6 +7,6 @@
   "entry": "MoonBlocker.exe",
   "settingsPage": "filter.html",
   "networkRules": "strict.rules",
-  "contributes": { "commands": [{ "id": "open", "label": "管理网页过滤" }] },
+  "contributes": { "commands": [{ "id": "open", "label": "管理网页过滤", "menu": "privacy" }] },
   "permissions": ["network.filter"]
 }

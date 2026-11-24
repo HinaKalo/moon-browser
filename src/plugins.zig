@@ -16,6 +16,7 @@ const LegacyManifest = struct {
     name: []const u8,
     executable: []const u8,
     command: []const u8,
+    menu: ?sdk.MenuGroup = null,
     permissions: []const []const u8 = &.{},
     events: []const []const u8 = &.{},
 };
@@ -28,6 +29,7 @@ const Grant = struct {
     task_manager_manage: bool = false,
     ui_commands: bool = false,
     menu_items: []const []const u8 = &.{},
+    hidden_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
 };
 const Outcome = enum { ok, failed, timed_out, crashed };
@@ -59,9 +61,12 @@ const Task = struct {
     message: [512:0]u8 = @splat(0),
     toast: bool = false,
 };
+const MenuOverride = enum { default, pinned, hidden };
 const Command = struct {
     id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false,
-    shortcut: ?sdk.Shortcut = null, main_menu: bool = false,
+    shortcut: ?sdk.Shortcut = null,
+    menu_group: ?sdk.MenuGroup = null,
+    menu_override: MenuOverride = .default,
 };
 const Hotkey = struct {
     action: usize, mods: c_uint, key: c_uint, scope: sdk.ShortcutScope,
@@ -78,6 +83,7 @@ const Plugin = struct {
     settings_page: [96:0]u8 = @splat(0),
     network_rules: [96:0]u8 = @splat(0),
     protocol: Protocol,
+    bundled: bool,
     requests: Permissions,
     default_grants: Permissions = .empty,
     subscribes: bool,
@@ -134,7 +140,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     const plugin = &all[len];
     plugin.* = .{
         .id = @splat(0), .label = @splat(0), .executable = @splat(0), .action_count = commands.len,
-        .protocol = protocol, .requests = requests, .subscribes = subscribes,
+        .protocol = protocol, .bundled = bundled, .requests = requests, .subscribes = subscribes,
     };
     if (!copy(&plugin.id, id) or !copy(&plugin.label, name) or !copy(&plugin.executable, executable)) return;
     if (!copy(&plugin.settings_page,settings_page orelse "")) return;
@@ -145,6 +151,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         plugin.actions[index] = .{};
         plugin.actions[index].interactive = item.interactive;
         plugin.actions[index].shortcut = item.shortcut;
+        plugin.actions[index].menu_group = item.menu;
         if (!copy(&plugin.actions[index].id, item.id) or !copy(&plugin.actions[index].label, item.label)) return;
     }
     if (bundled) {
@@ -200,7 +207,7 @@ fn discover(root: []const u8, bundled: bool) void {
             if (manifest.api_version != 1) continue;
             var requested = Permissions.empty;
             if (contains(manifest.permissions, "tabs.read")) requested.insert(.@"tabs.read");
-            addManifest(directory, sub, manifest.id, manifest.name, manifest.executable, null, null, &.{.{ .id = "run", .label = manifest.command }},
+            addManifest(directory, sub, manifest.id, manifest.name, manifest.executable, null, null, &.{.{ .id = "run", .label = manifest.command, .menu = manifest.menu }},
                 requested, contains(manifest.events, "tabs.changed"), .legacy, bundled);
         }
     }
@@ -232,9 +239,14 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.task_manager_manage and plugin.requests.contains(.@"taskManager.manage")) plugin.grants.insert(.@"taskManager.manage");
         if (grant.enabled and grant.ui_commands and plugin.requests.contains(.@"ui.commands")) plugin.grants.insert(.@"ui.commands");
         if (canContribute(plugin)) {
+            for (grant.hidden_menu_items) |id| {
+                if (findAction(plugin,id)) |index| {
+                    if (plugin.actions[index].menu_group!=null) plugin.actions[index].menu_override = .hidden;
+                }
+            }
             for (grant.menu_items) |id| {
                 if (menuSize()==menu_limit) break;
-                if (findAction(plugin,id)) |index| plugin.actions[index].main_menu = true;
+                if (findAction(plugin,id)) |index| plugin.actions[index].menu_override = .pinned;
             }
             if (grant.hotkey) |saved_key| {
                 if (findAction(plugin,saved_key.id)) |index| {
@@ -256,12 +268,17 @@ pub fn init(app: []const u8, profile: []const u8) void {
 fn persist() bool {
     var items: [all.len]Grant = undefined;
     var menus: [all.len][sdk.command_limit][]const u8 = undefined;
+    var hidden_menus: [all.len][sdk.command_limit][]const u8 = undefined;
     for (all[0..len], 0..) |*plugin, index| {
         var used: usize = 0;
+        var hidden: usize = 0;
         for (plugin.actions[0..plugin.action_count]) |*action_entry| {
-            if (!action_entry.main_menu) continue;
-            menus[index][used] = std.mem.sliceTo(&action_entry.id,0);
-            used += 1;
+            const id = std.mem.sliceTo(&action_entry.id,0);
+            switch (action_entry.menu_override) {
+                .default => {},
+                .pinned => { menus[index][used] = id; used += 1; },
+                .hidden => { hidden_menus[index][hidden] = id; hidden += 1; },
+            }
         }
         const saved_key: ?sdk.RegisteredShortcut = if (plugin.hotkey) |*key| .{
             .id=std.mem.sliceTo(&plugin.actions[key.action].id,0),.shortcut=std.mem.sliceTo(&key.text,0),.scope=key.scope,
@@ -283,6 +300,7 @@ fn persist() bool {
         .task_manager_manage = plugin.grants.contains(.@"taskManager.manage"),
         .ui_commands = plugin.grants.contains(.@"ui.commands"),
         .menu_items = menus[index][0..used],
+        .hidden_menu_items = hidden_menus[index][0..hidden],
         .hotkey = saved_key,
         };
     }
@@ -298,9 +316,9 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
     const enabled = plugin.enabled;
     const grants = plugin.grants;
     const old_key = plugin.hotkey;
-    var old_menu: [sdk.command_limit]bool = undefined;
+    var old_menu: [sdk.command_limit]MenuOverride = undefined;
     for (plugin.actions[0..plugin.action_count],old_menu[0..plugin.action_count]) |action_entry,*menu|
-        menu.* = action_entry.main_menu;
+        menu.* = action_entry.menu_override;
     if (permission) |scope| {
         if (!plugin.requests.contains(scope) or !enabled) {
             native.moon_shell_info("插件权限", "请先启用声明此权限的插件。");
@@ -339,13 +357,13 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
     }
     if (!canContribute(plugin)) {
         plugin.hotkey = null;
-        for (plugin.actions[0..plugin.action_count]) |*action_entry| action_entry.main_menu = false;
+        for (plugin.actions[0..plugin.action_count]) |*action_entry| action_entry.menu_override = .default;
     }
     if (!persist()) {
         plugin.enabled = enabled;
         plugin.grants = grants;
         plugin.hotkey = old_key;
-        for (plugin.actions[0..plugin.action_count],old_menu[0..plugin.action_count]) |*entry,menu| entry.main_menu = menu;
+        for (plugin.actions[0..plugin.action_count],old_menu[0..plugin.action_count]) |*entry,menu| entry.menu_override = menu;
         native.moon_shell_info("Plugin settings", "Could not save the plugin settings.");
         return;
     }
@@ -441,14 +459,26 @@ fn contributor(id: []const u8) ?usize {
 fn menuSize() usize {
     var count_entries: usize = 0;
     for (all[0..len]) |*plugin| for (plugin.actions[0..plugin.action_count]) |*entry| {
-        if (entry.main_menu) count_entries += 1;
+        if (entry.menu_override==.pinned) count_entries += 1;
     };
     return count_entries;
 }
 
-pub fn inMainMenu(index: usize, command_index: usize) bool {
+pub fn menuLocation(index: usize, command_index: usize) c_uint {
     const plugin = &all[index];
-    return canContribute(plugin) and plugin.actions[command_index].main_menu;
+    if (!plugin.enabled or (!plugin.bundled and !canContribute(plugin))) return native.MOON_MENU_NONE;
+    const entry = &plugin.actions[command_index];
+    return switch (entry.menu_override) {
+        .pinned => native.MOON_MENU_PINNED,
+        .hidden => native.MOON_MENU_NONE,
+        .default => switch (entry.menu_group orelse return native.MOON_MENU_NONE) {
+            .page => native.MOON_MENU_PAGE,
+            .library => native.MOON_MENU_LIBRARY,
+            .privacy => native.MOON_MENU_PRIVACY,
+            .developer => native.MOON_MENU_DEVELOPER,
+            .extensions => native.MOON_MENU_EXTENSIONS,
+        },
+    };
 }
 
 pub fn setMenu(owner: []const u8, id: []const u8, add: bool) sdk.UiRegistration {
@@ -456,11 +486,13 @@ pub fn setMenu(owner: []const u8, id: []const u8, add: bool) sdk.UiRegistration 
     const plugin = &all[index];
     const command_index = findAction(plugin,id) orelse return .notFound;
     const entry = &plugin.actions[command_index];
-    if (entry.main_menu==add) return .saved;
+    const before = entry.menu_override;
+    const after: MenuOverride = if (add) .pinned else if (entry.menu_group!=null) .hidden else .default;
+    if (before==after) return .saved;
     if (add and menuSize()>=menu_limit) return .limitReached;
-    entry.main_menu = add;
+    entry.menu_override = after;
     if (!persist()) {
-        entry.main_menu = !add;
+        entry.menu_override = before;
         return .unavailable;
     }
     return .saved;
@@ -551,12 +583,50 @@ pub fn setHotkey(owner: []const u8, id: []const u8, text: ?[]const u8, scope: sd
     return .saved;
 }
 
-pub fn dynamicShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snapshot) bool {
+// Win32 MOD_* and VK_* values. Retain the numeric keypad alternatives for zoom.
+fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
+    const ctrl = 0x0002;
+    const ctrl_shift = ctrl | 0x0004;
+    const plus = vk==0xbb or vk==0x6b; // VK_OEM_PLUS, VK_ADD
+    if (plus and (mods==ctrl or mods==ctrl_shift)) return .@"Ctrl++";
+    return switch (mods) {
+        0 => if (vk==0x7b) .F12 else null,
+        ctrl => switch (vk) {
+            'H' => .@"Ctrl+H",
+            'J' => .@"Ctrl+J",
+            'D' => .@"Ctrl+D",
+            'F' => .@"Ctrl+F",
+            0xbd, 0x6d => .@"Ctrl+-",
+            '0', 0x60 => .@"Ctrl+0",
+            else => null,
+        },
+        ctrl_shift => switch (vk) {
+            'J' => .@"Ctrl+Shift+J",
+            'O' => .@"Ctrl+Shift+O",
+            'T' => .@"Ctrl+Shift+T",
+            'M' => .@"Ctrl+Shift+M",
+            0x2e => .@"Ctrl+Shift+Delete",
+            else => null,
+        },
+        else => null,
+    };
+}
+
+pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snapshot) bool {
     for (all[0..len],0..) |*plugin,index| {
         const key = plugin.hotkey orelse continue;
         if (!canContribute(plugin) or key.scope!=.browser or key.mods!=mods or key.key!=vk) continue;
         if (!repeated and plugin.work==null) _ = launch(index,key.action,.command,snapshot);
         return true;
+    }
+    const key = defaultShortcut(mods,vk) orelse return false;
+    for (all[0..len],0..) |*plugin,index| {
+        if (!plugin.enabled) continue;
+        for (plugin.actions[0..plugin.action_count],0..) |entry,command_index| {
+            if (entry.shortcut!=key or registeredShortcut(index,command_index)!=null) continue;
+            if (plugin.work==null) command(index,command_index,snapshot);
+            return true;
+        }
     }
     return false;
 }
@@ -657,15 +727,12 @@ pub fn command(index: usize, command_index: usize, snapshot: ?Snapshot) void {
         native.moon_shell_info("Plugin", "This plugin is disabled, busy, or could not start.");
 }
 
-pub fn shortcut(key: sdk.Shortcut, snapshot: ?Snapshot) bool {
+pub fn namedCommand(id: []const u8, action_id: []const u8, snapshot: ?Snapshot) bool {
     for (all[0..len],0..) |*plugin,index| {
-        if (!plugin.enabled) continue;
-        for (plugin.actions[0..plugin.action_count],0..) |action_entry,command_index| {
-            if (action_entry.shortcut != key) continue;
-            // Repeated shortcuts should not interrupt a plugin that's still opening its page.
-            if (plugin.work == null) command(index,command_index,snapshot);
-            return true;
-        }
+        if (!plugin.enabled or !std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),id)) continue;
+        const command_index = findAction(plugin,action_id) orelse return false;
+        if (plugin.work==null) command(index,command_index,snapshot);
+        return true;
     }
     return false;
 }

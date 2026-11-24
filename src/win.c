@@ -49,7 +49,7 @@ static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
 enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
-enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET,
+enum { MENU_ADD = 11, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET,
        MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 16, MENU_PLUGIN_STRIDE = 24,
        MENU_SCRIPTS_PICK = 2000, MENU_SCRIPTS_BASE = 2010 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
@@ -695,26 +695,45 @@ static void plugin_menu_item(HMENU menu, size_t plugin, size_t entry, bool enabl
     const unsigned id=MENU_PLUGIN_BASE+(unsigned)plugin*MENU_PLUGIN_STRIDE+MENU_PLUGIN_ACTIONS+(unsigned)entry;
     AppendMenuW(menu,MF_STRING|(enabled?0:MF_GRAYED),id,action);
 }
+static void plugin_command_groups(HMENU popup, size_t count) {
+    static const wchar_t *labels[MOON_MENU_COUNT]={
+        [MOON_MENU_PAGE]=L"标签与页面",
+        [MOON_MENU_LIBRARY]=L"浏览资料",
+        [MOON_MENU_PRIVACY]=L"隐私与安全",
+        [MOON_MENU_DEVELOPER]=L"开发与诊断",
+        [MOON_MENU_EXTENSIONS]=L"扩展工具",
+    };
+    HMENU groups[MOON_MENU_COUNT]={0};
+    groups[MOON_MENU_PINNED]=popup;
+    for (size_t i=0;i<count;++i) {
+        for (size_t j=0;j<moon_plugin_action_count(i);++j) {
+            unsigned location=moon_plugin_action_menu(i,j);
+            if (location==MOON_MENU_NONE || location>=ARRAYSIZE(groups)) continue;
+            if (!groups[location]) groups[location]=CreatePopupMenu();
+            if (groups[location]) plugin_menu_item(groups[location],i,j,true);
+        }
+    }
+    for (unsigned location=MOON_MENU_PAGE;location<ARRAYSIZE(groups);++location)
+        if (groups[location] && !AppendMenuW(popup,MF_POPUP,(UINT_PTR)groups[location],labels[location]))
+            DestroyMenu(groups[location]);
+}
 static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     HMENU popup=CreatePopupMenu();
     if (!popup) return;
     AppendMenuW(popup,MF_STRING,MENU_ADD,L"\u65b0\u5efa\u6807\u7b7e\u9875\tCtrl+T");
     AppendMenuW(popup,MF_STRING,MENU_PALETTE,L"\u547d\u4ee4\u9762\u677f\tCtrl+K");
-    AppendMenuW(popup,MF_STRING,MENU_DIAG,L"\u5185\u5b58\u8bca\u65ad\tCtrl+Shift+M");
     AppendMenuW(popup,MF_STRING,MENU_UPDATES,L"\u7248\u672c\u4e0e\u66f4\u65b0");
     AppendMenuW(popup,MF_STRING,MENU_MARKET,L"插件市场");
     AppendMenuW(popup,MF_STRING|(theme==&dark?MF_CHECKED:0),MENU_THEME,L"\u6df1\u8272\u4e3b\u9898\tCtrl+Shift+L");
     AppendMenuW(popup,MF_STRING|(focus_mode?MF_CHECKED:0),MENU_FOCUS,L"\u4e13\u6ce8\u6a21\u5f0f\tCtrl+B");
     userscript_menu(popup);
     size_t count=moon_plugin_count();
-    HMENU extensions=count ? CreatePopupMenu() : NULL;
-    if (extensions) {
+    if (count) {
         AppendMenuW(popup,MF_SEPARATOR,0,NULL);
-        for (size_t i=0;i<count;++i)
-            for (size_t j=0;j<moon_plugin_action_count(i);++j)
-                if (moon_plugin_action_in_main_menu(i,j)) plugin_menu_item(popup,i,j,true);
-        AppendMenuW(popup,MF_POPUP,(UINT_PTR)extensions,L"插件");
+        plugin_command_groups(popup,count);
     }
+    HMENU extensions=count ? CreatePopupMenu() : NULL;
+    if (extensions) AppendMenuW(popup,MF_POPUP,(UINT_PTR)extensions,L"插件");
     for(size_t i=0;extensions && i<count;++i) {
         wchar_t name[256],action[300];
         if (!moon_utf16(moon_plugin_label(i),name,ARRAYSIZE(name))) continue;
@@ -742,8 +761,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     UINT command=TrackPopupMenuEx(popup,flags,right_aligned?button.right:button.left,
         above?button.top:button.bottom,hwnd,&placement);
     DestroyMenu(popup);
-    if (command==MENU_DIAG) moon_command(MOON_DIAGNOSTICS,0,NULL);
-    else if (command==MENU_ADD) moon_command(MOON_NEW,0,NULL);
+    if (command==MENU_ADD) moon_command(MOON_NEW,0,NULL);
     else if (command==MENU_THEME) moon_shell_toggle_theme();
     else if (command==MENU_FOCUS) moon_shell_toggle_sidebar();
     else if (command==MENU_PALETTE) open_palette();
@@ -1104,28 +1122,16 @@ static bool keyboard(MSG *msg) {
     if (ctrl && shift && msg->wParam == 'L') { moon_shell_toggle_theme(); return true; }
     if ((ctrl && msg->wParam == 'L') || msg->wParam == VK_F6) { moon_shell_focus_address(); return true; }
     if (ctrl && msg->wParam == 'K') { open_palette(); return true; }
-    if (ctrl && !shift && !alt && msg->wParam == 'H' && moon_plugin_shortcut("Ctrl+H")) return true;
-    if (ctrl && !shift && !alt && msg->wParam == 'F' && moon_plugin_shortcut("Ctrl+F")) return true;
-    if (ctrl && !alt && (msg->wParam==VK_OEM_PLUS || msg->wParam==VK_ADD) && moon_plugin_shortcut("Ctrl++")) return true;
-    if (ctrl && !shift && !alt && (msg->wParam==VK_OEM_MINUS || msg->wParam==VK_SUBTRACT) && moon_plugin_shortcut("Ctrl+-")) return true;
-    if (ctrl && !shift && !alt && (msg->wParam=='0' || msg->wParam==VK_NUMPAD0) && moon_plugin_shortcut("Ctrl+0")) return true;
-    if (!ctrl && !shift && !alt && msg->wParam == VK_F12 && moon_plugin_shortcut("F12")) return true;
-    if (ctrl && shift && !alt && msg->wParam == 'J' && moon_plugin_shortcut("Ctrl+Shift+J")) return true;
-    if (ctrl && !shift && !alt && msg->wParam == 'J' && moon_plugin_shortcut("Ctrl+J")) return true;
-    if (ctrl && !shift && !alt && msg->wParam == 'D' && moon_plugin_shortcut("Ctrl+D")) return true;
-    if (ctrl && shift && !alt && msg->wParam == 'O' && moon_plugin_shortcut("Ctrl+Shift+O")) return true;
     if (ctrl && msg->wParam == 'B') { moon_shell_toggle_sidebar(); return true; }
-    if (ctrl && shift && !alt && msg->wParam == 'T' && moon_plugin_shortcut("Ctrl+Shift+T")) return true;
-    if (ctrl && shift && !alt && msg->wParam == VK_DELETE && moon_plugin_shortcut("Ctrl+Shift+Delete")) return true;
     if (ctrl && !shift && !alt && msg->wParam == 'T') { moon_command(MOON_NEW,0,NULL); return true; }
     if (ctrl && msg->wParam == 'W') { moon_command(MOON_CLOSE,moon_active_index(),NULL); return true; }
     if (ctrl && msg->wParam == VK_TAB) { moon_command(shift ? MOON_KEY_PREV : MOON_KEY_NEXT,0,NULL); return true; }
-    if (ctrl && shift && msg->wParam == 'M') { moon_command(MOON_DIAGNOSTICS,0,NULL); return true; }
     if (msg->wParam == VK_F5 || (ctrl && msg->wParam == 'R')) { moon_command(MOON_RELOAD,0,NULL); return true; }
     if (alt && msg->wParam == VK_LEFT) { moon_command(MOON_BACK,0,NULL); return true; }
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
-    if (shift && (ctrl!=alt) && !moon_ime_composing(msg->hwnd) &&
-        moon_plugin_key(MOD_SHIFT|(ctrl?MOD_CONTROL:MOD_ALT),(unsigned)msg->wParam,(msg->lParam&(1L<<30))!=0)) return true;
+    const unsigned modifiers=(ctrl?MOD_CONTROL:0)|(alt?MOD_ALT:0)|(shift?MOD_SHIFT:0);
+    if ((ctrl || alt || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
+        moon_plugin_key(modifiers,(unsigned)msg->wParam,(msg->lParam&(1L<<30))!=0)) return true;
     return false;
 }
 bool moon_shell_register_hotkey(unsigned id, unsigned modifiers, unsigned key) {

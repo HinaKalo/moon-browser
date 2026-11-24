@@ -7,7 +7,7 @@
   "entry": "MoonLuaManager.exe",
   "settingsPage": "settings.html",
   "contributes": {
-    "commands": [{"id": "open", "label": "打开 Lua 脚本编辑器", "interactive": true}]
+    "commands": [{"id": "open", "label": "打开 Lua 脚本编辑器", "menu": "extensions", "interactive": true}]
   },
   "permissions": ["lua.scripts.manage"]
 }

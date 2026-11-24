@@ -7,7 +7,7 @@
   "entry": "MoonHistory.exe",
   "settingsPage": "history.html",
   "contributes": {
-    "commands": [{ "id": "open", "label": "历史记录", "shortcut": "Ctrl+H" }]
+    "commands": [{ "id": "open", "label": "历史记录", "menu": "library", "shortcut": "Ctrl+H" }]
   },
   "permissions": ["history.manage"]
 }

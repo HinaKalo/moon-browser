@@ -8,8 +8,8 @@
   "settingsPage": "bookmarks.html",
   "contributes": {
     "commands": [
-      { "id": "open", "label": "管理书签", "shortcut": "Ctrl+Shift+O" },
-      { "id": "save", "label": "将当前页加入书签", "shortcut": "Ctrl+D" }
+      { "id": "open", "label": "管理书签", "menu": "library", "shortcut": "Ctrl+Shift+O" },
+      { "id": "save", "label": "将当前页加入书签", "menu": "library", "shortcut": "Ctrl+D" }
     ]
   },
   "permissions": ["bookmarks.manage"]

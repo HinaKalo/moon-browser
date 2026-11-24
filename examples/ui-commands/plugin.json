@@ -8,8 +8,8 @@
   "settingsPage": "commands.html",
   "contributes": {
     "commands": [
-      { "id": "settings", "label": "配置菜单与快捷键示例" },
-      { "id": "hello", "label": "显示 Moon 命令提示" }
+      { "id": "settings", "label": "配置菜单与快捷键示例", "menu": "extensions" },
+      { "id": "hello", "label": "显示 Moon 命令提示", "menu": "extensions" }
     ]
   },
   "permissions": ["ui.commands"]

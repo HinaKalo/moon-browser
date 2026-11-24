@@ -8,8 +8,8 @@
   "settingsPage": "recent.html",
   "contributes": {
     "commands": [
-      { "id": "open", "label": "最近关闭的标签" },
-      { "id": "reopen", "label": "恢复上一个关闭的标签", "shortcut": "Ctrl+Shift+T" }
+      { "id": "open", "label": "最近关闭的标签", "menu": "page" },
+      { "id": "reopen", "label": "恢复上一个关闭的标签", "menu": "page", "shortcut": "Ctrl+Shift+T" }
     ]
   },
   "permissions": ["tabs.closed.manage"]

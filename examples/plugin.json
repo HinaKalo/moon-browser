@@ -4,6 +4,7 @@
   "name": "Active Tab Example",
   "executable": "MoonExamplePlugin.exe",
   "command": "Inspect active tab",
+  "menu": "extensions",
   "permissions": ["tabs.read"],
   "events": ["tabs.changed"]
 }

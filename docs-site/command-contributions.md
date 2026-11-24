@@ -1,19 +1,33 @@
 # 菜单与快捷键
 
-先在清单的 `contributes.commands` 声明命令 ID 和显示名，并请求 `ui.commands` 权限。用户授权后，可从原生用户命令或插件配置页管理这些入口。入口被触发时，浏览器按需启动插件并发出 `commands.run`。
+在清单的 `contributes.commands` 声明命令 ID 和显示名。命令可以声明 `menu` 放入「…」的固定分组，也可以通过 `shortcut` 声明支持的浏览器快捷键。菜单和快捷键都按需启动插件并发出 `commands.run`。
+
+| `menu` | 菜单分组 |
+| --- | --- |
+| `page` | 标签与页面 |
+| `library` | 浏览资料 |
+| `privacy` | 隐私与安全 |
+| `developer` | 开发与诊断 |
+| `extensions` | 扩展工具 |
+
+随包插件启用后显示声明的分组入口。外部插件需由用户授权 `ui.commands` 才能显示分组入口。可声明的 `shortcut` 列在 [插件清单 Schema](https://github.com/HinaKalo/moon-browser/blob/main/sdk/plugin.schema.json) 中。
+
+## 运行时设置
+
+请求 `ui.commands` 并获得用户授权后，可从原生用户命令或插件配置页修改入口。
 
 | 方法 | 参数 |
 | --- | --- |
-| `ui.menu.add` | `{ id }`，将命令加入「…」主菜单 |
-| `ui.menu.remove` | `{ id }`，移除主菜单入口 |
+| `ui.menu.add` | `{ id }`，将命令置顶到「…」主菜单，并隐藏同一命令的分组入口 |
+| `ui.menu.remove` | `{ id }`，移除命令在「…」中的置顶或分组入口 |
 | `ui.shortcuts.register` | `{ id, shortcut, scope? }`，替换此插件的运行时快捷键 |
 | `ui.shortcuts.unregister` | `{ id }`，解除运行时快捷键 |
 
-命令 ID 只在调用插件自身的清单中解析。主菜单入口使用清单里的显示名，整套配置最多添加四项。原来位于插件子菜单的命令仍可调用。
+命令 ID 在调用插件自身的清单中解析。置顶条目使用清单中的显示名，最多同时置顶四项。移除菜单入口后，仍可从「插件」管理子菜单执行该命令。
 
 快捷键采用 `Ctrl+Shift+` 或 `Alt+Shift+` 加一个大写字母或数字。默认范围 `browser` 在 Moon Browser 内生效。范围 `global` 使用 Windows 原生注册，首次申请或修改时单独确认，适用于仍在运行的 Moon Browser。通过 EXE 申请全局快捷键的命令应声明 `interactive: true`。
 
-成功返回 `saved`。其他结果为 `notFound`、`conflict`、`reserved`、`invalidShortcut`、`limitReached`、`cancelled` 或 `unavailable`。退出浏览器会释放 Windows 注册，重启后会尝试恢复。当系统组合键已被占用时，可到插件配置页重新选择。停用插件或撤销权限会删除它的运行时入口和快捷键。
+运行时快捷键覆盖同一命令的清单默认值。解除注册会恢复清单默认值。成功返回 `saved`。其他结果为 `notFound`、`conflict`、`reserved`、`invalidShortcut`、`limitReached`、`cancelled` 或 `unavailable`。退出浏览器会释放 Windows 注册，重启后会尝试恢复。停用插件或撤销权限会清除保存的运行时菜单设置和快捷键。
 
 ## 试用
 

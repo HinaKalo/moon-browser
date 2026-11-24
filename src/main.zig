@@ -842,7 +842,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_INPUT => if (tab.view != null) {
             tab.dirty = true;
         },
-        native.MOON_DIAGNOSTICS => if (!plugins.shortcut(.@"Ctrl+Shift+M",tabSnapshot()))
+        native.MOON_DIAGNOSTICS => if (!plugins.namedCommand("moon.task-manager","open",tabSnapshot()))
             native.moon_shell_toast("内存诊断","请在插件菜单启用浏览器任务管理器。"),
         native.MOON_TICK => maintenance(),
         native.MOON_PLUGIN_ENABLE => {
@@ -1230,16 +1230,11 @@ export fn moon_reading_zoom(id: u64, action: c_int) c_uint {
     return percent;
 }
 
-export fn moon_plugin_shortcut(shortcut: [*c]const u8) bool {
-    if (stopped or count == 0) return false;
-    const key = std.meta.stringToEnum(sdk.Shortcut,slice(shortcut)) orelse return false;
-    return plugins.shortcut(key,tabSnapshot());
-}
-export fn moon_plugin_action_in_main_menu(index: usize, command: usize) bool {
-    return plugins.inMainMenu(index,command);
+export fn moon_plugin_action_menu(index: usize, command: usize) c_uint {
+    return plugins.menuLocation(index,command);
 }
 export fn moon_plugin_key(modifiers: c_uint, key: c_uint, repeated: bool) bool {
-    return !stopped and count!=0 and plugins.dynamicShortcut(modifiers,key,repeated,tabSnapshot());
+    return !stopped and count!=0 and plugins.browserShortcut(modifiers,key,repeated,tabSnapshot());
 }
 export fn moon_plugin_global_key(id: c_uint, modifiers: c_uint, key: c_uint) bool {
     return !stopped and count!=0 and plugins.globalShortcut(id,modifiers,key,tabSnapshot());

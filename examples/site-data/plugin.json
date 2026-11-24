@@ -6,6 +6,6 @@
   "runtime": "native",
   "entry": "MoonSiteData.exe",
   "settingsPage": "site-data.html",
-  "contributes": { "commands": [{ "id": "inspect", "label": "查看当前站点数据" }] },
+  "contributes": { "commands": [{ "id": "inspect", "label": "查看当前站点数据", "menu": "privacy" }] },
   "permissions": ["siteData.read"]
 }

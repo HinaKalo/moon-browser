@@ -8,7 +8,7 @@
   "settingsPage": "tasks.html",
   "contributes": {
     "commands": [
-      { "id": "open", "label": "浏览器任务管理器", "shortcut": "Ctrl+Shift+M" }
+      { "id": "open", "label": "浏览器任务管理器", "menu": "developer", "shortcut": "Ctrl+Shift+M" }
     ]
   },
   "permissions": ["taskManager.manage"]

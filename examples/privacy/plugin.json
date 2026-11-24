@@ -8,7 +8,7 @@
   "settingsPage": "privacy.html",
   "contributes": {
     "commands": [
-      { "id": "open", "label": "清除浏览数据", "shortcut": "Ctrl+Shift+Delete" }
+      { "id": "open", "label": "清除浏览数据", "menu": "privacy", "shortcut": "Ctrl+Shift+Delete" }
     ]
   },
   "permissions": ["privacy.clear"]

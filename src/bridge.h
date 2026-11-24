@@ -158,8 +158,11 @@ bool moon_site_data_open(const char *id, uint64_t source, const char *expected);
 bool moon_site_data_action(uint64_t panel, const char *id, bool inspector);
 void moon_site_data_result(uint64_t source, uint64_t request, const char *snapshot);
 bool moon_plugin_open_page(const char *id);
-bool moon_plugin_shortcut(const char *shortcut);
-bool moon_plugin_action_in_main_menu(size_t index, size_t command);
+enum MoonPluginMenu {
+    MOON_MENU_NONE, MOON_MENU_PINNED, MOON_MENU_PAGE, MOON_MENU_LIBRARY,
+    MOON_MENU_PRIVACY, MOON_MENU_DEVELOPER, MOON_MENU_EXTENSIONS, MOON_MENU_COUNT
+};
+unsigned moon_plugin_action_menu(size_t index, size_t command);
 bool moon_plugin_key(unsigned modifiers, unsigned key, bool repeated);
 bool moon_plugin_global_key(unsigned id, unsigned modifiers, unsigned key);
 bool moon_shell_register_hotkey(unsigned id, unsigned modifiers, unsigned key);

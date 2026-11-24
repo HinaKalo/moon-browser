@@ -7,10 +7,10 @@
   "entry": "MoonReading.exe",
   "contributes": {
     "commands": [
-      { "id": "find", "label": "页内查找", "shortcut": "Ctrl+F" },
-      { "id": "increase", "label": "放大页面", "shortcut": "Ctrl++" },
-      { "id": "decrease", "label": "缩小页面", "shortcut": "Ctrl+-" },
-      { "id": "reset", "label": "重置页面缩放", "shortcut": "Ctrl+0" }
+      { "id": "find", "label": "页内查找", "menu": "page", "shortcut": "Ctrl+F" },
+      { "id": "increase", "label": "放大页面", "menu": "page", "shortcut": "Ctrl++" },
+      { "id": "decrease", "label": "缩小页面", "menu": "page", "shortcut": "Ctrl+-" },
+      { "id": "reset", "label": "重置页面缩放", "menu": "page", "shortcut": "Ctrl+0" }
     ]
   },
   "permissions": ["page.reading"]

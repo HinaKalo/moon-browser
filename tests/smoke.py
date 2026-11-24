@@ -454,6 +454,8 @@ def run_win32(exe, base, root):
     user.UnregisterHotKey.argtypes = [wt.HWND,ctypes.c_int]
     user.GetMenuItemCount.argtypes = [wt.HMENU]
     user.GetMenuStringW.argtypes = [wt.HMENU,wt.UINT,wt.LPWSTR,ctypes.c_int,wt.UINT]
+    user.GetSubMenu.argtypes = [wt.HMENU,ctypes.c_int]
+    user.GetSubMenu.restype = wt.HMENU
     user.GetDlgItem.argtypes = [wt.HWND, ctypes.c_int]
     user.GetDlgItem.restype = wt.HWND
     user.IsWindowVisible.argtypes = [wt.HWND]
@@ -1477,18 +1479,36 @@ def run_win32(exe, base, root):
                 popup = wait_for(open_menu,"The native main menu did not open")
                 try:
                     handle = user.SendMessageW(popup,0x01E1,0,0)  # MN_GETHMENU
-                    size = user.GetMenuItemCount(handle)
-                    if size<1:
+                    if user.GetMenuItemCount(handle)<1:
                         raise RuntimeError("Could not read the native main menu entries")
-                    result = []
-                    for index in range(size):
-                        label = ctypes.create_unicode_buffer(256)
-                        user.GetMenuStringW(handle,index,label,len(label),0x400)  # MF_BYPOSITION
-                        result.append(label.value)
-                    return result
+
+                    def entries(menu):
+                        result = {}
+                        for index in range(user.GetMenuItemCount(menu)):
+                            label = ctypes.create_unicode_buffer(300)
+                            user.GetMenuStringW(menu,index,label,len(label),0x400)  # MF_BYPOSITION
+                            child = user.GetSubMenu(menu,index)
+                            result[label.value] = entries(child) if child else {}
+                        return result
+
+                    return entries(handle)
                 finally:
                     user.PostMessageW(frame,0x001F,0,0)  # WM_CANCELMODE
                     wait_for(lambda: not open_menu(),"Main menu did not dismiss")
+
+            groups = native_entries()
+            expected = {
+                "标签与页面": {"页内查找\tCtrl+F","放大页面\tCtrl++","恢复上一个关闭的标签\tCtrl+Shift+T"},
+                "浏览资料": {"历史记录\tCtrl+H","查看下载\tCtrl+J","管理书签\tCtrl+Shift+O"},
+                "隐私与安全": {"清除浏览数据\tCtrl+Shift+Delete","查看当前站点数据"},
+                "开发与诊断": {"打开网页开发者工具\tF12","打开网页控制台\tCtrl+Shift+J","浏览器任务管理器\tCtrl+Shift+M"},
+                "扩展工具": {"打开 Lua 脚本编辑器","配置菜单与快捷键示例","显示 Moon 命令提示"},
+            }
+            for group, labels in expected.items():
+                if missing := labels - groups.get(group,{}).keys():
+                    raise RuntimeError(f"Native menu group {group} is missing {missing}")
+            if "管理网页过滤" in groups["隐私与安全"] or "Inspect active tab" in groups["扩展工具"]:
+                raise RuntimeError("A disabled optional plugin appeared in the grouped menu")
 
             if not user.RegisterHotKey(None,901,modifiers,ord('9')):
                 raise RuntimeError("Could not reserve the test's conflicting shortcut")
@@ -1501,8 +1521,11 @@ def run_win32(exe, base, root):
                 registration_phase("installed")
             finally:
                 user.UnregisterHotKey(None,901)
-            if "显示 Moon 命令提示\tCtrl+Shift+8" not in native_entries():
+            groups = native_entries()
+            if "显示 Moon 命令提示\tCtrl+Shift+8" not in groups:
                 raise RuntimeError("The plugin command is missing from the actual native main menu")
+            if any(item.startswith("显示 Moon 命令提示") for item in groups["扩展工具"]):
+                raise RuntimeError("The pinned command was duplicated in its original menu group")
             if user.RegisterHotKey(None,902,modifiers,ord('8')):
                 user.UnregisterHotKey(None,902)
                 raise RuntimeError("The browser did not reserve its global shortcut in Windows")
@@ -1530,9 +1553,12 @@ def run_win32(exe, base, root):
             if not user.RegisterHotKey(None,902,modifiers,ord('8')):
                 raise RuntimeError("Unregistering did not release the Windows shortcut")
             user.UnregisterHotKey(None,902)
-            if any(item.startswith("显示 Moon 命令提示") for item in native_entries()):
+            groups = native_entries()
+            if any(item.startswith("显示 Moon 命令提示") for item in (*groups,*groups["扩展工具"])):
                 raise RuntimeError("The removed command remained in the native main menu")
-            print("command_contributions=ok native_menu=ok global_wake=ok conflict_cancel=ok restart=ok removal=ok",flush=True)
+            if "显示 Moon 命令提示" not in groups["插件"]["命令唤醒验收"]:
+                raise RuntimeError("Removing the main menu placement also removed the plugin's command")
+            print("command_contributions=ok native_groups=ok pin_no_duplicate=ok global_wake=ok conflict_cancel=ok restart=ok removal=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:
