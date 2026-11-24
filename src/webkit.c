@@ -669,12 +669,13 @@ static void web_context_selected(WKPageRef page,WKContextMenuItemRef item,const 
     moon_link_menu_run(&selected,index/MOON_LINK_MENU_STRIDE,index%MOON_LINK_MENU_STRIDE);
 }
 static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef body,const void *context) {
-    const MoonView *view=context;
+    MoonView *view=(MoonView *)context;
     const bool catalog=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteCatalog");
     const bool reader=wk.WKStringIsEqualToUTF8CString(name,"MoonArticleSnapshot");
-    if ((!catalog && !reader && !wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot")) || !body ||
+    const bool cache=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteCacheRemoval");
+    if ((!catalog && !reader && !cache && !wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot")) || !body ||
         wk.WKGetTypeID(body)!=wk.WKStringGetTypeID()) return;
-    const size_t cap=(reader ? 192 : catalog ? 64 : 512)*1024+32;
+    const size_t cap=(cache ? 1 : reader ? 192 : catalog ? 64 : 512)*1024+32;
     char *response=malloc(cap);
     if (!response) return;
     const size_t n=wk.WKStringGetUTF8CString((WKStringRef)body,response,cap);
@@ -683,6 +684,7 @@ static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef bod
         const uint64_t request=strtoull(response,&end,10);
         if (end!=response && *end=='\n') {
             if (reader) moon_reader_result(view->token,request,end+1);
+            else if (cache) moon_site_cache_result(view,view->token,request,end+1);
             else moon_site_data_result(view->token,request,end+1,catalog);
         }
     }
@@ -718,6 +720,9 @@ bool moon_engine_update_site(MoonView *view,uint64_t request,const char *update)
 }
 bool moon_engine_read_article(MoonView *view,uint64_t request,const char *script) {
     return send_site_request(view,request,script,"MoonReadArticle");
+}
+bool moon_engine_remove_site_cache(MoonView *view,uint64_t request,const char *change) {
+    return send_site_request(view,request,change,"MoonRemoveSiteCache");
 }
 
 static MoonView *open_view(uint64_t token, const char *extension_id, const char *address) {

@@ -10,6 +10,8 @@
 
 从 0.1.0-preview.34 起，可筛选当前来源的 IndexedDB 数据库和 Cache Storage 缓存。IndexedDB 列表显示数据库名称和版本，Cache Storage 列表显示缓存名称。每类最多预览 32 条。对象仓库和数据库记录可在 WebKit 检查器的 Storage 面板查看。
 
+从 0.1.0-preview.51 起，可在 Cache Storage 列表选择「删除缓存」。系统确认框会显示来源和缓存名称。确认后移除该缓存及其中的响应，面板自动刷新。其他缓存和站点数据保留原样。
+
 刷新会重新读取绑定网页。网页导航、崩溃或关闭后，旧快照随即失效。快照仅在内存中保留，五分钟后过期。可通过插件菜单停用系统插件或撤销「允许查看站点数据」。
 
 ## 插件 API
@@ -27,5 +29,7 @@ Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限�
 `siteData.create` 传入 `{ group, generation, key, value }`。名称最多 512 UTF-8 字节，值最多 1024 UTF-8 字节。已有同名条目时，快照的 `mutation` 为 `conflict`。
 
 `siteData.clear` 传入 `{ group, generation }`，仅支持 `local` 和 `session`。返回 `started`、`cancelled` 或 `unavailable`。提交后查询 `siteData.status`，新快照的 `mutation: "cleared"` 表示清空完成。
+
+`siteData.cacheRemove` 需要 `siteData.read` 和 `siteData.cacheWrite`。绑定面板传入 `{ index, generation }`，其中 `index` 是 `siteData.catalog({ group: "cacheStorage" })` 返回的原始列表下标，从 0 开始。已截断的名称无法删除。完成后通过 `siteData.status` 读取新快照，`mutation` 为 `removed`、`conflict` 或 `failed`。如果缓存已经被网站移除，返回 `conflict` 并刷新面板。
 
 [插件 API](./api) · [网页开发者工具](./devtools)

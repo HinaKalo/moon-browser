@@ -22,6 +22,7 @@ var sequence: u64 = 0;
 var received: sdk.SiteDataState = .idle;
 var failure: ?sdk.SiteDataFailure = null;
 var mutation: ?sdk.SiteDataMutation = null;
+var cache_pending = false;
 var deadline: u64 = 0;
 var owner: [96]u8 = undefined;
 var owner_len: usize = 0;
@@ -29,6 +30,7 @@ var origin: [4096]u8 = undefined;
 var origin_len: usize = 0;
 
 fn dropValues() void {
+    cache_pending = false;
     if (captured) |result| result.deinit();
     captured = null;
     dropCookies();
@@ -112,6 +114,7 @@ fn failedRequest() void {
 }
 
 pub fn request(view: *native.MoonView) bool {
+    if (cache_pending) return false;
     startRequest();
     if (!native.moon_engine_inspect_site(view,sequence)) failedRequest();
     return received == .pending;
@@ -143,6 +146,42 @@ pub fn create(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.Site
 pub fn clear(view: *native.MoonView, tab: u64, id: []const u8, group: sdk.SiteDataGroup, generation: u64) bool {
     if (!canMutate(tab,id,group,generation)) return false;
     return mutate(view,.{ .group=group,.clear=true });
+}
+
+pub fn cacheName(tab: u64, id: []const u8, target: sdk.SiteCacheRemove) ?[]const u8 {
+    if (!owns(tab,id) or received != .ready or target.generation != sequence) return null;
+    const result = catalog orelse return null;
+    const section = result.value.cacheStorage orelse return null;
+    if (target.index >= section.entries.len) return null;
+    const entry = section.entries[target.index];
+    return if (entry.shortened) null else entry.name;
+}
+
+pub fn removeCache(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteCacheRemove) bool {
+    const name = cacheName(tab,id,target) orelse return false;
+    var number: [24]u8 = undefined;
+    const previous = std.fmt.bufPrint(&number,"{d}",.{sequence}) catch unreachable;
+    const bytes = std.json.Stringify.valueAlloc(allocator,.{ .name=name,.previous=previous },.{}) catch return false;
+    defer allocator.free(bytes);
+    const payload = allocator.dupeSentinel(u8,bytes,0) catch return false;
+    defer allocator.free(payload);
+    startRequest();
+    cache_pending = native.moon_engine_remove_site_cache(view,sequence,payload.ptr);
+    if (!cache_pending) failedRequest();
+    return cache_pending;
+}
+
+pub fn completeCache(view: *native.MoonView, tab: u64, token: u64, json: []const u8) void {
+    if (!cache_pending or tab != source or token != sequence or received != .pending) return;
+    cache_pending = false;
+    const result = std.json.parseFromSlice(struct { mutation: sdk.SiteDataMutation },allocator,json,.{}) catch {
+        failedRequest();
+        return;
+    };
+    defer result.deinit();
+    mutation = result.value.mutation;
+    deadline = native.moon_clock()+5000;
+    if (!native.moon_engine_inspect_site(view,sequence)) failedRequest();
 }
 
 const Mutation = struct {
@@ -193,7 +232,7 @@ pub fn complete(tab: u64, token: u64, json: []const u8) void {
     captured=result;
     received=.ready;
     failure=null;
-    mutation=result.value.mutation;
+    mutation=result.value.mutation orelse mutation;
     deadline=native.moon_clock()+5*60*1000;
 }
 
@@ -202,6 +241,7 @@ pub fn tick(now: u64) void {
         if (now >= expires) catalog_deadline = null;
     }
     if (received == .pending and now >= deadline) {
+        cache_pending = false;
         received=.unavailable;
         failure=.timedOut;
     } else if (received == .ready and now >= deadline) {
@@ -255,10 +295,10 @@ fn resolve(kind: sdk.SiteDataGroup) ?Group {
     };
 }
 
-pub fn status(tab: u64, id: []const u8, writable: bool, cookie_details: bool) sdk.SiteDataStatus {
+pub fn status(tab: u64, id: []const u8, writable: bool, cookie_details: bool, cache_writable: bool) sdk.SiteDataStatus {
     if (!owns(tab,id)) return .{ .state=.idle,.origin="",.generation=0 };
     return .{ .state=received,.origin=origin[0..origin_len],.generation=sequence,.failure=failure,
-        .mutation=mutation,.writable=writable,.cookieDetails=cookie_details };
+        .mutation=mutation,.writable=writable,.cookieDetails=cookie_details,.cacheWritable=cache_writable };
 }
 
 pub fn cookieDetails(tab: u64, id: []const u8, generation: u64, url: []const u8) ?sdk.SiteCookiePage {

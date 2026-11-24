@@ -120,6 +120,17 @@ static const char catalog_script[] =
         "reply(revision+'\\n'+JSON.stringify({indexedDB,cacheStorage}));});"
     "})";
 
+static const char cache_remove_script[] =
+    "((revision,url,payload,reply) => {"
+    "const change=JSON.parse(payload);"
+    "if(location.href!==url||globalThis.__moonSiteDataRevision!==change.previous)return false;"
+    "const done=mutation=>{if(location.href===url&&globalThis.__moonSiteDataRevision===change.previous)"
+        "reply(revision+'\\n'+JSON.stringify({mutation}));};"
+    "try{caches.delete(change.name).then(existed=>done(existed?'removed':'conflict'),()=>done('failed'));}"
+    "catch{done('failed');}"
+    "return true;"
+    "})";
+
 static void post_reply(WKBundlePageRef page,const char *channel,const char *text) {
     WKStringRef name=api.new_string(channel), body=api.new_string(text);
     if (name && body) api.post(page,name,body);
@@ -127,8 +138,8 @@ static void post_reply(WKBundlePageRef page,const char *channel,const char *text
     if (name) api.release(name);
 }
 
-static JSValueRef catalog_finished(JSContextRef context,JSObjectRef function,JSObjectRef self,size_t argc,
-                                   const JSValueRef argv[],JSValueRef *exception) {
+static JSValueRef send_async_reply(JSContextRef context,size_t argc,const JSValueRef argv[],
+                                   JSValueRef *exception,const char *channel) {
     WKBundleFrameRef frame=api.frame_for_context(context);
     WKBundlePageRef page=frame ? api.page_for_frame(frame) : NULL;
     if (page && api.main_frame(page)==frame && argc==1) {
@@ -140,7 +151,7 @@ static JSValueRef catalog_finished(JSContextRef context,JSObjectRef function,JSO
             char *response=estimated ? malloc(estimated) : NULL;
             if (response) {
                 const size_t bytes=api.utf8(text,response,estimated);
-                if (bytes>2 && response[bytes-2]=='}') post_reply(page,"MoonSiteCatalog",response);
+                if (bytes>2 && response[bytes-2]=='}') post_reply(page,channel,response);
                 free(response);
             }
             api.release_js(text);
@@ -149,8 +160,20 @@ static JSValueRef catalog_finished(JSContextRef context,JSObjectRef function,JSO
     return api.make_undefined(context);
 }
 
+static JSValueRef catalog_finished(JSContextRef context,JSObjectRef function,JSObjectRef self,size_t argc,
+                                   const JSValueRef argv[],JSValueRef *exception) {
+    return send_async_reply(context,argc,argv,exception,"MoonSiteCatalog");
+}
+
+static JSValueRef cache_remove_finished(JSContextRef context,JSObjectRef function,JSObjectRef self,size_t argc,
+                                        const JSValueRef argv[],JSValueRef *exception) {
+    return send_async_reply(context,argc,argv,exception,"MoonSiteCacheRemoval");
+}
+
+typedef enum { SITE_SNAPSHOT, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE } SiteRequest;
+
 static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char *expected,const char *change,
-                           bool catalog,bool reader,bool *scheduled,const char **failure) {
+                           SiteRequest kind,bool *scheduled,const char **failure) {
     *failure="\"frameUnavailable\"";
     WKBundleFrameRef frame=api.main_frame(page);
     if (!frame) return NULL;
@@ -172,32 +195,42 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
     JSStringRef result=NULL;
     if (context) {
         *failure="\"evaluationFailed\"";
-        JSStringRef script=api.source(reader ? change : catalog ? catalog_script : snapshot_script);
-        if (reader) {
+        const char *source = kind==SITE_ARTICLE ? change : kind==SITE_CATALOG ? catalog_script :
+                             kind==SITE_CACHE_REMOVE ? cache_remove_script : snapshot_script;
+        JSStringRef script=api.source(source);
+        if (kind==SITE_ARTICLE) {
             JSValueRef exception=NULL;
             JSValueRef value=script ? api.evaluate(context,script,NULL,NULL,1,&exception) : NULL;
             if (!exception && value) result=api.to_string(context,value,NULL);
             if (script) api.release_js(script);
             return result;
         }
-        JSStringRef id=api.source(revision), payload=api.source(catalog ? expected : change);
-        if (script && id && payload) {
+        JSStringRef id=api.source(revision), url=kind==SITE_SNAPSHOT ? NULL : api.source(expected);
+        JSStringRef payload=kind==SITE_CATALOG ? NULL : api.source(change);
+        if (script && id && (url || kind==SITE_SNAPSHOT) && (payload || kind==SITE_CATALOG)) {
             JSValueRef exception=NULL;
             JSValueRef function=api.evaluate(context,script,NULL,NULL,1,&exception);
             JSObjectRef callback=!exception && function ? api.to_object(context,function,&exception) : NULL;
             if (!exception && callback) {
-                const JSValueRef arguments[]={api.make_string(context,id),api.make_string(context,payload),
-                    catalog ? api.make_callback(context,NULL,catalog_finished) : NULL};
-                JSValueRef value=api.call(context,callback,NULL,catalog ? 3 : 2,arguments,&exception);
+                JSValueRef arguments[4]={api.make_string(context,id)};
+                size_t count=2;
+                if (kind==SITE_SNAPSHOT) arguments[1]=api.make_string(context,payload);
+                else {
+                    arguments[1]=api.make_string(context,url);
+                    if (kind==SITE_CACHE_REMOVE) arguments[count++]=api.make_string(context,payload);
+                    arguments[count++]=api.make_callback(context,NULL,kind==SITE_CATALOG ? catalog_finished : cache_remove_finished);
+                }
+                JSValueRef value=api.call(context,callback,NULL,count,arguments,&exception);
                 *failure="\"conversionFailed\"";
                 if (!exception && value) {
-                    if (catalog) *scheduled=true;
+                    if (kind!=SITE_SNAPSHOT) *scheduled=true;
                     else result=api.to_string(context,value,NULL);
                 }
             }
         }
         if (script) api.release_js(script);
         if (id) api.release_js(id);
+        if (url) api.release_js(url);
         if (payload) api.release_js(payload);
     }
     return result;
@@ -205,10 +238,14 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
 
 void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRef name,WKTypeRef data,const void *info) {
     if (!resolve() || !data || api.type_id(data)!=api.string_type_id()) return;
-    const bool catalog=api.text_equals(name,"MoonInspectCatalog");
-    const bool reader=api.text_equals(name,"MoonReadArticle");
-    if (!catalog && !reader && !api.text_equals(name,"MoonInspectSite")) return;
-    const size_t request_cap=(reader ? 144 : 32)*1024;
+    SiteRequest kind;
+    const char *channel;
+    if (api.text_equals(name,"MoonInspectSite")) { kind=SITE_SNAPSHOT; channel="MoonSiteSnapshot"; }
+    else if (api.text_equals(name,"MoonInspectCatalog")) { kind=SITE_CATALOG; channel="MoonSiteCatalog"; }
+    else if (api.text_equals(name,"MoonReadArticle")) { kind=SITE_ARTICLE; channel="MoonArticleSnapshot"; }
+    else if (api.text_equals(name,"MoonRemoveSiteCache")) { kind=SITE_CACHE_REMOVE; channel="MoonSiteCacheRemoval"; }
+    else return;
+    const size_t request_cap=(kind==SITE_ARTICLE ? 144 : 32)*1024;
     char *request=malloc(request_cap);
     if (!request) return;
     const size_t n=api.read_string((WKStringRef)data,request,request_cap);
@@ -222,11 +259,11 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
     *split=0;
     *update=0;
     bool scheduled=false;
-    JSStringRef snapshot=inspect(page,request,split+1,update+1,catalog,reader,&scheduled,&failure);
+    JSStringRef snapshot=inspect(page,request,split+1,update+1,kind,&scheduled,&failure);
     if (scheduled) { free(request); return; }
     *split='\n';
     const size_t capacity=snapshot ? api.size(snapshot) : 0;
-    const size_t limit=(reader ? 192 : 512)*1024;
+    const size_t limit=(kind==SITE_ARTICLE ? 192 : 512)*1024;
     const size_t estimated=capacity<limit ? capacity : limit;
     char *response=malloc(prefix+(estimated>32 ? estimated : 32));
     if (response) {
@@ -237,7 +274,7 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
             if (bytes<2 || (response[prefix+bytes-2]!='}' && response[prefix+bytes-2]!='"'))
                 strcpy(response+prefix,"\"invalidResult\"");
         }
-        post_reply(page,reader ? "MoonArticleSnapshot" : catalog ? "MoonSiteCatalog" : "MoonSiteSnapshot",response);
+        post_reply(page,channel,response);
         free(response);
     }
     if (snapshot) api.release_js(snapshot);

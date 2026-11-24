@@ -86,7 +86,7 @@
   const editor=el('editor'), feedback=el('feedback'), newValue=el('new-value'), commit=el('commit');
   const newKey=el('key'), storageActions=el('storage-actions'), clearStorage=el('clear-storage');
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
-  let clearing=false, cookieGeneration;
+  let clearing=false, cookieGeneration, cacheWritable=false;
   let dismissedMutation;
   const isCatalog=() => group==='indexedDB' || group==='cacheStorage';
   async function host(method,params={}) {
@@ -257,6 +257,22 @@
       '当前显示网页可读的 Cookie。可使用开发者工具查看其他 Cookie 属性。') : '') +
       (page.more ? ` 已显示前 ${page.entries.length} 条。` : '');
   }
+  async function removeCache(index,generation,button) {
+    if (clearing) return;
+    clearing=true;
+    button.disabled=true;
+    feedback.textContent='';
+    try {
+      const outcome=await host('siteData.cacheRemove',{index,generation});
+      if (outcome==='started') await update();
+      else if (group==='cacheStorage') feedback.textContent=outcome==='cancelled' ? '已取消。' : '缓存已变化，请刷新。';
+    } catch {
+      if (group==='cacheStorage') feedback.textContent='无法删除此缓存，请刷新后重试。';
+    } finally {
+      clearing=false;
+      button.disabled=false;
+    }
+  }
   function renderCatalog() {
     rows.replaceChildren();
     rows.hidden=true;
@@ -266,7 +282,7 @@
     const section=catalog?.[group];
     if (!section) { status.textContent='此网页无法读取 ' + label + '。'; return; }
     const query=search.value.trim().toLocaleLowerCase();
-    for (const item of section.entries) {
+    for (const [index,item] of section.entries.entries()) {
       if (query && !item.name.toLocaleLowerCase().includes(query)) continue;
       const row=document.createElement('li'), name=document.createElement('code');
       row.className='entry';
@@ -278,6 +294,14 @@
         caption.className='caption';
         caption.textContent=[text,item.shortened ? '名称已截断' : ''].filter(Boolean).join(' · ');
         row.append(caption);
+      }
+      if (group==='cacheStorage' && cacheWritable && !item.shortened) {
+        const remove=document.createElement('button');
+        const generation=catalog.generation;
+        remove.textContent='删除缓存';
+        remove.setAttribute('aria-label', '删除缓存 '+(item.name || '（空名称）'));
+        remove.onclick=() => removeCache(index,generation,remove);
+        row.append(remove);
       }
       rows.append(row);
     }
@@ -332,11 +356,12 @@
     try {
       const current=await host('siteData.status');
       writable=current.writable;
+      cacheWritable=current.cacheWritable;
       cookieGeneration=current.cookieDetails ? current.generation : undefined;
       el('origin').textContent=current.origin;
       const unavailable=['idle','stale','pending'].includes(current.state);
       el('refresh').disabled=el('inspector').disabled=unavailable;
-      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails;
+      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails + ':' + cacheWritable;
       if (identity===latest) {
         if (selected==='ready' && isCatalog() && (!catalog || catalog.state==='pending')) await load();
         return;

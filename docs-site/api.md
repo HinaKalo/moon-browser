@@ -75,9 +75,10 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `downloads.cancel` / `downloads.remove` / `downloads.reveal` | `downloads.manage` | 传入 `{ id }`，操作活动传输、终态记录或已完成的文件。成功返回 `null`。 |
 | `downloads.clearCompleted` | `downloads.manage` | 传入 `{}`，清理已完成的下载记录并返回 `{ removed }`。下载文件与其他状态的记录会保留。 |
 | `siteData.open` | `siteData.read` | 在用户命令中传入 `{}`，打开清单声明的面板并绑定触发命令的网页。返回布尔值。 |
-| `siteData.status` | `siteData.read` | 从已打开的面板调用，返回 `{ state, origin, generation, failure? }`。 |
+| `siteData.status` | `siteData.read` | 从已打开的面板调用，返回 `{ state, origin, generation, failure, mutation, writable, cookieDetails, cacheWritable }`。各权限标记用于控制面板中对应的操作入口。 |
 | `siteData.list` | `siteData.read` | 面板传入 `{ group }`，类别是 `cookies`、`local` 或 `session`。返回 `{ available, entries, more, generation }`。 |
 | `siteData.catalog` | `siteData.read` | 从绑定面板传入 `{ group }`，可选 `indexedDB` 或 `cacheStorage`。返回 `state`、`generation` 和对应目录。状态为 `pending`、`ready` 或 `unavailable`。目录含 `entries` 和 `more`，IndexedDB 条目还包含 `version`。 |
+| `siteData.cacheRemove` | `siteData.read`、`siteData.cacheWrite` | 活动的绑定面板传入 `{ index, generation }`，按 Cache Storage 原始目录下标请求确认并删除单个缓存。返回 `started`、`cancelled` 或 `unavailable`。 |
 | `siteData.value` | `siteData.read` | 面板传入 `{ group, id, generation }`，返回当前快照中的预览值。 |
 | `siteData.cookieDetails` | `siteData.read`、`siteData.cookieDetails` | 普通窗口的活动绑定面板传入 `{ generation }`，返回 Cookie 属性。列表不含值。 |
 | `siteData.cookieValue` | `siteData.read`、`siteData.cookieDetails` | 活动绑定面板传入 `{ id, generation }`，单独读取一个 Cookie 的预览值，支持 HttpOnly。 |

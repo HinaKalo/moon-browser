@@ -38,6 +38,7 @@ pub const Permission = enum {
     @"tabs.groups",
     @"browser.defaultApp",
     @"page.reader",
+    @"siteData.cacheWrite",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -208,6 +209,7 @@ pub const SiteDataStatus = struct {
     state: SiteDataState, origin: []const u8, generation: u64,
     failure: ?SiteDataFailure = null, mutation: ?SiteDataMutation = null, writable: bool = false,
     cookieDetails: bool = false,
+    cacheWritable: bool = false,
 };
 pub const SiteDataEntry = struct { id: u32, name: []const u8, length: usize, shortened: bool };
 pub const SiteDataPage = struct { available: bool, entries: []const SiteDataEntry, more: bool, generation: u64 };
@@ -240,6 +242,7 @@ pub const site_data_key_limit = 512;
 pub const SiteDataUpdate = struct { group: SiteDataGroup, id: u32, generation: u64, value: ?[]const u8 };
 pub const SiteDataCreate = struct { group: SiteDataGroup, generation: u64, key: []const u8, value: []const u8 };
 pub const SiteDataClear = struct { group: SiteDataGroup, generation: u64 };
+pub const SiteCacheRemove = struct { index: u32, generation: u64 };
 pub const ZoomAction = enum { increase, decrease, reset };
 pub const NetworkFilterStatus = struct { preferred: bool, active: bool, exceptions: []const []const u8 };
 pub const NetworkFilterSite = struct { host: []const u8, enabled: bool };
@@ -316,6 +319,7 @@ pub const Method = enum {
     @"siteData.update",
     @"siteData.create",
     @"siteData.clear",
+    @"siteData.cacheRemove",
     @"reading.find",
     @"reading.zoom",
     @"reading.open",

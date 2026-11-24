@@ -1865,6 +1865,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"siteData.cookieDetails" => "允许查看 Cookie 属性和 HttpOnly Cookie",
+        .@"siteData.cacheWrite" => "允许经确认删除单个站点缓存",
         .@"page.source" => "允许查看当前网页源代码",
         .@"page.reader" => "允许提取当前网页正文以打开阅读模式",
         .@"page.save" => "允许通过文件对话框保存当前网页",
@@ -2424,7 +2425,7 @@ fn clearSiteStorage(panel: u64, owner: []const u8, session: bool, generation: u6
         !site_data.canMutate(panel,owner,group,generation)) return .unavailable;
     var body: [640]u8 = undefined;
     const message = std.fmt.bufPrintSentinel(&body,"清空 {s} 的{s}全部条目？\n此操作也会移除筛选结果之外的条目。",.{
-        site_data.status(panel,owner,true,false).origin,
+        site_data.status(panel,owner,true,false,false).origin,
         if (session) "当前标签 Session Storage " else " Local Storage ",
     },0) catch return .unavailable;
     site_clear_confirming = true;
@@ -2437,6 +2438,30 @@ fn clearSiteStorage(panel: u64, owner: []const u8, session: bool, generation: u6
 export fn moon_site_data_result(source: u64, request: u64, snapshot: [*c]const u8, catalog: bool) void {
     if (stopped) return;
     if (catalog) site_data.completeCatalog(source,request,slice(snapshot)) else site_data.complete(source,request,slice(snapshot));
+}
+
+export fn moon_site_cache_result(view: *native.MoonView, tab: u64, generation: u64, result: [*c]const u8) void {
+    if (!stopped and result!=null) site_data.completeCache(view,tab,generation,slice(result));
+}
+
+export fn moon_site_cache_remove(panel: u64, owner_id: [*c]const u8, index: c_uint, generation: u64) c_int {
+    return @intFromEnum(removeSiteCache(panel,slice(owner_id),.{ .index=index,.generation=generation }));
+}
+
+fn removeSiteCache(panel: u64, owner: []const u8, target: sdk.SiteCacheRemove) sdk.SiteDataClearStart {
+    if (site_clear_confirming or sitePanelView(panel,owner,.@"siteData.cacheWrite")==null) return .unavailable;
+    const name = site_data.cacheName(panel,owner,target) orelse return .unavailable;
+    const allocator = std.heap.page_allocator;
+    const quoted = std.json.Stringify.valueAlloc(allocator,name,.{}) catch return .unavailable;
+    defer allocator.free(quoted);
+    const origin = site_data.status(panel,owner,false,false,true).origin;
+    var body: [8192]u8 = undefined;
+    const message = std.fmt.bufPrintSentinel(&body,"删除来源 {s} 的缓存 {s}？\n此缓存中的全部响应都会移除。",.{origin,quoted},0) catch return .unavailable;
+    site_clear_confirming = true;
+    defer site_clear_confirming = false;
+    if (!native.moon_shell_confirm("删除站点缓存？",message.ptr)) return .cancelled;
+    const view = sitePanelView(panel,owner,.@"siteData.cacheWrite") orelse return .unavailable;
+    return if (site_data.removeCache(view,panel,owner,target)) .started else .unavailable;
 }
 
 fn checkFindGrant() void {

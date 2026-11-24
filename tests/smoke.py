@@ -234,11 +234,12 @@ class Fixture(BaseHTTPRequestHandler):
             demo = ""
             if name.startswith("autoplay-"):
                 token = name.removeprefix("autoplay-")
-                media = "video" if token.endswith("-silent") else "audio"
+                silent = token.removesuffix("-retry").endswith("-silent")
+                media = "video" if silent else "audio"
                 extension = "mp4" if media=="video" else "wav"
                 demo = (f'<{media} controls src="/autoplay.{extension}?{token}"></{media}><script>'
                         f'const element=document.querySelector("{media}");'
-                        f'const result={json.dumps(token)};element.muted=result.endsWith("-silent");'
+                        f'const result={json.dumps(token)};element.muted={json.dumps(silent)};'
                         'const report=value=>fetch("/autoplay-report/"+result+"?"+value,{cache:"no-store"});'
                         'const timeout=setTimeout(()=>report("timeout-"+element.readyState+"-"+element.networkState),7500);'
                         'const done=value=>{clearTimeout(timeout);element.pause();report(value);};'
@@ -309,6 +310,7 @@ class Fixture(BaseHTTPRequestHandler):
                     'await Promise.all(Array.from({length:32},(_,i)=>caches.open("cache-"+i)))})()]);'
                     'IDBFactory.prototype.databases=async()=>[{name:"forged",version:88}];'
                     'CacheStorage.prototype.keys=async()=>["forged"];'
+                    'CacheStorage.prototype.delete=async()=>false;'
                     'fetch("/site-data-catalog-ready");})().catch(()=>{});'
                     'Object.defineProperty(document,"cookie",{get:()=>"forged=other"});'
                     'Storage.prototype.getItem=()=>"forged";'
@@ -726,6 +728,7 @@ def run_win32(exe, base, root):
     has_bulk_clear = downloads.exists() and "clear-completed" in (downloads.parent / "downloads.html").read_text(encoding="utf-8")
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     has_site_menu = site_data.exists() and json.loads(site_data.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"][0].get("siteMenu")
+    cache_remove = site_data.exists() and '"siteData.cacheWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
     has_page_save = page_source.exists() and any(
         command["id"]=="save" for command in
@@ -776,7 +779,7 @@ def run_win32(exe, base, root):
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
             {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True,
-             "site_data_write": True, "site_data_cookie_details": True},
+             "site_data_write": True, "site_data_cookie_details": True, "site_data_cache_write": cache_remove},
             {"id": "moon.source-fixture", "enabled": True, "tabs_read": False, "page_source": True},
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
@@ -1105,12 +1108,33 @@ def run_win32(exe, base, root):
             'show.click();await wait(()=>!hidden.hidden&&hidden.textContent==="private-value","reveal HttpOnly value");'
             'show.click();if(!hidden.hidden||hidden.textContent)throw Error("HttpOnly value remains in DOM");'
         ) if "siteData.cookieDetails" in manifest["permissions"] else ""
+        cache_contract = (
+            'if(!result.cacheWritable)throw Error("cache removal permission missing");'
+            'const generation=result.generation, index=cached.entries.findIndex(e=>e.name==="moon-request-cache");'
+            'const truncated=cached.entries.findIndex(e=>e.shortened);'
+            'if(await host("siteData.cacheRemove",{index:truncated,generation})!=="unavailable"||'
+            'await host("siteData.cacheRemove",{index,generation:generation-1})!=="unavailable")throw Error("unsafe cache selection");'
+            'const remove=await wait(()=>el("results").querySelector("button"),"cache remove action");'
+            'await emit({cacheStage:"cancel"});remove.click();'
+            'await wait(()=>el("feedback").textContent==="已取消。","cache cancel feedback");'
+            'if((await host("siteData.status")).generation!==generation)throw Error("cancel removed cache");'
+            'await emit({cacheStage:"confirm"});remove.click();'
+            'result=await wait(async()=>{const state=await host("siteData.status");'
+            'if(state.state==="unavailable"||state.state==="ready"&&state.generation>generation&&state.mutation!=="removed")'
+            'throw Error("cache removal result: "+JSON.stringify(state));'
+            'return state.state==="ready"&&state.generation>generation&&state;},"confirmed cache removal");'
+            'const remaining=(await inventory("cacheStorage")).cacheStorage;'
+            'if(remaining.entries.some(e=>e.name==="moon-request-cache")||!remaining.entries.some(e=>e.name==="cache-0"))'
+            'throw Error("removal changed the wrong cache");'
+            'if(!(await inventory("indexedDB")).indexedDB.entries.some(e=>e.name==="moon-inventory"))throw Error("IndexedDB was removed");'
+            'if(await host("siteData.cacheRemove",{index,generation})!=="unavailable")throw Error("cache removal allowed the old snapshot");'
+        ) if cache_remove else ""
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
             'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
             'const wait=async(fn,label)=>{for(let i=0;i<180;i++){const v=await fn();if(v)return v;'
             'await new Promise(r=>setTimeout(r,50));}throw Error(label);};'
-            'try{const result=await wait(async()=>{const data=await host("siteData.status");'
+            'try{let result=await wait(async()=>{const data=await host("siteData.status");'
             'if(data.state==="unavailable"||data.state==="stale")throw Error("snapshot "+data.state+": "+data.failure);'
             'return data.state==="ready"&&data;},"snapshot ready");'
             f'if(result.origin!=="{base}")throw Error("origin");'
@@ -1142,6 +1166,7 @@ def run_win32(exe, base, root):
             'await wait(()=>el("results").textContent.includes("moon-request-cache"),"rendered cache");'
             'el("search").value="moon-request";el("search").dispatchEvent(new Event("input"));'
             'if(el("results").children.length!==1)throw Error("catalog search");'
+            + cache_contract +
             'el("search").value="";el("search").dispatchEvent(new Event("input"));}'
             'let cookieRejected=false;try{await host("siteData.update",{group:"cookies",id:0,generation:cookies.generation,value:"forbidden"});}'
             'catch(error){cookieRejected=error.message==="INVALID_PARAMS";}if(!cookieRejected)throw Error("cookie mutation");'
@@ -2259,7 +2284,18 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address() == "extension://moon.site-data-fixture/site-data.html",
                      "The site data contract did not bind its page")
             config = profile / f'extension-{sha256(b"moon.site-data-fixture").hexdigest()}.json'
-            phase = wait_for(lambda: read_settings(config),
+            if cache_remove:
+                for stage,button in (("cancel",7),("confirm",6)):
+                    def cache_dialog():
+                        result = read_settings(config)
+                        if result.get("error"):
+                            raise RuntimeError(f"Cache Storage: {result['error']}")
+                        return owned_window("#32770","删除站点缓存？") if result.get("cacheStage")==stage else None
+                    question = wait_for(cache_dialog,f"Cache Storage confirmation for {stage} did not open",15)
+                    user.PostMessageW(question,0x0111,button,0)
+                    wait_for(lambda: not user.IsWindow(question),"The cache confirmation did not close")
+            phase = wait_for(lambda: (value:=read_settings(config)) and
+                             (value.get("waitingForConflict") or value.get("error")) and value,
                              "The site data contract did not start the conflict test",15)
             if not phase.get("waitingForConflict"):
                 raise RuntimeError(f"Site data edits: {phase}")
@@ -2305,6 +2341,8 @@ def run_win32(exe, base, root):
                 raise RuntimeError(f"Site data invalidation: {result}")
             if has_catalog:
                 print("site_catalog=ok indexeddb_version=ok cache_limit=ok isolated_apis=ok catalog_search=ok stale_catalog=ok",flush=True)
+            if cache_remove:
+                print("site_cache_removal=ok native_cancel=ok named_cache_only=ok stale_generation=ok long_name_rejected=ok",flush=True)
             if "siteData.cookieDetails" in json.loads((site_data.parent / "plugin.json").read_text(encoding="utf-8"))["permissions"]:
                 print("site_cookie_details=ok httponly_reveal=ok expiry=ok cookie_path_scope=ok stale_cookie_value=ok",flush=True)
             print("site_data_system_plugin=ok isolated_storage=ok storage_edit=ok storage_remove=ok stale_write_rejected=ok conflict_preserved=ok site_data_navigation_cleanup=ok",flush=True)
@@ -2504,9 +2542,22 @@ def run_win32(exe, base, root):
             print("popup_policy=ok default_block=ok open_once=ok user_clicked_link=ok saved_origin_exception=ok block_and_reset=ok allow_confirmation=ok",flush=True)
             if autoplay_settings:
                 def playback(origin, stage, url=None):
-                    set_control(edit,url or origin + "/page/autoplay-" + stage)
-                    user.PostMessageW(edit,0x0100,0x0D,1)
-                    return wait_for(lambda: Fixture.autoplay_reports.get(stage),f"Autoplay probe did not report: {stage}",12)
+                    # A silent video decoder stall is inconclusive. A fresh URL keeps late reports separate.
+                    attempts = (stage,stage+"-retry") if url is None and stage.endswith("-silent") else (stage,)
+                    outcome = None
+                    for probe in attempts:
+                        set_control(edit,url or origin + "/page/autoplay-" + probe)
+                        user.PostMessageW(edit,0x0100,0x0D,1)
+                        try:
+                            outcome = wait_for(lambda: Fixture.autoplay_reports.get(probe),
+                                               f"Autoplay probe did not report: {probe}",12)
+                        except RuntimeError:
+                            if probe == attempts[-1]:
+                                raise
+                            continue
+                        if not outcome.startswith("timeout-"):
+                            return outcome
+                    return outcome
 
                 baseline = playback(base,"default")
                 if baseline not in ("playing","NotAllowedError"):
@@ -2696,6 +2747,13 @@ def run_win32(exe, base, root):
             user.PostMessageW(frame,0x0010,0,0)
             if proc.wait(8) != 0:
                 raise RuntimeError("Browser failed to shut down before reading preference check")
+            if reader_page.is_file() and task_manager.exists():
+                # A grant save while the first process was full may have omitted the task fixture.
+                state_path = profile / "plugin-state.json"
+                grants = json.loads(state_path.read_text(encoding="utf-8"))
+                if not any(grant["id"]=="moon.task-fixture" for grant in grants):
+                    grants.append({"id":"moon.task-fixture","enabled":True,"tabs_read":False,"task_manager_manage":True})
+                    state_path.write_text(json.dumps(grants),encoding="utf-8")
             frame = None
             persisted = base + "/page/reading-restart"
             proc = subprocess.Popen([str(exe),"--gdi",persisted],env=preview_env(root))
@@ -2863,8 +2921,10 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address()=="extension://moon.task-manager/tasks.html",
                      "Native diagnostics did not open the packaged task manager")
             initial = Fixture.closed_loaded.get("task-eligible",0)
-            set_control(edit,"extension://moon.task-fixture/tasks.html")
+            contract_address = "extension://moon.task-fixture/tasks.html"
+            set_control(edit,contract_address)
             user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: read_address()==contract_address,"The task fixture was unavailable after browser restart")
             library_result("moon.task-fixture")
             wait_for(lambda: read_address()==target and Fixture.closed_loaded.get("task-eligible",0)>initial,
                      "A manually unloaded tab did not recover on switching back")
