@@ -683,6 +683,18 @@ static void userscript_menu(HMENU popup) {
     }
     AppendMenuW(popup, MF_POPUP, (UINT_PTR)scripts, L"Lua 用户脚本");
 }
+static void plugin_menu_item(HMENU menu, size_t plugin, size_t entry, bool enabled) {
+    wchar_t action[300];
+    if (!moon_utf16(moon_plugin_action(plugin,entry),action,256)) return;
+    const char *shortcut=moon_plugin_action_shortcut(plugin,entry);
+    if (*shortcut) {
+        size_t end=wcslen(action);
+        action[end++]=L'\t';
+        if (!moon_utf16(shortcut,action+end,ARRAYSIZE(action)-end)) action[end-1]=0;
+    }
+    const unsigned id=MENU_PLUGIN_BASE+(unsigned)plugin*MENU_PLUGIN_STRIDE+MENU_PLUGIN_ACTIONS+(unsigned)entry;
+    AppendMenuW(menu,MF_STRING|(enabled?0:MF_GRAYED),id,action);
+}
 static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     HMENU popup=CreatePopupMenu();
     if (!popup) return;
@@ -698,6 +710,9 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     HMENU extensions=count ? CreatePopupMenu() : NULL;
     if (extensions) {
         AppendMenuW(popup,MF_SEPARATOR,0,NULL);
+        for (size_t i=0;i<count;++i)
+            for (size_t j=0;j<moon_plugin_action_count(i);++j)
+                if (moon_plugin_action_in_main_menu(i,j)) plugin_menu_item(popup,i,j,true);
         AppendMenuW(popup,MF_POPUP,(UINT_PTR)extensions,L"插件");
     }
     for(size_t i=0;extensions && i<count;++i) {
@@ -716,16 +731,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
             if ((flags&1) && moon_utf16(permission,action,ARRAYSIZE(action)))
                 AppendMenuW(sub,MF_STRING|(flags&2?MF_CHECKED:0)|(enabled?0:MF_GRAYED),id+2+j,action);
         }
-        for(size_t j=0;j<moon_plugin_action_count(i);++j) {
-            if (!moon_utf16(moon_plugin_action(i,j),action,256)) continue;
-            const char *shortcut=moon_plugin_action_shortcut(i,j);
-            if (*shortcut) {
-                size_t end=wcslen(action);
-                action[end++]=L'\t';
-                if (!moon_utf16(shortcut,action+end,ARRAYSIZE(action)-end)) action[end-1]=0;
-            }
-            AppendMenuW(sub,MF_STRING|(enabled?0:MF_GRAYED),id+MENU_PLUGIN_ACTIONS+j,action);
-        }
+        for(size_t j=0;j<moon_plugin_action_count(i);++j) plugin_menu_item(sub,i,j,enabled);
         AppendMenuW(extensions,MF_POPUP,(UINT_PTR)sub,name);
     }
     MapWindowPoints(hwnd,NULL,(POINT *)&button,2);
@@ -1071,6 +1077,9 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 refresh_presentation(hwnd);
             }
             return 0;
+        case WM_HOTKEY:
+            if (moon_plugin_global_key((unsigned)wp,LOWORD(lp),HIWORD(lp))) return 0;
+            break;
         case WM_CLOSE: moon_quit(0); return 0;
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
@@ -1115,7 +1124,20 @@ static bool keyboard(MSG *msg) {
     if (msg->wParam == VK_F5 || (ctrl && msg->wParam == 'R')) { moon_command(MOON_RELOAD,0,NULL); return true; }
     if (alt && msg->wParam == VK_LEFT) { moon_command(MOON_BACK,0,NULL); return true; }
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
+    if (shift && (ctrl!=alt) && !moon_ime_composing(msg->hwnd) &&
+        moon_plugin_key(MOD_SHIFT|(ctrl?MOD_CONTROL:MOD_ALT),(unsigned)msg->wParam,(msg->lParam&(1L<<30))!=0)) return true;
     return false;
+}
+bool moon_shell_register_hotkey(unsigned id, unsigned modifiers, unsigned key) {
+    return frame && RegisterHotKey(frame,(int)id,modifiers|MOD_NOREPEAT,key);
+}
+void moon_shell_unregister_hotkey(unsigned id) {
+    if (frame) UnregisterHotKey(frame,(int)id);
+}
+void moon_shell_wake(void) {
+    if (!frame) return;
+    if (IsIconic(frame)) ShowWindow(frame,SW_RESTORE);
+    if (!SetForegroundWindow(frame)) FlashWindow(frame,TRUE);
 }
 static bool page_input(UINT message, WPARAM key) {
     switch (message) {

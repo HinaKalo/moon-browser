@@ -1043,6 +1043,7 @@ export fn moon_plugin_action(index: usize, command: usize) [*:0]const u8 {
     return plugins.action(index, command);
 }
 export fn moon_plugin_action_shortcut(index: usize, command: usize) [*:0]const u8 {
+    if (plugins.registeredShortcut(index,command)) |shortcut| return shortcut;
     return if (plugins.actionShortcut(index,command)) |key| @tagName(key) else "";
 }
 export fn moon_plugin_enabled(index: usize) bool {
@@ -1063,6 +1064,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
         .@"privacy.clear" => "允许在确认后清除浏览数据",
         .@"taskManager.manage" => "允许查看和管理标签与进程",
+        .@"ui.commands" => "允许添加主菜单入口和注册快捷键",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {
@@ -1232,6 +1234,26 @@ export fn moon_plugin_shortcut(shortcut: [*c]const u8) bool {
     if (stopped or count == 0) return false;
     const key = std.meta.stringToEnum(sdk.Shortcut,slice(shortcut)) orelse return false;
     return plugins.shortcut(key,tabSnapshot());
+}
+export fn moon_plugin_action_in_main_menu(index: usize, command: usize) bool {
+    return plugins.inMainMenu(index,command);
+}
+export fn moon_plugin_key(modifiers: c_uint, key: c_uint, repeated: bool) bool {
+    return !stopped and count!=0 and plugins.dynamicShortcut(modifiers,key,repeated,tabSnapshot());
+}
+export fn moon_plugin_global_key(id: c_uint, modifiers: c_uint, key: c_uint) bool {
+    return !stopped and count!=0 and plugins.globalShortcut(id,modifiers,key,tabSnapshot());
+}
+export fn moon_plugin_ui_menu(owner: [*c]const u8, command: [*c]const u8, add: bool) c_uint {
+    return @intFromEnum(plugins.setMenu(slice(owner),slice(command),add));
+}
+export fn moon_plugin_ui_shortcut(owner: [*c]const u8, command: [*c]const u8, shortcut: [*c]const u8, global: bool,
+    context: ?*const anyopaque, consent: native.MoonPluginConsent) c_uint
+{
+    const invocation = context orelse return @intFromEnum(sdk.UiRegistration.unavailable);
+    const check = consent orelse return @intFromEnum(sdk.UiRegistration.unavailable);
+    return @intFromEnum(plugins.setHotkey(slice(owner),slice(command),if (shortcut!=null) slice(shortcut) else null,
+        if (global) .global else .browser,.{ .context=invocation,.valid=check }));
 }
 
 const Action = union(enum) { built_in: ShellAction, plugin: struct { index: usize, command: usize } };

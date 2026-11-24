@@ -41,6 +41,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => .@"taskManager.manage",
+        .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => .@"ui.commands",
     };
 }
 
@@ -152,6 +153,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         .@"privacy.clear", .@"privacy.status" => {},
         .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => {},
+        .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
     };
     if (!context.consent.valid(context.consent.context)) return sdk.failure(output, id, .Cancelled);
@@ -407,7 +409,32 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const result = native.moon_tasks_action(context.target_tab_id,target,method==.@"taskManager.discard");
             return sdk.result(output,id,@as(sdk.TaskAction,@enumFromInt(result)));
         },
+        .@"ui.menu.add", .@"ui.menu.remove", .@"ui.shortcuts.register", .@"ui.shortcuts.unregister" => {
+            if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const result = if (method==.@"ui.shortcuts.register") entry: {
+                const value = decode(sdk.RegisteredShortcut,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+                if (value.shortcut.len==0 or std.mem.indexOfScalar(u8,value.shortcut,0)!=null)
+                    return sdk.failure(output,id,.InvalidParams);
+                const command = commandName(allocator,value.id) catch return sdk.failure(output,id,.InvalidParams);
+                const shortcut = try allocator.dupeSentinel(u8,value.shortcut,0);
+                break :entry native.moon_plugin_ui_shortcut(owner.ptr,command.ptr,shortcut.ptr,value.scope==.global,
+                    context.consent.context,context.consent.valid);
+            } else entry: {
+                const value = decode(struct { id: []const u8 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+                const command = commandName(allocator,value.id) catch return sdk.failure(output,id,.InvalidParams);
+                if (method==.@"ui.shortcuts.unregister")
+                    break :entry native.moon_plugin_ui_shortcut(owner.ptr,command.ptr,null,false,context.consent.context,context.consent.valid);
+                break :entry native.moon_plugin_ui_menu(owner.ptr,command.ptr,method==.@"ui.menu.add");
+            };
+            return sdk.result(output,id,@as(sdk.UiRegistration,@enumFromInt(result)));
+        },
     };
+}
+
+fn commandName(allocator: std.mem.Allocator, value: []const u8) ![:0]u8 {
+    if (value.len==0 or value.len>=64 or std.mem.indexOfScalar(u8,value,0)!=null) return error.InvalidParams;
+    return allocator.dupeSentinel(u8,value,0);
 }
 
 fn validScriptId(id: []const u8) bool {

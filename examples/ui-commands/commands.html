@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>菜单与快捷键示例</title>
+<style>
+  :root { color-scheme: light; font: 14px/1.5 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    --bg:#f6f7fa; --surface:#fff; --text:#141820; --quiet:#545d70; --line:#dce0eb; --accent:#4158bf;
+    color:var(--text); background:var(--bg); }
+  :root[data-moon-theme="dark"] { color-scheme:dark; --bg:#171a22; --surface:#202430; --text:#edf0f7;
+    --quiet:#b8c0d2; --line:#3a4359; --accent:#a6b5ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; }
+  main { margin:auto; max-width:700px; padding:42px clamp(18px,5vw,42px); }
+  h1 { margin:0; font-size:29px; }
+  h2 { margin:0 0 10px; font-size:16px; }
+  p { color:var(--quiet); margin:7px 0; }
+  section { border-bottom:1px solid var(--line); padding:20px 0; }
+  .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  button, input, select { font:inherit; color:var(--text); border:1px solid var(--line); border-radius:7px;
+    background:var(--surface); padding:8px 11px; }
+  button { cursor:pointer; }
+  button:disabled { opacity:.55; cursor:default; }
+  input { width:145px; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  #status { margin-top:13px; color:var(--accent); }
+</style>
+<main>
+  <h1>菜单与快捷键示例</h1>
+  <p>用主菜单入口或快捷键启动「显示 Moon 命令提示」。</p>
+  <section>
+    <h2>主菜单</h2>
+    <div class="controls">
+      <button type="button" id="add">添加到主菜单</button>
+      <button type="button" id="remove">从主菜单移除</button>
+    </div>
+  </section>
+  <section>
+    <h2>快捷键</h2>
+    <div class="controls">
+      <input id="chord" aria-label="快捷键组合" value="Ctrl+Shift+Y" maxlength="20" spellcheck="false">
+      <select id="scope" aria-label="快捷键范围">
+        <option value="browser">浏览器内</option>
+        <option value="global">系统全局</option>
+      </select>
+      <button type="button" id="register">注册</button>
+      <button type="button" id="unregister">解除</button>
+    </div>
+    <p>格式为 Ctrl+Shift 或 Alt+Shift 加一个大写字母或数字。全局快捷键需要浏览器单独确认。</p>
+  </section>
+  <p id="status" role="status"></p>
+</main>
+<script>
+  const byId = id => document.getElementById(id);
+  const notices = { notFound:'命令不存在。', conflict:'该快捷键已被占用。', reserved:'该快捷键保留给浏览器。',
+    invalidShortcut:'快捷键格式无效。', limitReached:'主菜单入口已满。', cancelled:'已取消。', unavailable:'无法保存设置。' };
+  let call = 0;
+  async function change(method, fields, success) {
+    const buttons = [...document.querySelectorAll('button')];
+    buttons.forEach(button => button.disabled = true);
+    try {
+      const reply = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({
+        jsonrpc:'2.0', id:String(++call), method, params:{id:'hello',...fields}
+      })));
+      byId('status').textContent = reply.error ? '请在插件菜单启用并授予菜单和快捷键权限。' :
+        reply.result === 'saved' ? success : notices[reply.result];
+    } catch {
+      byId('status').textContent = '设置请求失败。';
+    } finally {
+      buttons.forEach(button => button.disabled = false);
+    }
+  }
+  byId('add').onclick = () => change('ui.menu.add', {}, '已添加。打开「…」可看到命令。');
+  byId('remove').onclick = () => change('ui.menu.remove', {}, '已从主菜单移除。');
+  byId('register').onclick = () => change('ui.shortcuts.register', {
+    shortcut:byId('chord').value.trim(), scope:byId('scope').value
+  }, '已注册。按下快捷键可启动命令。');
+  byId('unregister').onclick = () => change('ui.shortcuts.unregister', {}, '已解除快捷键。');
+</script>
+</html>

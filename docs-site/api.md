@@ -71,6 +71,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `privacy.status` | `privacy.clear` | 无参数。返回同一插件最近一次清理的 `{ state, failed }`。见[清除浏览数据](./privacy)。 |
 | `taskManager.snapshot` | `taskManager.manage` | 传入 `{ view, offset? }`，视图为 `tabs` 或 `processes`。返回总览、所选视图的记录和分页偏移 `next`。 |
 | `taskManager.focus` / `taskManager.discard` | `taskManager.manage` | 活动插件页面或用户命令传入 `{ id }`。返回 `done`、`notFound`、`protected` 或 `unavailable`。 |
+| `ui.menu.add` / `ui.menu.remove` | `ui.commands` | 传入 `{ id }`，添加或移除已声明命令的主菜单入口。|
+| `ui.shortcuts.register` / `ui.shortcuts.unregister` | `ui.commands` | 注册传入 `{ id, shortcut, scope? }`，解除传入 `{ id }`。注册和移除结果见[菜单与快捷键](./command-contributions)。 |
 
 脚本 ID 是 64 位小写十六进制字符组成的不透明标识。同一份源码重复导入返回 `ALREADY_EXISTS`。脚本内容或匹配范围改动后要重新导入，首次启用重新确认。管理接口负责导入和状态，网页导航触发运行，宿主 Lua VM 执行代码。
 

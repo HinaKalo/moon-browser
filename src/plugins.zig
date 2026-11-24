@@ -3,6 +3,7 @@ const native = @import("native");
 const sdk = @import("moon_plugin");
 const api = @import("plugin_host_api.zig");
 const network = @import("network_policy.zig");
+const userscripts = @import("userscripts.zig");
 const allocator = std.heap.page_allocator;
 
 pub const Snapshot = api.Snapshot;
@@ -25,6 +26,9 @@ const Grant = struct {
     tabs_closed_manage: bool = false,
     privacy_clear: bool = false,
     task_manager_manage: bool = false,
+    ui_commands: bool = false,
+    menu_items: []const []const u8 = &.{},
+    hotkey: ?sdk.RegisteredShortcut = null,
 };
 const Outcome = enum { ok, failed, timed_out, crashed };
 const Trigger = enum { command, changed, timeout_test, crash_test };
@@ -55,7 +59,16 @@ const Task = struct {
     message: [512:0]u8 = @splat(0),
     toast: bool = false,
 };
-const Command = struct { id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false, shortcut: ?sdk.Shortcut = null };
+const Command = struct {
+    id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false,
+    shortcut: ?sdk.Shortcut = null, main_menu: bool = false,
+};
+const Hotkey = struct {
+    action: usize, mods: c_uint, key: c_uint, scope: sdk.ShortcutScope,
+    text: [24:0]u8 = @splat(0), slot: ?u1 = null,
+};
+const hotkey_id: c_uint = 0x4100;
+const menu_limit = 4;
 const Plugin = struct {
     id: [96:0]u8,
     label: [256:0]u8,
@@ -73,6 +86,7 @@ const Plugin = struct {
     epoch: std.atomic.Value(u32) = .init(0),
     work: ?*Task = null,
     queued_change: bool = false,
+    hotkey: ?Hotkey = null,
 };
 
 var all: [32]Plugin = undefined;
@@ -81,6 +95,7 @@ var file_path: [4096:0]u8 = @splat(0);
 var smoke_message: [512:0]u8 = @splat(0);
 var smoke_outcome: ?Outcome = null;
 var serving_rpc = false;
+var confirming_hotkey = false;
 
 fn copy(output: []u8, value: []const u8) bool {
     if (value.len >= output.len or std.mem.indexOfScalar(u8, value, 0) != null or !std.unicode.utf8ValidateSlice(value))
@@ -215,13 +230,43 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.tabs_closed_manage and plugin.requests.contains(.@"tabs.closed.manage")) plugin.grants.insert(.@"tabs.closed.manage");
         if (grant.enabled and grant.privacy_clear and plugin.requests.contains(.@"privacy.clear")) plugin.grants.insert(.@"privacy.clear");
         if (grant.enabled and grant.task_manager_manage and plugin.requests.contains(.@"taskManager.manage")) plugin.grants.insert(.@"taskManager.manage");
+        if (grant.enabled and grant.ui_commands and plugin.requests.contains(.@"ui.commands")) plugin.grants.insert(.@"ui.commands");
+        if (canContribute(plugin)) {
+            for (grant.menu_items) |id| {
+                if (menuSize()==menu_limit) break;
+                if (findAction(plugin,id)) |index| plugin.actions[index].main_menu = true;
+            }
+            if (grant.hotkey) |saved_key| {
+                if (findAction(plugin,saved_key.id)) |index| {
+                    if (parseHotkey(index,saved_key.shortcut,saved_key.scope)) |key| {
+                        if (!hotkeyReserved(key) and !hotkeyConflict(key,plugin)) plugin.hotkey = key;
+                    }
+                }
+            }
+        }
         break;
     };
+    for (all[0..len],0..) |*plugin,index| {
+        if (plugin.hotkey) |*key| {
+            if (key.scope==.global and native.moon_shell_register_hotkey(globalId(index,0),key.mods,key.key)) key.slot = 0;
+        }
+    }
 }
 
 fn persist() bool {
     var items: [all.len]Grant = undefined;
-    for (all[0..len], 0..) |*plugin, index| items[index] = .{
+    var menus: [all.len][sdk.command_limit][]const u8 = undefined;
+    for (all[0..len], 0..) |*plugin, index| {
+        var used: usize = 0;
+        for (plugin.actions[0..plugin.action_count]) |*action_entry| {
+            if (!action_entry.main_menu) continue;
+            menus[index][used] = std.mem.sliceTo(&action_entry.id,0);
+            used += 1;
+        }
+        const saved_key: ?sdk.RegisteredShortcut = if (plugin.hotkey) |*key| .{
+            .id=std.mem.sliceTo(&plugin.actions[key.action].id,0),.shortcut=std.mem.sliceTo(&key.text,0),.scope=key.scope,
+        } else null;
+        items[index] = .{
         .id = std.mem.sliceTo(&plugin.id, 0),
         .enabled = plugin.enabled,
         .tabs_read = plugin.grants.contains(.@"tabs.read"),
@@ -236,7 +281,11 @@ fn persist() bool {
         .tabs_closed_manage = plugin.grants.contains(.@"tabs.closed.manage"),
         .privacy_clear = plugin.grants.contains(.@"privacy.clear"),
         .task_manager_manage = plugin.grants.contains(.@"taskManager.manage"),
-    };
+        .ui_commands = plugin.grants.contains(.@"ui.commands"),
+        .menu_items = menus[index][0..used],
+        .hotkey = saved_key,
+        };
+    }
     const bytes = std.json.Stringify.valueAlloc(allocator, items[0..len], .{}) catch return false;
     defer allocator.free(bytes);
     const string = allocator.dupeSentinel(u8, bytes, 0) catch return false;
@@ -248,6 +297,10 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
     const plugin = &all[index];
     const enabled = plugin.enabled;
     const grants = plugin.grants;
+    const old_key = plugin.hotkey;
+    var old_menu: [sdk.command_limit]bool = undefined;
+    for (plugin.actions[0..plugin.action_count],old_menu[0..plugin.action_count]) |action_entry,*menu|
+        menu.* = action_entry.main_menu;
     if (permission) |scope| {
         if (!plugin.requests.contains(scope) or !enabled) {
             native.moon_shell_info("插件权限", "请先启用声明此权限的插件。");
@@ -269,6 +322,7 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"tabs.closed.manage" => "此插件可查看最近关闭标签的标题和站点，并恢复或清空这些标签。",
                 .@"privacy.clear" => "此插件可以请求清除所选浏览数据。浏览器会在删除前单独确认。",
                 .@"taskManager.manage" => "此插件可查看标签标题和浏览器进程内存，以及切换标签和卸载可回收的后台标签。",
+                .@"ui.commands" => "此插件可为已声明的命令添加主菜单入口，并设置一个快捷键。系统全局快捷键需要单独确认。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
             plugin.grants.insert(scope);
@@ -283,12 +337,21 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
         plugin.enabled = !plugin.enabled;
         plugin.grants = if (plugin.enabled) plugin.default_grants else .empty;
     }
+    if (!canContribute(plugin)) {
+        plugin.hotkey = null;
+        for (plugin.actions[0..plugin.action_count]) |*action_entry| action_entry.main_menu = false;
+    }
     if (!persist()) {
         plugin.enabled = enabled;
         plugin.grants = grants;
+        plugin.hotkey = old_key;
+        for (plugin.actions[0..plugin.action_count],old_menu[0..plugin.action_count]) |*entry,menu| entry.main_menu = menu;
         native.moon_shell_info("Plugin settings", "Could not save the plugin settings.");
         return;
     }
+    if (plugin.hotkey==null) if (old_key) |key| {
+        if (key.slot) |slot| native.moon_shell_unregister_hotkey(globalId(index,slot));
+    };
     _ = plugin.epoch.fetchAdd(1, .acq_rel);
     plugin.queued_change = false;
 }
@@ -313,6 +376,12 @@ pub fn action(index: usize, command_index: usize) [*:0]const u8 {
 }
 pub fn actionShortcut(index: usize, command_index: usize) ?sdk.Shortcut {
     return all[index].actions[command_index].shortcut;
+}
+pub fn registeredShortcut(index: usize, command_index: usize) ?[*:0]const u8 {
+    if (all[index].hotkey) |*key| {
+        if (key.action==command_index and (key.scope==.browser or key.slot!=null)) return &key.text;
+    }
+    return null;
 }
 pub fn isEnabled(index: usize) bool {
     return all[index].enabled;
@@ -349,6 +418,160 @@ pub fn pageGrants(id: []const u8) ?Permissions {
 pub fn hasGrant(id: []const u8, permission: sdk.Permission) bool {
     const plugin = enabledPlugin(id) orelse return false;
     return plugin.grants.contains(permission);
+}
+
+fn canContribute(plugin: *const Plugin) bool {
+    return plugin.enabled and plugin.grants.contains(.@"ui.commands");
+}
+
+fn findAction(plugin: *const Plugin, id: []const u8) ?usize {
+    for (plugin.actions[0..plugin.action_count],0..) |*action_entry,index| {
+        if (std.mem.eql(u8,std.mem.sliceTo(&action_entry.id,0),id)) return index;
+    }
+    return null;
+}
+
+fn contributor(id: []const u8) ?usize {
+    for (all[0..len],0..) |*plugin,index| {
+        if (canContribute(plugin) and std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),id)) return index;
+    }
+    return null;
+}
+
+fn menuSize() usize {
+    var count_entries: usize = 0;
+    for (all[0..len]) |*plugin| for (plugin.actions[0..plugin.action_count]) |*entry| {
+        if (entry.main_menu) count_entries += 1;
+    };
+    return count_entries;
+}
+
+pub fn inMainMenu(index: usize, command_index: usize) bool {
+    const plugin = &all[index];
+    return canContribute(plugin) and plugin.actions[command_index].main_menu;
+}
+
+pub fn setMenu(owner: []const u8, id: []const u8, add: bool) sdk.UiRegistration {
+    const index = contributor(owner) orelse return .unavailable;
+    const plugin = &all[index];
+    const command_index = findAction(plugin,id) orelse return .notFound;
+    const entry = &plugin.actions[command_index];
+    if (entry.main_menu==add) return .saved;
+    if (add and menuSize()>=menu_limit) return .limitReached;
+    entry.main_menu = add;
+    if (!persist()) {
+        entry.main_menu = !add;
+        return .unavailable;
+    }
+    return .saved;
+}
+
+fn globalId(index: usize, slot: u1) c_uint {
+    return hotkey_id+@as(c_uint,@intCast(index))*2+slot;
+}
+
+fn parseHotkey(action_index: usize, text: []const u8, scope: sdk.ShortcutScope) ?Hotkey {
+    const prefix = if (std.mem.startsWith(u8,text,"Ctrl+Shift+")) "Ctrl+Shift+"
+        else if (std.mem.startsWith(u8,text,"Alt+Shift+")) "Alt+Shift+" else return null;
+    if (text.len!=prefix.len+1) return null;
+    const vk = text[prefix.len];
+    if (!std.ascii.isUpper(vk) and !std.ascii.isDigit(vk)) return null;
+    var key: Hotkey = .{ .action=action_index,.mods=if (text[0]=='C') 0x0006 else 0x0005,.key=vk,.scope=scope };
+    if (!copy(&key.text,text)) return null;
+    return key;
+}
+
+fn sameChord(left: Hotkey, right: Hotkey) bool {
+    return left.mods==right.mods and left.key==right.key;
+}
+
+fn hotkeyReserved(key: Hotkey) bool {
+    const text = std.mem.sliceTo(&key.text,0);
+    if (std.meta.stringToEnum(sdk.Shortcut,text)!=null) return true;
+    if (key.mods!=0x0006) return false;
+    return switch (key.key) {
+        'B','K','L','R','W' => true,
+        else => false,
+    };
+}
+
+fn hotkeyConflict(candidate: Hotkey, exclude: *const Plugin) bool {
+    for (all[0..len]) |*plugin| {
+        if (plugin==exclude or !canContribute(plugin)) continue;
+        if (plugin.hotkey) |key| if (sameChord(key,candidate)) return true;
+    }
+    return false;
+}
+
+pub fn setHotkey(owner: []const u8, id: []const u8, text: ?[]const u8, scope: sdk.ShortcutScope, consent: userscripts.Consent) sdk.UiRegistration {
+    if (confirming_hotkey) return .unavailable;
+    const index = contributor(owner) orelse return .unavailable;
+    const plugin = &all[index];
+    const command_index = findAction(plugin,id) orelse return .notFound;
+    const previous = plugin.hotkey;
+    const old_slot = if (previous) |key| key.slot else null;
+    var replacement: ?Hotkey = null;
+    if (text) |value| {
+        var key = parseHotkey(command_index,value,scope) orelse return .invalidShortcut;
+        if (hotkeyReserved(key)) return .reserved;
+        if (hotkeyConflict(key,plugin)) return .conflict;
+        if (previous) |old| {
+            if (sameChord(key,old) and old.scope==scope and old.action==command_index and
+                (scope==.browser or old_slot!=null)) return .saved;
+        }
+        if (scope==.global) {
+            var buffer: [680]u8 = undefined;
+            const body = std.fmt.bufPrintSentinel(&buffer,"允许插件「{s}」在浏览器位于后台时使用 {s} 启动「{s}」？",
+                .{ std.mem.sliceTo(&plugin.label,0),value,std.mem.sliceTo(&plugin.actions[command_index].label,0) },0) catch return .unavailable;
+            confirming_hotkey = true;
+            defer confirming_hotkey = false;
+            if (!native.moon_shell_confirm("注册全局快捷键？",body.ptr)) return .cancelled;
+            if (!consent.valid(consent.context) or !canContribute(plugin)) return .unavailable;
+            if (hotkeyConflict(key,plugin)) return .conflict;
+            if (previous!=null and old_slot!=null and sameChord(key,previous.?)) {
+                key.slot = old_slot;
+            } else {
+                const slot: u1 = if (old_slot) |current| current^1 else 0;
+                if (!native.moon_shell_register_hotkey(globalId(index,slot),key.mods,key.key)) return .conflict;
+                key.slot = slot;
+            }
+        }
+        replacement = key;
+    } else if (previous==null or previous.?.action!=command_index) {
+        return .saved;
+    }
+    const new_slot = if (replacement) |key| key.slot else null;
+    plugin.hotkey = replacement;
+    if (!persist()) {
+        plugin.hotkey = previous;
+        if (new_slot!=old_slot) if (new_slot) |slot| native.moon_shell_unregister_hotkey(globalId(index,slot));
+        return .unavailable;
+    }
+    if (new_slot!=old_slot) if (old_slot) |slot| native.moon_shell_unregister_hotkey(globalId(index,slot));
+    return .saved;
+}
+
+pub fn dynamicShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snapshot) bool {
+    for (all[0..len],0..) |*plugin,index| {
+        const key = plugin.hotkey orelse continue;
+        if (!canContribute(plugin) or key.scope!=.browser or key.mods!=mods or key.key!=vk) continue;
+        if (!repeated and plugin.work==null) _ = launch(index,key.action,.command,snapshot);
+        return true;
+    }
+    return false;
+}
+
+pub fn globalShortcut(id: c_uint, mods: c_uint, vk: c_uint, snapshot: ?Snapshot) bool {
+    if (id<hotkey_id) return false;
+    const index = (id-hotkey_id)/2;
+    if (index>=len) return false;
+    const plugin = &all[index];
+    const key = plugin.hotkey orelse return false;
+    const slot = key.slot orelse return false;
+    if (!canContribute(plugin) or id!=globalId(index,slot) or key.mods!=mods or key.key!=vk) return false;
+    native.moon_shell_wake();
+    if (plugin.work==null) _ = launch(index,key.action,.command,snapshot);
+    return true;
 }
 
 pub fn systemEnabled(permission: sdk.Permission) bool {

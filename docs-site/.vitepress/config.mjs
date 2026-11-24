@@ -17,6 +17,7 @@ export default defineConfig({
         { text: '快速开始', link: '/guide' },
         { text: 'Lua 用户脚本', link: '/lua-userscripts' },
         { text: '插件 API 2', link: '/api' },
+        { text: '菜单与快捷键', link: '/command-contributions' },
         { text: '原生插件协议 1', link: '/protocol-v1' },
         { text: '插件配置页', link: '/extension-pages' },
         { text: '网页开发者工具', link: '/devtools' },

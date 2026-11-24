@@ -449,6 +449,11 @@ def run_win32(exe, base, root):
     user.ClientToScreen.argtypes = [wt.HWND, ctypes.POINTER(wt.POINT)]
     user.GetClientRect.argtypes = [wt.HWND, ctypes.POINTER(wt.RECT)]
     user.ShowWindow.argtypes = [wt.HWND, ctypes.c_int]
+    user.IsIconic.argtypes = [wt.HWND]
+    user.RegisterHotKey.argtypes = [wt.HWND,ctypes.c_int,wt.UINT,wt.UINT]
+    user.UnregisterHotKey.argtypes = [wt.HWND,ctypes.c_int]
+    user.GetMenuItemCount.argtypes = [wt.HMENU]
+    user.GetMenuStringW.argtypes = [wt.HMENU,wt.UINT,wt.LPWSTR,ctypes.c_int,wt.UINT]
     user.GetDlgItem.argtypes = [wt.HWND, ctypes.c_int]
     user.GetDlgItem.restype = wt.HWND
     user.IsWindowVisible.argtypes = [wt.HWND]
@@ -470,6 +475,7 @@ def run_win32(exe, base, root):
     recent = exe.parent / "plugins" / "recent-tabs" / "MoonRecentTabs.exe"
     privacy = exe.parent / "plugins" / "privacy" / "MoonPrivacy.exe"
     task_manager = exe.parent / "plugins" / "task-manager" / "MoonTaskManager.exe"
+    commands = exe.parent / "plugins" / "ui-commands" / "MoonCommandExample.exe"
     if task_manager.exists():
         profile.mkdir(parents=True,exist_ok=True)
         (profile / "memory.json").write_text(
@@ -490,6 +496,7 @@ def run_win32(exe, base, root):
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.privacy-data-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.task-fixture", "enabled": True, "tabs_read": False, "task_manager_manage": True},
+            {"id": "moon.command-fixture", "enabled": True, "tabs_read": False, "ui_commands": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
@@ -520,6 +527,9 @@ def run_win32(exe, base, root):
             ('const tasksDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"6",method:"taskManager.snapshot",params:{view:"tabs"}}));'
              'if(JSON.parse(tasksDenied).error?.code!==-32001)return;' if task_manager.exists() else '') +
+            ('const menuDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"7",method:"ui.menu.add",params:{id:"open"}}));'
+             'if(JSON.parse(menuDenied).error?.code!==-32001)return;' if commands.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -760,11 +770,12 @@ def run_win32(exe, base, root):
             'await host("taskManager.discard",{id:held.id})!=="protected")throw Error("protection bypass");'
             'find("view-processes").click();'
             'await wait(()=>find("rows").rows.length,"process view");'
-            'const processPage=await host("taskManager.snapshot",{view:"processes"});'
+            'let processPage;await wait(async()=>{processPage=await host("taskManager.snapshot",{view:"processes"});'
+            'return processPage.processes.some(p=>p.pid===ready.pid&&p.tabs>=1);},"process sample containing the target tab");'
             'const processes=processPage.processes;'
             'if(processes.length!==new Set(processes.map(p=>p.pid)).size||'
             'processPage.next!==null||processes.reduce((sum,p)=>sum+p.privateBytes,0)!==processPage.overview.privateBytes||'
-            '!processes.some(p=>p.browser)||!processes.some(p=>p.pid===ready.pid&&p.tabs>=1))'
+            '!processes.some(p=>p.browser))'
             'throw Error("process accounting: "+JSON.stringify(processPage));'
             'find("view-tabs").click();'
             'const button=action=>[...find("rows").querySelectorAll("button")].find(b=>b.dataset.action===action&&b.dataset.tab===ready.id);'
@@ -778,6 +789,39 @@ def run_win32(exe, base, root):
             'catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "tasks.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
+    if commands.exists():
+        fixture = profile / "plugins" / "command-contract"
+        fixture.mkdir(parents=True)
+        manifest = json.loads(commands.with_name("plugin.json").read_text(encoding="utf-8"))
+        manifest.update(id="moon.command-fixture",name="命令唤醒验收")
+        (fixture / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+        shutil.copyfile(commands,fixture / commands.name)
+        page = commands.with_name("commands.html").read_text(encoding="utf-8")
+        contract = (
+            '<script>(async()=>{let sequence=0;const settings=window.webkit.messageHandlers.moonSettings;'
+            'const emit=value=>settings.postMessage(JSON.stringify({op:"write",value}));'
+            'const host=async(method,params={})=>JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage('
+            'JSON.stringify({jsonrpc:"2.0",id:String(++sequence),method,params}))).result;'
+            'const expect=async(method,params,result)=>{const got=await host(method,params);'
+            'if(got!==result)throw Error(method+" expected "+result+" got "+got);};'
+            'const key=(shortcut,scope)=>({id:"hello",shortcut,scope});'
+            'try{const old=JSON.parse(await settings.postMessage(JSON.stringify({op:"read"}))).value;'
+            'if(old?.phase==="installed"){'
+            'await expect("ui.menu.remove",{id:"hello"},"saved");'
+            'await expect("ui.shortcuts.unregister",{id:"hello"},"saved");'
+            'await emit({phase:"removed"});return;}'
+            'await expect("ui.menu.add",{id:"missing"},"notFound");'
+            'await expect("ui.menu.add",{id:"hello"},"saved");'
+            'await expect("ui.shortcuts.register",key("Ctrl+C","browser"),"invalidShortcut");'
+            'await expect("ui.shortcuts.register",key("Ctrl+Shift+M","browser"),"reserved");'
+            'await expect("ui.shortcuts.register",key("Ctrl+Shift+K","browser"),"reserved");'
+            'await expect("ui.shortcuts.register",key("Ctrl+Shift+Y","browser"),"saved");'
+            'await expect("ui.shortcuts.register",key("Ctrl+Shift+9","global"),"conflict");'
+            'await expect("ui.shortcuts.register",key("Ctrl+Shift+8","global"),"cancelled");'
+            'await expect("ui.shortcuts.register",key("Ctrl+Shift+8","global"),"saved");'
+            'await emit({phase:"installed"});}catch(error){await emit({error:String(error)});}})();</script>'
+        )
+        (fixture / "commands.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
     def browser_frame(process):
         deadline = monotonic() + 20
         while monotonic() < deadline:
@@ -1394,6 +1438,101 @@ def run_win32(exe, base, root):
             report = profile / f'extension-{sha256(b"moon.task-fixture").hexdigest()}.json'
             shared = bool(json.loads(report.read_text(encoding="utf-8")).get("shared"))
             print(f"task_manager=ok unique_pid_accounting=ok paging=ok protected_discard=ok reload_on_focus=ok shared_pid={'observed' if shared else 'not_observed'}",flush=True)
+        if commands.exists():
+            config = profile / f'extension-{sha256(b"moon.command-fixture").hexdigest()}.json'
+            address = "extension://moon.command-fixture/commands.html"
+            modifiers = 6  # MOD_CONTROL | MOD_SHIFT
+
+            def confirmation(button):
+                def requested():
+                    if config.exists():
+                        result = json.loads(config.read_text(encoding="utf-8"))
+                        if result.get("error"):
+                            raise RuntimeError(result["error"])
+                    return owned_window("#32770","注册全局快捷键？")
+                popup = wait_for(requested,
+                                 "Expected the global shortcut confirmation")
+                user.SendMessageW(popup,0x0111,button,0)
+                wait_for(lambda: not user.IsWindow(popup),"The hotkey confirmation did not close")
+
+            def registration_phase(phase):
+                result = wait_for(lambda: config.exists() and (state:=json.loads(config.read_text(encoding="utf-8"))) and
+                                  (state.get("phase")==phase or state.get("error")) and state,
+                                  f"The command fixture did not reach {phase}",15)
+                if result.get("error"):
+                    raise RuntimeError(result["error"])
+
+            def native_entries():
+                dimensions = wt.RECT()
+                user.GetClientRect(frame,ctypes.byref(dimensions))
+                click(dimensions.right-px(159),px(24))
+                def open_menu():
+                    menu = None
+                    while menu := user.FindWindowExW(None,menu,"#32768",None):
+                        owner = wt.DWORD()
+                        user.GetWindowThreadProcessId(menu,ctypes.byref(owner))
+                        if owner.value==proc.pid and user.IsWindowVisible(menu):
+                            return menu
+                    return None
+                popup = wait_for(open_menu,"The native main menu did not open")
+                try:
+                    handle = user.SendMessageW(popup,0x01E1,0,0)  # MN_GETHMENU
+                    size = user.GetMenuItemCount(handle)
+                    if size<1:
+                        raise RuntimeError("Could not read the native main menu entries")
+                    result = []
+                    for index in range(size):
+                        label = ctypes.create_unicode_buffer(256)
+                        user.GetMenuStringW(handle,index,label,len(label),0x400)  # MF_BYPOSITION
+                        result.append(label.value)
+                    return result
+                finally:
+                    user.PostMessageW(frame,0x001F,0,0)  # WM_CANCELMODE
+                    wait_for(lambda: not open_menu(),"Main menu did not dismiss")
+
+            if not user.RegisterHotKey(None,901,modifiers,ord('9')):
+                raise RuntimeError("Could not reserve the test's conflicting shortcut")
+            try:
+                set_control(edit,address)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                confirmation(6)  # Allow, but the OS key above is occupied
+                confirmation(7)  # Cancel
+                confirmation(6)  # Allow the available combination
+                registration_phase("installed")
+            finally:
+                user.UnregisterHotKey(None,901)
+            if "显示 Moon 命令提示\tCtrl+Shift+8" not in native_entries():
+                raise RuntimeError("The plugin command is missing from the actual native main menu")
+            if user.RegisterHotKey(None,902,modifiers,ord('8')):
+                user.UnregisterHotKey(None,902)
+                raise RuntimeError("The browser did not reserve its global shortcut in Windows")
+            user.ShowWindow(frame,6)  # SW_MINIMIZE
+            for token in range(0x4100,0x4140):
+                user.PostMessageW(frame,0x0312,token,(ord('8')<<16)|modifiers)
+            wait_for(lambda: not user.IsIconic(frame) and owned_window("#32770","命令唤醒验收"),
+                     "The global shortcut did not wake the browser and launch the plugin")
+            user.PostMessageW(frame,0x0010,0,0)
+            if proc.wait(8)!=0:
+                raise RuntimeError("Browser failed to exit before the registered shortcut restart check")
+            frame = None
+            proc = subprocess.Popen([str(exe),"--gdi"],env=preview_env(root))
+            frame = browser_frame(proc)
+            edit = user.GetDlgItem(frame,1001)
+            wait_for(lambda: user.IsWindowVisible(user.GetDlgItem(frame,1002)),"Restarted shell did not initialize")
+            if user.RegisterHotKey(None,902,modifiers,ord('8')):
+                user.UnregisterHotKey(None,902)
+                raise RuntimeError("The global registration did not survive a restart")
+            if "显示 Moon 命令提示\tCtrl+Shift+8" not in native_entries():
+                raise RuntimeError("The menu registration did not survive a restart")
+            set_control(edit,address)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            registration_phase("removed")
+            if not user.RegisterHotKey(None,902,modifiers,ord('8')):
+                raise RuntimeError("Unregistering did not release the Windows shortcut")
+            user.UnregisterHotKey(None,902)
+            if any(item.startswith("显示 Moon 命令提示") for item in native_entries()):
+                raise RuntimeError("The removed command remained in the native main menu")
+            print("command_contributions=ok native_menu=ok global_wake=ok conflict_cancel=ok restart=ok removal=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

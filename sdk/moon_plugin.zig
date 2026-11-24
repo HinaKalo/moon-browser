@@ -20,6 +20,7 @@ pub const Permission = enum {
     @"tabs.closed.manage",
     @"privacy.clear",
     @"taskManager.manage",
+    @"ui.commands",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -30,6 +31,9 @@ pub const Shortcut = enum {
     @"Ctrl+Shift+M",
 };
 pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false, shortcut: ?Shortcut = null };
+pub const ShortcutScope = enum { browser, global };
+pub const RegisteredShortcut = struct { id: []const u8, shortcut: []const u8, scope: ShortcutScope = .browser };
+pub const UiRegistration = enum(c_uint) { saved, notFound, conflict, reserved, invalidShortcut, limitReached, cancelled, unavailable };
 pub const Manifest = struct {
     id: []const u8,
     name: []const u8,
@@ -173,6 +177,10 @@ pub const Method = enum {
     @"taskManager.snapshot",
     @"taskManager.focus",
     @"taskManager.discard",
+    @"ui.menu.add",
+    @"ui.menu.remove",
+    @"ui.shortcuts.register",
+    @"ui.shortcuts.unregister",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

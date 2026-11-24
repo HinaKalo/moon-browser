@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.ui-commands-example",
+      "name": "菜单与快捷键示例",
+      "description": "为已声明的命令添加主菜单入口，并试用浏览器内或系统全局快捷键。",
+      "permission": "添加主菜单入口和注册快捷键",
+      "url": "https://docs.browser.moonl.cloud/command-contributions.html"
+    },
+    {
       "id": "moon.task-manager",
       "name": "浏览器任务管理器",
       "description": "查看进程树内存、标签保护和卸载记录，手动卸载可回收的标签。",

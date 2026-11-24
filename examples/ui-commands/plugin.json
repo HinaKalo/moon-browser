@@ -1,0 +1,16 @@
+{
+  "id": "moon.ui-commands-example",
+  "name": "菜单与快捷键示例",
+  "version": "0.1.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonCommandExample.exe",
+  "settingsPage": "commands.html",
+  "contributes": {
+    "commands": [
+      { "id": "settings", "label": "配置菜单与快捷键示例" },
+      { "id": "hello", "label": "显示 Moon 命令提示" }
+    ]
+  },
+  "permissions": ["ui.commands"]
+}
