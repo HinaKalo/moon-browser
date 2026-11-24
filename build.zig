@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
     const plugin_sdk = b.createModule(.{ .root_source_file = b.path("sdk/moon_plugin.zig") });
     app.root_module.addImport("native", bridge.createModule());
     app.root_module.addImport("moon_plugin", plugin_sdk);
+    app.root_module.addAnonymousImport("readability_source", .{ .root_source_file = b.path("third_party/Readability/Readability.js") });
     app.root_module.addWin32ResourceFile(.{ .file=b.path("src/moon-browser.rc") });
     app.root_module.addIncludePath(b.path("third_party"));
     app.root_module.addCSourceFiles(.{ .files = &.{ "src/win.c", "src/shell_activation.c", "src/win_dialog.c", "src/win_find.c", "src/win_suggestions.c", "src/win_bookmark_menu.c", "src/webkit.c", "src/plugin_io.c", "src/update_win.c", "src/lua_runtime.c" }, .flags = &.{ "-std=c17", "-DUNICODE", "-D_UNICODE" } });

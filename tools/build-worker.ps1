@@ -142,6 +142,7 @@ $docs = @(
     (Join-Path $repo 'examples\site-data\plugin.json')
     (Join-Path $repo 'examples\site-data\site-data.html')
     (Join-Path $repo 'examples\reading\plugin.json')
+    (Join-Path $repo 'examples\reading\reader.html')
     (Join-Path $repo 'examples\recent-tabs\plugin.json')
     (Join-Path $repo 'examples\recent-tabs\recent.html')
     (Join-Path $repo 'examples\session\plugin.json')
@@ -208,7 +209,7 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $siteDataPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\site-data')).FullName
     Copy-Item -LiteralPath $siteData,(Join-Path $repo 'examples\site-data\plugin.json'),(Join-Path $repo 'examples\site-data\site-data.html') -Destination $siteDataPackage
     $readingPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\reading')).FullName
-    Copy-Item -LiteralPath $reading,(Join-Path $repo 'examples\reading\plugin.json') -Destination $readingPackage
+    Copy-Item -LiteralPath $reading,(Join-Path $repo 'examples\reading\plugin.json'),(Join-Path $repo 'examples\reading\reader.html') -Destination $readingPackage
     $recentPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\recent-tabs')).FullName
     Copy-Item -LiteralPath $recentTabs,(Join-Path $repo 'examples\recent-tabs\plugin.json'),(Join-Path $repo 'examples\recent-tabs\recent.html') -Destination $recentPackage
     $sessionPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\session')).FullName

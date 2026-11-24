@@ -17,6 +17,10 @@ pub fn main() !void {
         const response = try client.call(.@"reading.find", .{});
         const result = response.get("result") orelse std.json.Value.null;
         break :find if (result == .bool and result.bool) null else unavailable;
+    } else if (std.mem.eql(u8,action,"reader")) article: {
+        const response = try client.call(.@"reading.open", .{});
+        const result = response.get("result") orelse std.json.Value.null;
+        break :article if (result == .bool and result.bool) null else unavailable;
     } else if (std.mem.eql(u8,action,"fullscreen")) fullscreen: {
         const response = try client.call(.@"window.toggleFullscreen", .{});
         const result = response.get("result") orelse std.json.Value.null;

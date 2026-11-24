@@ -348,6 +348,20 @@ class Fixture(BaseHTTPRequestHandler):
                         'if(await reply.text()==="change")location.replace("/page/save-after");},150);</script>')
             if name == "save-too-large":
                 demo = '<!--' + 'x' * (16 * 1024 * 1024 + 8) + '-->'
+            if name == "reader-contract":
+                paragraph = (
+                    "沿着潮线向北走，岸边的灯会照亮木栈道。测量记录表明，"
+                    "每一次潮汐都会改变这片海湾的颜色。冬日的海鸟沿着防波堤捕食，"
+                    "港口工作人员每天清晨巡查潮位与灯塔。"
+                )
+                demo = (
+                    '<aside class="advertisement">排除侧栏广告标记</aside>'
+                    '<article><h1>月湾的潮汐记录</h1><p id="dynamic"></p>'
+                    f'<h2>港口日志</h2><p>{paragraph * 4}</p>'
+                    f'<blockquote>{paragraph}</blockquote><ul><li>检查海图</li><li>记录潮位</li></ul>'
+                    '<p><a href="javascript:void(0)">原文引用</a></p></article>'
+                    '<script>document.getElementById("dynamic").textContent="活"+"页正文 🌙";</script>'
+                )
             if name in ("reading-contract", "reading-other-origin", "reading-restart"):
                 demo = (
                     '<p style="margin-top:1100px">月亮查找词</p>'
@@ -722,6 +736,8 @@ def run_win32(exe, base, root):
     autoplay_settings = "siteSettings.autoplay" in popup_manifest.get("permissions",[])
     sound_settings = "siteSettings.sound" in popup_manifest.get("permissions",[])
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
+    reading_manifest = json.loads(reading.with_name("plugin.json").read_text(encoding="utf-8")) if reading.exists() else {}
+    reader_page = reading.with_name("reader.html")
     recent = exe.parent / "plugins" / "recent-tabs" / "MoonRecentTabs.exe"
     privacy = exe.parent / "plugins" / "privacy" / "MoonPrivacy.exe"
     task_manager = exe.parent / "plugins" / "task-manager" / "MoonTaskManager.exe"
@@ -751,6 +767,7 @@ def run_win32(exe, base, root):
         (profile / "plugin-state.json").write_text(json.dumps([
             {"id": "moon.lua-manager", "enabled": True, "tabs_read": False, "lua_scripts_manage": True},
             {"id": "moon.reading", "enabled": True, "tabs_read": False, "page_reading": True},
+            {"id": "moon.reader-fixture", "enabled": True, "tabs_read": False, "page_reader": True},
             {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
             {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
             {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True,
@@ -1011,6 +1028,52 @@ def run_win32(exe, base, root):
     } catch(error){await emit({error:String(error)});}
 })();</script>"""
         (fixture / "source.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
+    if reader_page.is_file():
+        fixture = profile / "plugins" / "reader-contract"
+        fixture.mkdir(parents=True)
+        shutil.copy2(reading,fixture / reading.name)
+        manifest = reading_manifest.copy()
+        manifest["id"] = "moon.reader-fixture"
+        action = next(cmd for cmd in manifest["contributes"]["commands"] if cmd["id"]=="reader")
+        manifest["contributes"] = {"commands": [{"id": action["id"], "label": "运行阅读模式验收", "menu": "page"}]}
+        (fixture / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+        contract = """
+<script>(async()=>{
+    const api=window.webkit.messageHandlers.moonSettings;
+    const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));
+    const wait=async(fn,label)=>{for(let n=0;n<200;n++){const result=await fn();if(result)return result;
+        await new Promise(resolve=>setTimeout(resolve,50));}throw Error(label);};
+    try {
+        const initial=await host("reading.article");
+        if(initial.state==="idle"){
+            const isolated=await host("reading.read",{generation:1,offset:0}).then(()=>false,()=>true);
+            await emit({isolated});
+        }
+        const result=await wait(async()=>{
+            const state=await host("reading.article");
+            if(["unavailable","tooLarge","noArticle"].includes(state.state))throw Error(state.state);
+            return state.state==="ready"&&state;
+        },"no article snapshot");
+        await wait(()=>!controls.hidden,"article was not rendered");
+        if(!content.textContent.includes("活页正文 🌙")||!content.querySelector("h2")||
+            !content.querySelector("blockquote")||!content.querySelector("ul>li")||
+            content.textContent.includes("排除侧栏广告标记")||content.querySelector("a,form,script,input,iframe"))
+            throw Error("incorrect article markup: "+content.textContent.slice(0,200));
+        byId("larger").click();
+        if(getComputedStyle(content).fontSize!=="21px")throw Error("font size control");
+        const appearance=byId("appearance");
+        appearance.value="sepia";appearance.dispatchEvent(new Event("change"));
+        if(document.documentElement.dataset.appearance!=="sepia")throw Error("appearance control");
+        await emit({ready:true});back.click();
+        await wait(async()=>(await host("reading.article")).state==="stale","article was not invalidated");
+        await wait(()=>!content.textContent,"stale article was visible");
+        if(await host("reading.read",{generation:result.generation,offset:0}).then(()=>true,()=>false))
+            throw Error("stale article could be read");
+        await emit({passed:true});
+    }catch(error){await emit({error:String(error)});}
+})();</script>"""
+        page = reader_page.read_text(encoding="utf-8").replace("<title>阅读模式</title>","<title>阅读模式验收页</title>")
+        (fixture / "reader.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
     if site_data.exists():
         fixture = profile / "plugins" / "site-data-contract"
         fixture.mkdir(parents=True)
@@ -1980,6 +2043,61 @@ def run_win32(exe, base, root):
             if history_rows("SELECT count(*) FROM visits") != [(0,)]:
                 raise RuntimeError("Clearing history left visits in the database")
             print("history_system_plugin=ok history_page_contract=ok", flush=True)
+        def navigate_reading(url):
+            set_control(edit,url)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(url,)),
+                     f"Reading fixture did not finish loading: {url}",15)
+
+        def find_bar():
+            found = user.FindWindowExW(frame,None,"MoonFind",None)
+            return found if found and user.IsWindowVisible(found) else None
+
+        if reader_page.is_file():
+            article_url = base + "/page/reader-contract"
+            navigate_reading(article_url)
+            user.PostMessageW(edit,0x0100,0x78,1)
+            wait_for(lambda: read_address()=="extension://moon.reading/reader.html",
+                     "F9 did not open the built-in Reader")
+            # The EXE can still be replying to F9 while the newly opened view is loading.
+            for _ in range(12):
+                if bar := find_bar():
+                    break
+                invoke("页内查找")
+                sleep(0.25)
+            bar = wait_for(find_bar,"The native find bar did not open on the built-in Reader")
+            set_control(user.GetDlgItem(bar,1201),"活页正文")
+            wait_for(lambda: read_control(user.GetDlgItem(bar,1202))=="1 项匹配",
+                     "The built-in Reader did not render the live article",15)
+            user.PostMessageW(user.GetDlgItem(bar,1201),0x0100,0x1B,1)
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Could not open the isolated Reader fixture tab")
+            set_control(edit,"extension://moon.reader-fixture/reader.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            config = profile / f'extension-{sha256(b"moon.reader-fixture").hexdigest()}.json'
+            isolated = wait_for(lambda: read_settings(config),"Reader owner check did not report")
+            if not isolated.get("isolated"):
+                raise RuntimeError(f"Reader owner check: {isolated}")
+            invoke("Moon fixture reader-contract")
+            wait_for(lambda: read_address()==article_url,"Could not return to the original article")
+            invoke("运行阅读模式验收")
+            ready = wait_for(lambda: (value:=read_settings(config)) and
+                             (value.get("ready") or value.get("error")) and value,
+                             "Reader controls did not report",15)
+            if not ready.get("ready"):
+                raise RuntimeError(f"Reader controls check: {ready}")
+            wait_for(lambda: read_address()==article_url,"Reader did not return to the original tab")
+            navigate_reading(base+"/page/reader-short")
+            invoke("阅读模式验收页")
+            wait_for(lambda: read_address()=="extension://moon.reader-fixture/reader.html",
+                     "Could not show the original Reader fixture after navigation")
+            result = wait_for(lambda: (value:=read_settings(config)) and
+                              (value.get("passed") or value.get("error")) and value,
+                              "Reader did not invalidate the old article",15)
+            if not result.get("passed"):
+                raise RuntimeError(f"Reader invalidation check: {result}")
+            print("reader_system_plugin=ok shortcut=ok live_dom=ok structure=ok appearance=ok return_to_tab=ok owner_isolation=ok stale_snapshot=ok",flush=True)
+
         if blocker.exists():
             invoke("管理网页过滤")
             wait_for(lambda: read_address() == "extension://moon.filter-settings-fixture/filter.html",
@@ -2234,8 +2352,7 @@ def run_win32(exe, base, root):
             if not ready.get("ready") or Fixture.page_source_requests != 1:
                 raise RuntimeError(f"Page source fixture: {ready}, network requests: {Fixture.page_source_requests}")
             invoke("页内查找")
-            find = wait_for(lambda: user.FindWindowExW(frame,None,"MoonFind",None),
-                            "The source panel did not open the native find bar")
+            find = wait_for(find_bar,"The source panel did not open the native find bar")
             search = user.GetDlgItem(find,1201)
             set_control(search,"源码雪月")
             wait_for(lambda: read_control(user.GetDlgItem(find,1202)) == "1 项匹配",
@@ -2477,16 +2594,6 @@ def run_win32(exe, base, root):
                 set_sound_rule(base,False,[])
                 print("site_settings_sound=ok site_menu=ok cross_tab=ok origin_isolation=ok tab_mute_independent=ok persisted=ok",flush=True)
         if reading.exists():
-            def navigate_reading(url):
-                set_control(edit,url)
-                user.PostMessageW(edit,0x0100,0x0D,1)
-                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(url,)),
-                         f"Reading fixture did not finish loading: {url}",15)
-
-            def find_bar():
-                found = user.FindWindowExW(frame,None,"MoonFind",None)
-                return found if found and user.IsWindowVisible(found) else None
-
             def viewport(page):
                 return Fixture.reading_layout.get(page,(0,0))
 
@@ -2570,7 +2677,7 @@ def run_win32(exe, base, root):
             invoke("放大页面")
             wait_for(lambda: 0 < viewport("reading-contract")[0] < normal_width*0.94,
                      "Zoom did not reflow the webpage")
-            wait_for(lambda: owned_window("#32770","查找与缩放"),"Zoom did not report its result")
+            wait_for(lambda: owned_window("#32770",reading_manifest["name"]),"Zoom did not report its result")
             with closing(sqlite3.connect(profile / "page-zoom.sqlite3")) as db:
                 if db.execute("SELECT origin,percent FROM zoom").fetchall() != [(base,110)]:
                     raise RuntimeError("Zoom did not store the active site's 110% setting")

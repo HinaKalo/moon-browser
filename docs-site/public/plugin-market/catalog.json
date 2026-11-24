@@ -66,9 +66,9 @@
     },
     {
       "id": "moon.reading",
-      "name": "查找与缩放",
-      "description": "在当前页查找文字，按站点记住页面缩放比例。",
-      "permission": "打开页内查找和调整缩放",
+      "name": "查找、缩放与阅读",
+      "description": "在当前页查找文字，按站点保存缩放比例，或打开专注阅读模式。",
+      "permission": "页内查找、调整缩放和按需提取正文",
       "url": "https://docs.browser.moonl.cloud/reading.html"
     },
     {

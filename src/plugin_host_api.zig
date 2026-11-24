@@ -1,6 +1,7 @@
 const std = @import("std");
 const native = @import("native");
 const sdk = @import("moon_plugin");
+const reader = @import("reader.zig");
 const updater = @import("updater.zig");
 const userscripts = @import("userscripts.zig");
 const settings = @import("extension_settings.zig");
@@ -76,6 +77,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteData.cookieDetails", .@"siteData.cookieValue" => .@"siteData.cookieDetails",
         .@"siteData.update", .@"siteData.create", .@"siteData.clear" => .@"siteData.write",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
+        .@"reading.open", .@"reading.article", .@"reading.read", .@"reading.returnToPage" => .@"page.reader",
         .@"window.toggleFullscreen" => .@"window.fullscreen",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.reorder" => .@"tabs.organize",
@@ -199,6 +201,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
+        .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
         .@"siteSettings.sound.get", .@"siteSettings.sound.set" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
@@ -219,6 +222,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"host.getInfo", .@"browser.openDefaultApps", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.bar.toggle", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find", .@"pageSource.open", .@"pageSource.status",
+        .@"reading.open", .@"reading.article", .@"reading.returnToPage",
         .@"popups.open", .@"popups.status", .@"siteSettings.autoplay.get", .@"downloads.clearCompleted", .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink",
         .@"siteSettings.sound.get", .@"siteSettings.sound.toggle",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
@@ -622,6 +626,28 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             return sdk.result(output,id,native.moon_reading_find(context.target_tab_id,owner.ptr));
+        },
+        .@"reading.open" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            return sdk.result(output,id,native.moon_reader_open(owner.ptr,context.target_tab_id,context.target_navigation));
+        },
+        .@"reading.article" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            return sdk.result(output,id,reader.article(context.target_tab_id,context.plugin_id));
+        },
+        .@"reading.read" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const query = decode(sdk.ReaderQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const chunk = reader.read(context.target_tab_id,context.plugin_id,query) orelse return sdk.failure(output,id,.NotFound);
+            const encoder = std.base64.standard.Encoder;
+            const buffer = try allocator.alloc(u8,encoder.calcSize(chunk.bytes.len));
+            return sdk.result(output,id,sdk.ReaderChunk{ .dataBase64=encoder.encode(buffer,chunk.bytes), .next=chunk.next });
+        },
+        .@"reading.returnToPage" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            return sdk.result(output,id,native.moon_reader_return(context.target_tab_id,owner.ptr));
         },
         .@"reading.zoom" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

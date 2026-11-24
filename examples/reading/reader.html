@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>阅读模式</title>
+<style>
+  :root { color-scheme:light; --bg:#fff; --text:#222638; --muted:#5b6274; --line:#dce0eb; --accent:#4158bf; --soft:#eef1fb; }
+  :root[data-moon-theme=dark], :root[data-appearance=dark] { color-scheme:dark; --bg:#1d202a; --text:#eef0f6; --muted:#b9c0d3; --line:#394156; --accent:#b4c1ff; --soft:#30384d; }
+  :root[data-appearance=light] { color-scheme:light; --bg:#fff; --text:#222638; --muted:#5b6274; --line:#dce0eb; --accent:#4158bf; --soft:#eef1fb; }
+  :root[data-appearance=sepia] { color-scheme:light; --bg:#f7efdc; --text:#382b20; --muted:#6d5848; --line:#d9c7ab; --accent:#694012; --soft:#ecdfc5; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.6 "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif; }
+  header { padding:8px clamp(12px,5vw,42px); display:flex; gap:12px; align-items:center; justify-content:space-between; flex-wrap:wrap; border-bottom:1px solid var(--line); position:sticky; top:0; z-index:1; background:var(--bg); }
+  .controls { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  button,select { min-height:33px; padding:4px 10px; border:1px solid var(--line); border-radius:7px; color:inherit; background:var(--bg); font:inherit; }
+  button { cursor:pointer; }
+  button:hover,select:hover { background:var(--soft); }
+  button:disabled { cursor:default; opacity:.55; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  main { margin:0 auto; padding:clamp(24px,6vw,64px) clamp(16px,5vw,44px) 72px; max-width:840px; }
+  #status,.metadata { color:var(--muted); overflow-wrap:anywhere; }
+  #headline { margin:12px 0 16px; font-size:clamp(27px,5vw,42px); line-height:1.22; overflow-wrap:anywhere; }
+  #content { font:var(--reader-font, 19px)/1.8 Georgia,"Microsoft YaHei UI",serif; overflow-wrap:anywhere; }
+  #content h2,#content h3,#content h4 { line-height:1.32; margin:1.7em 0 .5em; }
+  #content pre { white-space:pre-wrap; background:var(--soft); border-radius:8px; padding:14px; }
+  #content :is(td,th) { border:1px solid var(--line); padding:4px 8px; }
+  #content table { border-collapse:collapse; display:block; overflow:auto; }
+  #content blockquote { margin-inline:0; padding-inline-start:1em; border-inline-start:3px solid var(--line); color:var(--muted); }
+  [hidden] { display:none !important; }
+</style>
+<header>
+  <button id="return" hidden>← 返回原标签页</button>
+  <span>阅读模式</span>
+  <div class="controls" id="controls" hidden>
+    <button id="smaller" aria-label="缩小阅读字号">A−</button>
+    <button id="larger" aria-label="放大阅读字号">A+</button>
+    <select id="appearance" aria-label="阅读主题">
+      <option value="">跟随浏览器</option>
+      <option value="light">亮色</option>
+      <option value="sepia">暖色</option>
+      <option value="dark">暗色</option>
+    </select>
+  </div>
+</header>
+<main aria-labelledby="headline">
+  <div id="origin" class="metadata" hidden></div>
+  <h1 id="headline" hidden></h1>
+  <div id="byline" class="metadata" hidden></div>
+  <p id="status" role="status">正在读取正文…</p>
+  <article id="content" aria-labelledby="headline"></article>
+</main>
+<script>
+  const byId = id => document.getElementById(id);
+  const status = byId('status'), content = byId('content'), headline = byId('headline'),
+    origin = byId('origin'), byline = byId('byline'), controls = byId('controls'), back = byId('return');
+  const messages = {
+    idle: '在已加载的网页上按 F9 打开阅读模式。',
+    pending: '正在提取正文…',
+    stale: '原网页已发生变化。可返回原标签页后重新打开阅读模式。',
+    noArticle: '此网页没有可提取的长篇正文。',
+    tooLarge: '此网页的内容超过阅读模式处理上限。',
+    unavailable: '正文暂时无法读取。',
+  };
+  const tags = new Set(['p','h2','h3','h4','h5','h6','br','hr','blockquote','pre','code',
+    'em','strong','b','i','s','sup','sub','ul','ol','li','dl','dt','dd','table',
+    'thead','tbody','tr','th','td','figure','figcaption']);
+  let request = 0, shown = '', size = 19;
+  async function host(method, params = {}) {
+    const id = 'reader:' + ++request;
+    const reply = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0', id, method, params})));
+    if (reply.id !== id || reply.error) throw Error('Reader unavailable');
+    return reply.result;
+  }
+  function setSize(step) {
+    size = Math.max(15, Math.min(31, size + step));
+    content.style.setProperty('--reader-font', size + 'px');
+    byId('smaller').disabled = size === 15;
+    byId('larger').disabled = size === 31;
+  }
+  byId('smaller').onclick = () => setSize(-2);
+  byId('larger').onclick = () => setSize(2);
+  byId('appearance').onchange = event => document.documentElement.dataset.appearance = event.target.value;
+  back.onclick = async () => {
+    try { if (await host('reading.returnToPage')) return; } catch {}
+    status.hidden = false;
+    status.textContent = '原标签页已关闭。';
+    back.hidden = true;
+  };
+  function append(parent, nodes) {
+    for (const item of nodes) {
+      if (typeof item === 'string') {
+        parent.append(document.createTextNode(item));
+      } else if (Array.isArray(item) && tags.has(item[0]) && Array.isArray(item[1])) {
+        const element = document.createElement(item[0]);
+        append(element, item[1]);
+        parent.append(element);
+      }
+    }
+  }
+  function clear() {
+    content.replaceChildren();
+    controls.hidden = headline.hidden = origin.hidden = byline.hidden = true;
+    headline.textContent = origin.textContent = byline.textContent = '';
+    status.hidden = false;
+    window.scrollTo(0, 0);
+  }
+  async function read(generation) {
+    const decoder = new TextDecoder();
+    let json = '', offset = 0;
+    while (offset !== null) {
+      const result = await host('reading.read', { generation, offset });
+      const bytes = Uint8Array.from(atob(result.dataBase64), ch => ch.charCodeAt(0));
+      json += decoder.decode(bytes, { stream: result.next !== null });
+      offset = result.next;
+    }
+    return JSON.parse(json);
+  }
+  async function refresh() {
+    let delay = 800;
+    try {
+      const state = await host('reading.article');
+      delay = state.state === 'pending' ? 100 : 800;
+      const key = state.state + ':' + state.generation;
+      if (key === shown) return;
+      clear();
+      back.hidden = !state.url;
+      status.textContent = messages[state.state] || messages.pending;
+      if (state.state === 'ready') {
+        const article = await read(state.generation);
+        const current = await host('reading.article');
+        if (current.state !== 'ready' || current.generation !== state.generation) return;
+        const fragment = document.createDocumentFragment();
+        append(fragment, article.content);
+        content.dir = article.direction === 'rtl' ? 'rtl' : 'auto';
+        content.replaceChildren(fragment);
+        headline.textContent = article.title || '阅读模式';
+        byline.textContent = article.byline;
+        byline.hidden = !article.byline;
+        origin.textContent = new URL(state.url).host;
+        origin.hidden = headline.hidden = controls.hidden = false;
+        status.textContent = article.truncated ? '正文已截断。完整内容可在原网页继续阅读。' : '';
+        status.hidden = !article.truncated;
+      }
+      shown = key;
+    } catch {
+      shown = '';
+      clear();
+      back.hidden = true;
+      status.textContent = messages.unavailable;
+    } finally {
+      setTimeout(refresh, delay);
+    }
+  }
+  refresh();
+</script>
+</html>

@@ -150,7 +150,7 @@ static JSValueRef catalog_finished(JSContextRef context,JSObjectRef function,JSO
 }
 
 static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char *expected,const char *change,
-                           bool catalog,bool *scheduled,const char **failure) {
+                           bool catalog,bool reader,bool *scheduled,const char **failure) {
     *failure="\"frameUnavailable\"";
     WKBundleFrameRef frame=api.main_frame(page);
     if (!frame) return NULL;
@@ -172,7 +172,14 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
     JSStringRef result=NULL;
     if (context) {
         *failure="\"evaluationFailed\"";
-        JSStringRef script=api.source(catalog ? catalog_script : snapshot_script);
+        JSStringRef script=api.source(reader ? change : catalog ? catalog_script : snapshot_script);
+        if (reader) {
+            JSValueRef exception=NULL;
+            JSValueRef value=script ? api.evaluate(context,script,NULL,NULL,1,&exception) : NULL;
+            if (!exception && value) result=api.to_string(context,value,NULL);
+            if (script) api.release_js(script);
+            return result;
+        }
         JSStringRef id=api.source(revision), payload=api.source(catalog ? expected : change);
         if (script && id && payload) {
             JSValueRef exception=NULL;
@@ -199,24 +206,27 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
 void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRef name,WKTypeRef data,const void *info) {
     if (!resolve() || !data || api.type_id(data)!=api.string_type_id()) return;
     const bool catalog=api.text_equals(name,"MoonInspectCatalog");
-    if (!catalog && !api.text_equals(name,"MoonInspectSite")) return;
-    char request[32*1024];
-    const size_t n=api.read_string((WKStringRef)data,request,sizeof(request));
-    if (!n || n>=sizeof(request) || strlen(request)+1!=n) return;
+    const bool reader=api.text_equals(name,"MoonReadArticle");
+    if (!catalog && !reader && !api.text_equals(name,"MoonInspectSite")) return;
+    const size_t request_cap=(reader ? 144 : 32)*1024;
+    char *request=malloc(request_cap);
+    if (!request) return;
+    const size_t n=api.read_string((WKStringRef)data,request,request_cap);
+    if (!n || n>=request_cap || strlen(request)+1!=n) { free(request); return; }
     char *split=strchr(request,'\n');
-    if (!split || split==request || (size_t)(split-request)>20) return;
+    if (!split || split==request || (size_t)(split-request)>20) { free(request); return; }
     char *update=strchr(split+1,'\n');
-    if (!update || update==split+1 || !update[1]) return;
+    if (!update || update==split+1 || !update[1]) { free(request); return; }
     const size_t prefix=(size_t)(split-request)+1;
     const char *failure;
     *split=0;
     *update=0;
     bool scheduled=false;
-    JSStringRef snapshot=inspect(page,request,split+1,update+1,catalog,&scheduled,&failure);
-    if (scheduled) return;
+    JSStringRef snapshot=inspect(page,request,split+1,update+1,catalog,reader,&scheduled,&failure);
+    if (scheduled) { free(request); return; }
     *split='\n';
     const size_t capacity=snapshot ? api.size(snapshot) : 0;
-    const size_t limit=512*1024;
+    const size_t limit=(reader ? 192 : 512)*1024;
     const size_t estimated=capacity<limit ? capacity : limit;
     char *response=malloc(prefix+(estimated>32 ? estimated : 32));
     if (response) {
@@ -227,8 +237,9 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
             if (bytes<2 || (response[prefix+bytes-2]!='}' && response[prefix+bytes-2]!='"'))
                 strcpy(response+prefix,"\"invalidResult\"");
         }
-        post_reply(page,catalog ? "MoonSiteCatalog" : "MoonSiteSnapshot",response);
+        post_reply(page,reader ? "MoonArticleSnapshot" : catalog ? "MoonSiteCatalog" : "MoonSiteSnapshot",response);
         free(response);
     }
     if (snapshot) api.release_js(snapshot);
+    free(request);
 }

@@ -37,6 +37,7 @@ pub const Permission = enum {
     @"page.save",
     @"tabs.groups",
     @"browser.defaultApp",
+    @"page.reader",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -51,6 +52,7 @@ pub const Shortcut = enum {
     @"Ctrl+Shift+C",
     @"Ctrl+S",
     @"Ctrl+Shift+B",
+    F9,
 };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
 pub const LinkMenuAction = enum(c_uint) { open = 1, copy, bookmark };
@@ -101,6 +103,10 @@ pub const PageSourceStatus = struct {
 };
 pub const PageSourceQuery = struct { generation: u64, offset: usize };
 pub const PageSourceChunk = struct { sourceBase64: []const u8, next: ?usize };
+pub const ReaderState = enum { idle, pending, ready, stale, unavailable, noArticle, tooLarge };
+pub const ReaderStatus = struct { state: ReaderState = .idle, generation: u64 = 0, url: []const u8 = "" };
+pub const ReaderQuery = struct { generation: u64, offset: usize };
+pub const ReaderChunk = struct { dataBase64: []const u8, next: ?usize };
 pub const PageSaveStart = enum(c_int) { started, cancelled, unavailable, unsupported, invalidFilename, busy, failed };
 pub const PopupMode = enum { automatic, allow, block };
 pub const PopupRule = struct { origin: []const u8, mode: PopupMode };
@@ -312,6 +318,10 @@ pub const Method = enum {
     @"siteData.clear",
     @"reading.find",
     @"reading.zoom",
+    @"reading.open",
+    @"reading.article",
+    @"reading.read",
+    @"reading.returnToPage",
     @"window.toggleFullscreen",
     @"tabs.closed.list",
     @"tabs.closed.reopen",

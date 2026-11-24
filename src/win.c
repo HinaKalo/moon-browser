@@ -1699,7 +1699,7 @@ static bool keyboard(MSG *msg) {
         return repeated || site_menu(frame);
     const bool devtools_chord=modifiers==(MOD_CONTROL|MOD_SHIFT) && (msg->wParam=='I' || msg->wParam=='C');
     if (in_content && !in_page && msg->wParam!=VK_F11 && msg->wParam!=VK_F12 && !devtools_chord) return false;
-    if ((ctrl || alt || msg->wParam==VK_F11 || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
+    if ((ctrl || alt || msg->wParam==VK_F9 || msg->wParam==VK_F11 || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
         moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
     return false;
 }

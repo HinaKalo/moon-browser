@@ -12,6 +12,7 @@ const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
 const page_source = @import("page_source.zig");
+const reader = @import("reader.zig");
 const popups = @import("popup_policy.zig");
 const autoplay = @import("autoplay_policy.zig");
 const site_sound = @import("site_sound.zig");
@@ -341,6 +342,7 @@ fn detach(tab: *Tab) void {
     }
     site_data.invalidate(tab.id);
     page_source.invalidate(tab.id);
+    reader.invalidate(tab.id);
     popups.clear(tab.id);
     tab.document_committed = false;
     tab.navigation +%= 1;
@@ -398,6 +400,7 @@ fn loadInternal(tab: *Tab, address: [4096:0]u8, id: ?[:0]const u8, html: [*:0]co
     if (tab.extension and !equals(slice(&tab.url),slice(&address))) {
         site_data.closed(tab.id);
         page_source.closed(tab.id);
+        reader.closed(tab.id);
     }
     detach(tab);
     forgetSession(tab);
@@ -459,6 +462,7 @@ fn navigate(tab: *Tab, url: []const u8) void {
     if (tab.extension) {
         site_data.closed(tab.id);
         page_source.closed(tab.id);
+        reader.closed(tab.id);
         detach(tab);
         tab.extension = false;
         tab.unsafe_history = false;
@@ -1020,6 +1024,7 @@ fn closeTab(index: usize) void {
     if (index >= count) return;
     site_data.closed(tabs[index].id);
     page_source.closed(tabs[index].id);
+    reader.closed(tabs[index].id);
     const was_active = index == active;
     const was_pinned = tabs[index].pinned;
     const old_group = tabs[index].group;
@@ -1254,6 +1259,7 @@ fn maintenance() void {
     downloads.flush();
     site_data.tick(now);
     page_source.tick(now);
+    reader.tick(now);
     if (page_save_job) |job| if (now>=job.deadline) {
         page_save_job = null;
         native.moon_shell_toast("网页另存为","读取网页超时。请重试。");
@@ -1459,6 +1465,7 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         recent_tabs.clear();
         site_data.reset();
         page_source.reset();
+        reader.reset();
         for (tabs[0..count]) |*tab| {
             detach(tab);
             forgetSession(tab);
@@ -1566,6 +1573,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         native.MOON_STARTED => {
             site_data.invalidate(id);
             page_source.invalidate(id);
+            reader.invalidate(id);
             popups.invalidate(id);
             tab.document_committed = false;
             tab.navigation +%= 1;
@@ -1576,6 +1584,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         },
         native.MOON_COMMITTED => {
             page_source.invalidate(id);
+            reader.invalidate(id);
             tab.document_committed = true;
             tab.dirty = false;
             tab.has_document = true;
@@ -1624,6 +1633,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         native.MOON_SAME_DOCUMENT => {
             site_data.invalidate(id);
             page_source.invalidate(id);
+            reader.invalidate(id);
             tab.navigation +%= 1;
             sync(tab);
             if (!tab.extension and !tab.restoring_history and plugins.systemEnabled(.@"history.manage")) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
@@ -1631,6 +1641,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
         native.MOON_TERMINATED => {
             site_data.closed(id);
             page_source.closed(id);
+            reader.closed(id);
             popups.clear(id);
             tab.document_committed = false;
             tab.navigation +%= 1;
@@ -1855,6 +1866,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"siteData.cookieDetails" => "允许查看 Cookie 属性和 HttpOnly Cookie",
         .@"page.source" => "允许查看当前网页源代码",
+        .@"page.reader" => "允许提取当前网页正文以打开阅读模式",
         .@"page.save" => "允许通过文件对话框保存当前网页",
         .@"tabs.groups" => "允许管理标签组",
         .@"browser.defaultApp" => "允许打开 Windows 默认应用设置",
@@ -1908,6 +1920,11 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     if (permission == null or permission == .@"network.filter") network.select(plugins.networkSource());
     if (permission == null or permission == .@"siteData.read" or permission == .@"siteData.cookieDetails") checkSiteDataGrant();
     if (permission == null or permission == .@"page.source") checkPageSourceGrant();
+    if (permission == null or permission == .@"page.reader") {
+        if (reader.ownerId()) |id| {
+            if (!plugins.hasGrant(id,.@"page.reader")) reader.reset();
+        }
+    }
     if (permission == null or permission == .@"page.inspect" or permission == .@"ui.commands")
         native.moon_engine_context_inspect_available(plugins.inspectElementLabel()!=null);
     if (permission == null or permission == .@"page.reading") checkFindGrant();
@@ -2099,6 +2116,31 @@ fn pageSaveView(id: u64, navigation: u64) ?*native.MoonView {
     const tab = &tabs[tabIndex(id) orelse return null];
     if (tab.navigation!=navigation or !hasSite(tab) or !tab.loaded or tab.loading) return null;
     return tab.view;
+}
+
+export fn moon_reader_open(owner: [*c]const u8, id: u64, navigation: u64) bool {
+    if (count==0 or tabs[active].id!=id) return false;
+    const view = pageSaveView(id,navigation) orelse return false;
+    var committed: [4096:0]u8 = @splat(0);
+    native.moon_engine_committed_url(view,&committed,committed.len);
+    const address = slice(&committed);
+    if (!history.validURL(address) or !moon_plugin_open_page(owner)) return false;
+    const selected = &tabs[active];
+    if (!selected.extension or selected.id==id or pageSaveView(id,navigation)!=view) return false;
+    reader.begin(slice(owner),id,selected.id,address,view);
+    return true;
+}
+
+export fn moon_reader_result(tab: u64, request: u64, result: [*c]const u8) void {
+    if (!stopped and result!=null) reader.complete(tab,request,slice(result));
+}
+
+export fn moon_reader_return(panel: u64, owner: [*c]const u8) bool {
+    if (stopped or count==0 or tabs[active].id!=panel) return false;
+    const id = reader.selected(panel,slice(owner)) orelse return false;
+    const index = tabIndex(id) orelse return false;
+    chooseTab(index,true);
+    return true;
 }
 
 export fn moon_page_save(owner: [*c]const u8, id: u64, navigation: u64,

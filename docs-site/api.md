@@ -84,6 +84,10 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteData.refresh` / `siteData.openInspector` | `siteData.read` | 前台面板可刷新同一网页的快照，或为原网页打开已启用的 WebKit Inspector。返回布尔值。 |
 | `reading.find` | `page.reading` | 在用户命令中传入 `{}`，为触发命令的活动标签打开原生查找栏。返回布尔值。 |
 | `reading.zoom` | `page.reading` | 在用户命令中传入 `{ action }`。支持 `increase`、`decrease`、`reset`，返回新的整数百分比。活动页不可用时返回 `null`。 |
+| `reading.open` | `page.reader` | 在用户命令中传入 `{}`，将当前已加载网页绑定到插件的专属阅读页并启动提取。返回布尔值。 |
+| `reading.article` | `page.reader` | 插件页传入 `{}`，返回 `{ state, generation, url }`。状态为 `idle`、`pending`、`ready`、`stale`、`unavailable`、`noArticle` 或 `tooLarge`。 |
+| `reading.read` | `page.reader` | 绑定页传入 `{ generation, offset }`，返回 `{ dataBase64, next }`。从偏移 0 顺序读取 UTF-8 JSON，`next: null` 表示读完。 |
+| `reading.returnToPage` | `page.reader` | 当前活动的绑定页传入 `{}`，切回原标签页。返回布尔值。 |
 | `window.toggleFullscreen` | `window.fullscreen` | 用户触发的原生命令传入 `{}`。返回 `true`（全屏）、`false`（已退出）或 `null`（来源页面已切换或窗口不可用）。 |
 | `tabs.closed.list` | `tabs.closed.manage` | 无参数，返回最近关闭标签的数组 `[{ id, title, origin }]`。 |
 | `tabs.closed.reopen` | `tabs.closed.manage` | 在用户命令或活动插件页面中传入 `{ id? }`。省略 ID 时恢复最近一项。返回 `reopened`、`notFound`、`tabLimit` 或 `unavailable`。 |

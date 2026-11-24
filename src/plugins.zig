@@ -42,6 +42,7 @@ const Grant = struct {
     bookmarks_transfer: ?bool = null,
     window_fullscreen: ?bool = null,
     page_save: ?bool = null,
+    page_reader: ?bool = null,
     tabs_groups: ?bool = null,
     browser_default_app: ?bool = null,
     menu_items: []const []const u8 = &.{},
@@ -266,6 +267,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"window.fullscreen");
             plugin.grants.insert(.@"window.fullscreen");
         }
+        if (std.mem.eql(u8,id,"moon.reading") and plugin.enabled and requests.contains(.@"page.reader")) {
+            plugin.default_grants.insert(.@"page.reader");
+            plugin.grants.insert(.@"page.reader");
+        }
         if (std.mem.eql(u8,id,"moon.source") and plugin.enabled and requests.contains(.@"page.save")) {
             plugin.default_grants.insert(.@"page.save");
             plugin.grants.insert(.@"page.save");
@@ -372,6 +377,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"window.fullscreen")) plugin.grants.insert(.@"window.fullscreen");
         if (grant.enabled and (grant.page_save orelse plugin.default_grants.contains(.@"page.save")) and
             plugin.requests.contains(.@"page.save")) plugin.grants.insert(.@"page.save");
+        if (grant.enabled and (grant.page_reader orelse plugin.default_grants.contains(.@"page.reader")) and
+            plugin.requests.contains(.@"page.reader")) plugin.grants.insert(.@"page.reader");
         if (grant.enabled and (grant.tabs_groups orelse plugin.default_grants.contains(.@"tabs.groups")) and
             plugin.requests.contains(.@"tabs.groups")) plugin.grants.insert(.@"tabs.groups");
         if (grant.enabled and (grant.browser_default_app orelse plugin.default_grants.contains(.@"browser.defaultApp")) and
@@ -454,6 +461,7 @@ fn persist() bool {
         .bookmarks_transfer = plugin.grants.contains(.@"bookmarks.transfer"),
         .window_fullscreen = plugin.grants.contains(.@"window.fullscreen"),
         .page_save = plugin.grants.contains(.@"page.save"),
+        .page_reader = plugin.grants.contains(.@"page.reader"),
         .tabs_groups = plugin.grants.contains(.@"tabs.groups"),
         .browser_default_app = plugin.grants.contains(.@"browser.defaultApp"),
         .menu_items = menus[index][0..used],
@@ -507,6 +515,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
                 .@"siteData.cookieDetails" => "此插件可在绑定到网页的站点数据面板查看 Cookie 属性及值，包含可能用于登录的 HttpOnly Cookie。",
                 .@"page.reading" => "此插件可在当前页打开查找栏，并调整页面缩放。",
+                .@"page.reader" => "你从网页打开阅读模式时，此插件的专属页面可以读取该网页提取的正文。",
                 .@"window.fullscreen" => "此插件可在你触发命令时切换浏览器全屏。按 Esc 可以退出全屏。",
                 .@"tabs.closed.manage" => "此插件可查看最近关闭标签的标题和站点，并恢复或清空这些标签。",
                 .@"privacy.clear" => "此插件可以请求清除所选浏览数据。浏览器会在删除前单独确认。",
@@ -918,7 +927,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
     const plus = vk==0xbb or vk==0x6b; // VK_OEM_PLUS, VK_ADD
     if (plus and (mods==ctrl or mods==ctrl_shift)) return .@"Ctrl++";
     return switch (mods) {
-        0 => switch (vk) { 0x7a => .F11, 0x7b => .F12, else => null },
+        0 => switch (vk) { 0x78 => .F9, 0x7a => .F11, 0x7b => .F12, else => null },
         ctrl => switch (vk) {
             'H' => .@"Ctrl+H",
             'J' => .@"Ctrl+J",
@@ -980,7 +989,7 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
             if (entry.shortcut!=key or entry.user_shortcut!=null or registeredShortcut(index,command_index)!=null) continue;
             if (key==.F11 and ((!plugin.bundled and !canContribute(plugin)) or
                 !plugin.grants.contains(.@"window.fullscreen"))) continue;
-            if (!repeated or (key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C" and key!=.@"Ctrl+S"))
+            if (!repeated or (key!=.F9 and key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C" and key!=.@"Ctrl+S"))
                 runShortcut(index,command_index,snapshot,repeated);
             return true;
         }
