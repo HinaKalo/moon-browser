@@ -30,4 +30,6 @@ await callSettings('write', { ...current, refreshOnSave: true });
 
 0.1.0-preview.8 起，声明的插件页面可通过 `window.webkit.messageHandlers.moonHost.postMessage()` 收发 UTF-8 JSON-RPC 2.0 字符串。当前开放 `history.list`、`history.remove`、`history.clear`，每次调用都检查 `history.manage`。浏览器从页面所在的隔离视图识别插件。请求中无需填写插件 ID。
 
+0.1.0-preview.9 起，拥有 `network.filter` 权限的插件页面可调用 `network.filter.status` 和 `network.filter.setSite`。[规则文件格式](./blocker)
+
 宿主在文档根节点设置 `data-moon-theme="light"` 或 `data-moon-theme="dark"`，切换浏览器主题时同步更新。页面可使用 CSS 属性选择器适配。

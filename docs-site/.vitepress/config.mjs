@@ -20,7 +20,8 @@ export default defineConfig({
         { text: '原生插件协议 1', link: '/protocol-v1' },
         { text: '插件配置页', link: '/extension-pages' },
         { text: '网页开发者工具', link: '/devtools' },
-        { text: '浏览历史', link: '/history' }
+        { text: '浏览历史', link: '/history' },
+        { text: '严格去广告', link: '/blocker' }
       ] },
       { text: '下一版设计', items: [
         { text: '插件体系与开发规范', link: '/plugin-system' }

@@ -1,0 +1,12 @@
+{
+  "id": "moon.blocker",
+  "name": "严格去广告",
+  "version": "0.1.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonBlocker.exe",
+  "settingsPage": "filter.html",
+  "networkRules": "strict.rules",
+  "contributes": { "commands": [{ "id": "open", "label": "管理网页过滤" }] },
+  "permissions": ["network.filter"]
+}

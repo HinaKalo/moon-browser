@@ -12,6 +12,7 @@ pub const Permission = enum {
     @"lua.scripts.manage",
     @"page.inspect",
     @"history.manage",
+    @"network.filter",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum { @"Ctrl+H", F12, @"Ctrl+Shift+J" };
@@ -24,6 +25,7 @@ pub const Manifest = struct {
     runtime: enum { native },
     entry: []const u8,
     settingsPage: ?[]const u8 = null,
+    networkRules: ?[]const u8 = null,
     contributes: struct { commands: []const Command },
     permissions: []const Permission = &.{},
     events: []const Event = &.{},
@@ -49,6 +51,8 @@ pub const InspectorPanel = enum { inspector, console, resources };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
 pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
 pub const HistoryPage = struct { visits: []const HistoryVisit, next: ?u32 };
+pub const NetworkFilterStatus = struct { preferred: bool, active: bool, exceptions: []const []const u8 };
+pub const NetworkFilterSite = struct { host: []const u8, enabled: bool };
 pub const CommandResult = struct { message: ?[]const u8 = null };
 
 pub const Method = enum {
@@ -68,6 +72,8 @@ pub const Method = enum {
     @"history.list",
     @"history.remove",
     @"history.clear",
+    @"network.filter.status",
+    @"network.filter.setSite",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

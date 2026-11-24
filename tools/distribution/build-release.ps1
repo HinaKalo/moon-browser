@@ -23,7 +23,7 @@ if (!$url.IsAbsoluteUri -or $url.Scheme -ne 'https' -or $url.AbsoluteUri -match 
     throw 'Public packaging requires a pinned HTTPS archive and a valid archive_bytes field.'
 }
 $payload = [IO.Directory]::CreateDirectory((Join-Path $Work 'public-payload')).FullName
-foreach ($name in 'MoonBrowser.exe','README.md','THIRD-PARTY.md','engine.json','licenses','plugins','welcome.user.lua') {
+foreach ($name in 'MoonBrowser.exe','MoonRequestFilter.dll','README.md','THIRD-PARTY.md','engine.json','licenses','plugins','welcome.user.lua') {
     Copy-Item -LiteralPath (Join-Path $Artifact $name) -Destination $payload -Recurse
 }
 [IO.File]::WriteAllText((Join-Path $payload 'release-mode'),'installer')

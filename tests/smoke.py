@@ -46,6 +46,10 @@ class Fixture(BaseHTTPRequestHandler):
     seen_editor_reload = Event()
     seen_editor_ready = Event()
     seen_extension_network = Event()
+    seen_blocked_request = Event()
+    seen_filter_proof = Event()
+    seen_allowed_request = Event()
+    filter_probe = False
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -63,6 +67,12 @@ class Fixture(BaseHTTPRequestHandler):
         elif path == "/extension-network":
             self.seen_extension_network.set()
             data, content_type = b"unexpected", "text/plain"
+        elif path.startswith("/moon-filter-probe/blocked"):
+            (self.seen_allowed_request if "?allow=1" in self.path else self.seen_blocked_request).set()
+            data, content_type = b"", "application/javascript"
+        elif path == "/moon-filter-probe/passed":
+            self.seen_filter_proof.set()
+            data, content_type = b"ok", "text/plain"
         elif path.startswith("/page/"):
             name = path.removeprefix("/page/")
             if name == "中文":
@@ -84,6 +94,19 @@ class Fixture(BaseHTTPRequestHandler):
                     'observer.disconnect(); fetch("/lua-demo-verified"); }'
                     '}).observe(document.body, {childList:true,subtree:true,attributes:true});</script>'
                 )
+                if self.filter_probe:
+                    demo += (
+                        '<div id="moon-blocker-warning">Ad blocker detected.</div>'
+                        '<script>const ad=document.createElement("script");'
+                        'const scriptBlocked=new Promise(resolve=>{ad.onload=()=>resolve(false);'
+                        'ad.onerror=()=>resolve(true);ad.src="/moon-filter-probe/blocked.js";'
+                        'document.head.append(ad);});'
+                        'const fetchBlocked=fetch("/moon-filter-probe/blocked-fetch").then(()=>false,()=>true);'
+                        'Promise.all([scriptBlocked,fetchBlocked]).then(results=>{'
+                        'if(results.every(Boolean)&&getComputedStyle(document.getElementById("moon-blocker-warning")).display==="none")'
+                        'fetch("/moon-filter-probe/passed");'
+                        '});</script>'
+                    )
             if name == "editor":
                 demo = (
                     '<p id="editor-proof">Original</p><script>'
@@ -93,6 +116,8 @@ class Fixture(BaseHTTPRequestHandler):
                     'else if (text === "Old Lua source") fetch("/editor-ready");'
                     '}).observe(document.querySelector("#editor-proof"), {childList:true});</script>'
                 )
+            if name == "filter-allowed":
+                demo = '<script>fetch("/moon-filter-probe/blocked-fetch?allow=1");</script>'
             data = (
                 "<!doctype html><meta charset=utf-8>"
                 f"<title>Moon fixture {name}</title>"
@@ -206,6 +231,22 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
         )
     report = root / "report.txt"
     args = [str(exe), "--smoke", base, str(report)]
+    request_filter = exe.with_name("MoonRequestFilter.dll").exists()
+    if request_filter:
+        Fixture.filter_probe = True
+        filter_fixture = profile / "plugins" / "filter-contract"
+        filter_fixture.mkdir(parents=True)
+        (filter_fixture / "plugin.json").write_text(json.dumps({
+            "id": "moon.filter-fixture", "name": "Filter fixture", "version": "1.0.0",
+            "apiVersion": 2, "runtime": "native", "entry": "Unused.exe", "networkRules": "test.rules",
+            "permissions": ["network.filter"],
+            "contributes": {"commands": [{"id": "open", "label": "Filter fixture"}]},
+        }), encoding="utf-8")
+        (filter_fixture / "test.rules").write_text(
+            "@127.0.0.1\t/moon-filter-probe/blocked\n+127.0.0.1\t#moon-blocker-warning\n", encoding="utf-8")
+        (profile / "plugin-state.json").write_text(json.dumps([
+            {"id": "moon.filter-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
+        ]), encoding="utf-8")
     if fallback:
         args += ["--gdi"]
     if quick:
@@ -234,6 +275,11 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
     if not Fixture.seen_lua_demo.is_set():
         raise RuntimeError("The downloadable Lua demo did not filter and highlight the expected items")
     print("lua_public_demo=ok", flush=True)
+    if request_filter:
+        if Fixture.seen_blocked_request.is_set() or not Fixture.seen_filter_proof.is_set():
+            raise RuntimeError(f"Request filtering or document-start cosmetic rule failed "
+                               f"(request reached server: {Fixture.seen_blocked_request.is_set()})")
+        print("native_request_filter=ok document_start_cosmetic_rule=ok",flush=True)
     if force_pressure and "pressure=1" not in log:
         raise RuntimeError("Configured pressure path did not run")
     if not quick:
@@ -278,6 +324,7 @@ def run_win32(exe, base, root):
     manager = exe.parent / "plugins" / "lua-manager" / "MoonLuaManager.exe"
     devtools = exe.parent / "plugins" / "devtools" / "MoonDevTools.exe"
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
+    blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     if manager.exists():
         fixture = profile / "plugins" / "settings"
         fixture.mkdir(parents=True)
@@ -286,6 +333,7 @@ def run_win32(exe, base, root):
             {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
             {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
             {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True},
+            {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
@@ -356,6 +404,23 @@ def run_win32(exe, base, root):
             '})();</script>'
         )
         (fixture / "history.html").write_text(bundled_page.replace("</html>", contract + "</html>"), encoding="utf-8")
+    if blocker.exists():
+        fixture = profile / "plugins" / "blocker-settings"
+        fixture.mkdir(parents=True)
+        shutil.copy2(blocker,fixture / blocker.name)
+        manifest = json.loads((blocker.parent / "plugin.json").read_text(encoding="utf-8"))
+        manifest["id"] = "moon.filter-settings-fixture"
+        (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (fixture / "strict.rules").write_text("@127.0.0.1\t/moon-filter-probe/blocked\n", encoding="utf-8")
+        html = (blocker.parent / "filter.html").read_text(encoding="utf-8")
+        contract = (
+            '<script>(async()=>{const siteInput=document.getElementById("site");'
+            'for(let i=0;siteInput.disabled&&i<50;i++)await new Promise(r=>setTimeout(r,50));'
+            'if(siteInput.disabled)return;'
+            'siteInput.value="127.0.0.1";document.getElementById("pause").click();'
+            '})();</script>'
+        )
+        (fixture / "filter.html").write_text(html.replace("</html>",contract + "</html>"), encoding="utf-8")
     proc = subprocess.Popen([str(exe), "--gdi"], env=preview_env(root))
     frame = None
     try:
@@ -609,6 +674,18 @@ def run_win32(exe, base, root):
             if history_rows("SELECT count(*) FROM visits") != [(0,)]:
                 raise RuntimeError("Clearing history left visits in the database")
             print("history_system_plugin=ok history_page_contract=ok", flush=True)
+        if blocker.exists():
+            invoke("管理网页过滤")
+            wait_for(lambda: read_address() == "extension://moon.filter-settings-fixture/filter.html",
+                     "The filter system executable did not open its page")
+            config = profile / f'extension-{sha256(b"moon.filter-settings-fixture").hexdigest()}.json'
+            wait_for(lambda: config.exists() and json.loads(config.read_text(encoding="utf-8")).get("pausedSites") == ["127.0.0.1"],
+                     "The filter page did not save the site exception")
+            set_control(edit, base + "/page/filter-allowed")
+            user.PostMessageW(edit, 0x0100, 0x0D, 1)
+            if not Fixture.seen_allowed_request.wait(12):
+                raise RuntimeError("The new site exception did not resume requests")
+            print("filter_site_exception=ok", flush=True)
     finally:
         if frame:
             user.PostMessageW(frame, 0x0010, 0, 0)

@@ -5,6 +5,7 @@ const updater = @import("updater.zig");
 const userscripts = @import("userscripts.zig");
 const settings = @import("extension_settings.zig");
 const history = @import("history.zig");
+const network = @import("network_policy.zig");
 
 pub const Permissions = std.EnumSet(sdk.Permission);
 pub const Snapshot = struct { id: u64, title: [512:0]u8, url: [4096:0]u8 };
@@ -26,6 +27,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive" => .@"lua.scripts.manage",
         .@"devtools.open" => .@"page.inspect",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
+        .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
     };
 }
 
@@ -77,7 +79,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     if (object.contains("result") or object.contains("error")) return sdk.failure(output, id, .InvalidRequest);
     const method = std.meta.stringToEnum(sdk.Method, method_name) orelse return sdk.failure(output, id, .MethodNotFound);
     if (context.from_page) switch (method) {
-        .@"history.list", .@"history.remove", .@"history.clear" => {},
+        .@"history.list", .@"history.remove", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
     };
     if (!context.consent.valid(context.consent.context)) return sdk.failure(output, id, .Cancelled);
@@ -86,7 +88,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     }
     const params = object.get("params");
     switch (method) {
-        .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear" => {
+        .@"host.getInfo", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear", .@"network.filter.status" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
         else => {},
@@ -190,6 +192,22 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"history.clear" => clear: {
             history.clear() catch return sdk.failure(output,id,.InternalError);
             break :clear sdk.result(output,id,null);
+        },
+        .@"network.filter.status" => check: {
+            const status = network.status(allocator,context.plugin_id) catch return sdk.failure(output,id,.InternalError);
+            break :check sdk.result(output,id,status);
+        },
+        .@"network.filter.setSite" => site: {
+            const value = decode(sdk.NetworkFilterSite,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            network.setSite(allocator,context.plugin_id,value) catch |err| {
+                return sdk.failure(output,id,switch (err) {
+                    error.InvalidHost => .InvalidParams,
+                    error.NotSelected => .PermissionDenied,
+                    error.LimitExceeded,error.TooLarge => .LimitExceeded,
+                    else => .InternalError,
+                });
+            };
+            break :site sdk.result(output,id,null);
         },
     };
 }

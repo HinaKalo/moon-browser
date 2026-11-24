@@ -48,7 +48,7 @@ static const Theme dark = {
 static const Theme *theme = &light;
 
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48 };
-enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_PLUGIN_BASE = 100, MENU_PLUGIN_STRIDE = 14,
+enum { MENU_DIAG = 10, MENU_ADD, MENU_THEME, MENU_FOCUS, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_PLUGIN_BASE = 100, MENU_PLUGIN_STRIDE = 15,
        MENU_SCRIPTS_PICK = 400, MENU_SCRIPTS_BASE = 410 };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        PALETTE_TAB_OFFSET = 1000 };
@@ -678,6 +678,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
         if (moon_plugin_has_settings(i)) AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+3,L"配置页面");
         if (flags&32) AppendMenuW(sub,MF_STRING|(flags&16?MF_CHECKED:0),id+4,L"允许打开网页开发者工具");
         if (flags&128) AppendMenuW(sub,MF_STRING|(flags&64?MF_CHECKED:0),id+5,L"允许管理浏览历史");
+        if (flags&512) AppendMenuW(sub,MF_STRING|(flags&256?MF_CHECKED:0),id+6,L"允许拦截网页请求");
         for(size_t j=0;j<moon_plugin_action_count(i);++j) {
             if (!moon_utf16(moon_plugin_action(i,j),action,256)) continue;
             const char *shortcut=moon_plugin_action_shortcut(i,j);
@@ -686,7 +687,7 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
                 action[end++]=L'\t';
                 if (!moon_utf16(shortcut,action+end,ARRAYSIZE(action)-end)) action[end-1]=0;
             }
-            AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+6+j,action);
+            AppendMenuW(sub,MF_STRING|(flags&1?0:MF_GRAYED),id+7+j,action);
         }
         AppendMenuW(popup,MF_POPUP,(UINT_PTR)sub,name);
     }
@@ -713,9 +714,9 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     else if (command>=MENU_PLUGIN_BASE) {
         unsigned value=command-MENU_PLUGIN_BASE;
         const unsigned offset=value%MENU_PLUGIN_STRIDE, plugin=value/MENU_PLUGIN_STRIDE;
-        const int grants[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_GRANT_LUA,MOON_PLUGIN_SETTINGS,MOON_PLUGIN_GRANT_INSPECT,MOON_PLUGIN_GRANT_HISTORY};
+        const int grants[]={MOON_PLUGIN_ENABLE,MOON_PLUGIN_GRANT,MOON_PLUGIN_GRANT_LUA,MOON_PLUGIN_SETTINGS,MOON_PLUGIN_GRANT_INSPECT,MOON_PLUGIN_GRANT_HISTORY,MOON_PLUGIN_GRANT_FILTER};
         if (offset<ARRAYSIZE(grants)) moon_command(grants[offset],plugin,NULL);
-        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-6),NULL);
+        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-7),NULL);
         moon_shell_refresh();
     }
 }

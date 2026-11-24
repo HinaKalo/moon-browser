@@ -7,6 +7,7 @@ const extension_settings = @import("extension_settings.zig");
 const api = @import("plugin_host_api.zig");
 const sdk = @import("moon_plugin");
 const history = @import("history.zig");
+const network = @import("network_policy.zig");
 const market = @import("market.zig");
 const updater = @import("updater.zig");
 
@@ -336,6 +337,10 @@ fn navigate(tab: *Tab, url: []const u8) void {
         loadInternal(tab,storage,id,@ptrCast(html.ptr));
         return;
     }
+    if (!network.mayNavigate()) {
+        native.moon_shell_info("请求过滤不可用","浏览器未发送这次导航。请修复规则文件，或在插件菜单暂停请求过滤。");
+        return;
+    }
     if (tab.extension) {
         detach(tab);
         tab.extension = false;
@@ -373,6 +378,7 @@ fn navigate(tab: *Tab, url: []const u8) void {
     }
 }
 fn restore(tab: *Tab) void {
+    if (!network.mayNavigate()) return;
     if (tab.unsafe_history or !safeURL(slice(&tab.url))) {
         tab.phase = .crashed;
         return;
@@ -659,6 +665,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         } else native.moon_shell_error(engine_error);
         return false;
     }
+    network.select(plugins.networkSource());
     addTab(null, false);
     if (smoke != .off) {
         smoke_deadline = native.moon_clock() + 300000;
@@ -716,11 +723,18 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         },
         native.MOON_DIAGNOSTICS => diagnostics(),
         native.MOON_TICK => maintenance(),
-        native.MOON_PLUGIN_ENABLE => plugins.enable(index),
+        native.MOON_PLUGIN_ENABLE => {
+            plugins.enable(index);
+            network.select(plugins.networkSource());
+        },
         native.MOON_PLUGIN_GRANT => plugins.toggleGrant(index, .@"tabs.read"),
         native.MOON_PLUGIN_GRANT_LUA => plugins.toggleGrant(index, .@"lua.scripts.manage"),
         native.MOON_PLUGIN_GRANT_INSPECT => plugins.toggleGrant(index, .@"page.inspect"),
         native.MOON_PLUGIN_GRANT_HISTORY => plugins.toggleGrant(index, .@"history.manage"),
+        native.MOON_PLUGIN_GRANT_FILTER => {
+            plugins.toggleGrant(index, .@"network.filter");
+            network.select(plugins.networkSource());
+        },
         native.MOON_PLUGIN_SETTINGS => {
             var address: [256]u8 = undefined;
             if (plugins.settingsAddress(index,&address)) |url| addTab(url,false);

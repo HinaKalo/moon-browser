@@ -97,11 +97,13 @@ if ((zig version) -ne '0.17.1') { throw 'Zig 0.17.1 is required.' }
 $prefix = Join-Path $work 'zig-out'
 Invoke-Native 'zig' @('build','-Doptimize=ReleaseSafe','--prefix',$prefix)
 $exe = Join-Path $prefix 'bin\MoonBrowser.exe'
+$requestFilter = Join-Path $prefix 'bin\MoonRequestFilter.dll'
 $sample = Join-Path $prefix 'bin\MoonExamplePlugin.exe'
 $contractClient = Join-Path $prefix 'bin\MoonPluginContractClient.exe'
 $luaManager = Join-Path $prefix 'bin\MoonLuaManager.exe'
 $devTools = Join-Path $prefix 'bin\MoonDevTools.exe'
 $history = Join-Path $prefix 'bin\MoonHistory.exe'
+$blocker = Join-Path $prefix 'bin\MoonBlocker.exe'
 $docs = @(
     $EngineLock
     (Join-Path $repo 'README.md')
@@ -113,18 +115,21 @@ $docs = @(
     (Join-Path $repo 'examples\devtools\plugin.json')
     (Join-Path $repo 'examples\history\plugin.json')
     (Join-Path $repo 'examples\history\history.html')
+    (Join-Path $repo 'examples\blocker\plugin.json')
+    (Join-Path $repo 'examples\blocker\filter.html')
+    (Join-Path $repo 'examples\blocker\strict.rules')
 )
 if ($Action -eq 'release') {
     $docs += @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'distribution') -File | Sort-Object Name | Select-Object -ExpandProperty FullName)
 }
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
-$inputHashes = @(($docs + $exe + $sample + $contractClient + $luaManager + $devTools + $history + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $luaManager + $devTools + $history + $blocker + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
 if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $null = [IO.Directory]::CreateDirectory($stage)
-    Copy-Item -LiteralPath $exe -Destination $stage
+    Copy-Item -LiteralPath $exe,$requestFilter -Destination $stage
     Copy-Item -LiteralPath $runtime -Destination (Join-Path $stage 'engine') -Recurse
     # Playwright.exe is only needed by upstream's test harness.
     $playwright = Join-Path $stage 'engine\Playwright.exe'
@@ -147,6 +152,9 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     $historyPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\history')).FullName
     Copy-Item -LiteralPath $history -Destination $historyPackage
     Copy-Item -LiteralPath (Join-Path $repo 'examples\history\plugin.json'),(Join-Path $repo 'examples\history\history.html') -Destination $historyPackage
+    $blockerPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\blocker')).FullName
+    Copy-Item -LiteralPath $blocker -Destination $blockerPackage
+    Copy-Item -LiteralPath (Join-Path $repo 'examples\blocker\plugin.json'),(Join-Path $repo 'examples\blocker\filter.html'),(Join-Path $repo 'examples\blocker\strict.rules') -Destination $blockerPackage
     $fixtures = [IO.Directory]::CreateDirectory((Join-Path $stage 'tests')).FullName
     Copy-Item -LiteralPath $contractClient -Destination $fixtures
     $null = [IO.Directory]::CreateDirectory((Split-Path -Parent $artifact))

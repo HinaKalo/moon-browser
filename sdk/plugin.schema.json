@@ -11,10 +11,11 @@
     "apiVersion": { "const": 2 },
     "runtime": { "const": "native" },
     "settingsPage": { "type": "string", "maxLength": 95, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.html$" },
+    "networkRules": { "type": "string", "maxLength": 95, "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.rules$" },
     "entry": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.[eE][xX][eE]$" },
     "permissions": {
       "type": "array",
-      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage"] }
+      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage", "network.filter"] }
     },
     "events": {
       "type": "array",

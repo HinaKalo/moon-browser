@@ -2,6 +2,7 @@
 #include <WebKit/WKContext.h>
 #include <WebKit/WKContextConfigurationRef.h>
 #include <WebKit/WKContextDownloadClient.h>
+#include <WebKit/WKContextInjectedBundleClient.h>
 #include <WebKit/WKData.h>
 #include <WebKit/WKDownloadRef.h>
 #include <WebKit/WKErrorRef.h>
@@ -22,6 +23,7 @@
 #include <WebKit/WKString.h>
 #include <WebKit/WKType.h>
 #include <WebKit/WKUserContentControllerRef.h>
+#include <WebKit/WKUserScriptRef.h>
 #include <WebKit/WKURL.h>
 #include <WebKit/WKURLRequest.h>
 #include <WebKit/WKURLResponse.h>
@@ -42,6 +44,8 @@
     X(WKContextConfigurationCreate) X(WKContextConfigurationSetPrewarmsProcessesAutomatically) \
     X(WKContextConfigurationSetUsesWebProcessCache) X(WKContextConfigurationSetAlwaysKeepAndReuseSwappedProcesses) \
     X(WKContextCreateWithConfiguration) X(WKContextSetCacheModel) X(WKContextSetDownloadClient) \
+    X(WKContextConfigurationSetInjectedBundlePath) X(WKContextSetInjectedBundleClient) X(WKContextPostMessageToInjectedBundle) \
+    X(WKRetain) \
     X(WKWebsiteDataStoreConfigurationCreate) X(WKWebsiteDataStoreConfigurationSetGeneralStorageDirectory) \
     X(WKWebsiteDataStoreConfigurationSetNetworkCacheDirectory) X(WKWebsiteDataStoreConfigurationSetCookieStorageFile) \
     X(WKWebsiteDataStoreConfigurationSetLocalStorageDirectory) X(WKWebsiteDataStoreConfigurationSetIndexedDBDatabaseDirectory) \
@@ -56,6 +60,7 @@
     X(WKPageLoadHTMLString) X(WKStringGetTypeID) X(WKFrameInfoGetIsMainFrame) \
     X(WKWebsiteDataStoreCreateNonPersistentDataStore) X(WKPageConfigurationSetUserContentController) \
     X(WKUserContentControllerCreate) X(WKUserContentControllerAddScriptMessageHandler) \
+    X(WKUserContentControllerAddUserScript) X(WKUserContentControllerRemoveAllUserScripts) X(WKUserScriptCreateWithSource) \
     X(WKUserContentControllerRemoveAllUserMessageHandlers) X(WKScriptMessageGetBody) \
     X(WKScriptMessageGetFrameInfo) X(WKCompletionListenerComplete) \
     X(WKPreferencesSetDeveloperExtrasEnabled) \
@@ -77,11 +82,14 @@ static struct {
 static HMODULE module;
 static WKContextRef context;
 static WKWebsiteDataStoreRef store;
+static WKUserContentControllerRef normal_page_content;
 static DLL_DIRECTORY_COOKIE dll_directory;
 static wchar_t engine_dir[2048];
 static char engine_error[256];
 static char test_download_path[4096];
 static int test_download_result;
+static bool filter_bundle_available;
+static WKStringRef current_request_policy;
 
 struct MoonView {
     WKViewRef view;
@@ -272,6 +280,31 @@ static void set_profile_path(WKWebsiteDataStoreConfigurationRef configuration,
     setter(configuration,value);
     release(value);
 }
+static WKTypeRef initial_request_policy(WKContextRef unused,const void *info) {
+    return current_request_policy ? wk.WKRetain(current_request_policy) : NULL;
+}
+bool moon_engine_set_request_policy(const char *rules,const char *document_script) {
+    if (!context || !filter_bundle_available || !normal_page_content) return false;
+    WKStringRef policy = wk.WKStringCreateWithUTF8CString(rules);
+    WKStringRef message = wk.WKStringCreateWithUTF8CString("MoonRequestPolicy");
+    WKStringRef source = document_script && *document_script ? wk.WKStringCreateWithUTF8CString(document_script) : NULL;
+    WKUserScriptRef script = source ? wk.WKUserScriptCreateWithSource(source,kWKInjectAtDocumentStart,true) : NULL;
+    release(source);
+    if (!policy || !message || (document_script && *document_script && !script)) {
+        release(policy);
+        release(message);
+        release(script);
+        return false;
+    }
+    release(current_request_policy);
+    current_request_policy = policy;
+    wk.WKContextPostMessageToInjectedBundle(context,message,policy);
+    release(message);
+    wk.WKUserContentControllerRemoveAllUserScripts(normal_page_content);
+    if (script) wk.WKUserContentControllerAddUserScript(normal_page_content,script);
+    release(script);
+    return true;
+}
 const char *moon_engine_init(void) {
     wchar_t app[2048], library[2048];
     if (!moon_utf16(moon_app_dir(), app, ARRAYSIZE(app)) ||
@@ -295,10 +328,32 @@ const char *moon_engine_init(void) {
     wk.WKContextConfigurationSetPrewarmsProcessesAutomatically(ctx,false);
     wk.WKContextConfigurationSetUsesWebProcessCache(ctx,false);
     wk.WKContextConfigurationSetAlwaysKeepAndReuseSwappedProcesses(ctx,false);
+    wchar_t bundle[2048];
+    char bundle_utf8[8192];
+    if (moon_path(bundle,ARRAYSIZE(bundle),app,L"MoonRequestFilter.dll") &&
+        moon_utf8(bundle,bundle_utf8,sizeof(bundle_utf8))) {
+        DWORD attrs=GetFileAttributesW(bundle);
+        if (attrs!=INVALID_FILE_ATTRIBUTES && !(attrs & (FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))) {
+            WKStringRef path=wk.WKStringCreateWithUTF8CString(bundle_utf8);
+            if (path) {
+                wk.WKContextConfigurationSetInjectedBundlePath(ctx,path);
+                release(path);
+                filter_bundle_available=true;
+            }
+        }
+    }
     context = wk.WKContextCreateWithConfiguration(ctx);
     release(ctx);
     if (!context) return "Could not create WebKit context.";
+    if (filter_bundle_available) {
+        const WKContextInjectedBundleClientV1 client = {
+            .base={1,NULL},.getInjectedBundleInitializationUserData=initial_request_policy,
+        };
+        wk.WKContextSetInjectedBundleClient(context,&client.base);
+    }
     wk.WKContextSetCacheModel(context,kWKCacheModelDocumentBrowser);
+    normal_page_content = wk.WKUserContentControllerCreate();
+    if (!normal_page_content) return "Could not create content controller.";
 
     WKWebsiteDataStoreConfigurationRef config = wk.WKWebsiteDataStoreConfigurationCreate();
     if (!config) return "Could not create profile configuration.";
@@ -319,7 +374,12 @@ const char *moon_engine_init(void) {
     return NULL;
 }
 void moon_engine_shutdown(void) {
-    if (context) wk.WKContextSetDownloadClient(context,NULL);
+    if (context) {
+        wk.WKContextSetDownloadClient(context,NULL);
+        if (filter_bundle_available) wk.WKContextSetInjectedBundleClient(context,NULL);
+    }
+    release(current_request_policy);
+    current_request_policy = NULL;
     if (store) release(store);
     if (context) release(context);
     store = NULL; context = NULL;
@@ -388,6 +448,7 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
         }
     } else {
         wk.WKPageConfigurationSetWebsiteDataStore(config,store);
+        wk.WKPageConfigurationSetUserContentController(config,normal_page_content);
     }
     view->view_preferences = wk.WKPreferencesCreate();
     if (!view->view_preferences) goto fail;

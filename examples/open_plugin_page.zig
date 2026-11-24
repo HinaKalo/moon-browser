@@ -12,6 +12,6 @@ pub fn main() !void {
     const response = try client.call(.@"ui.openPage",.{});
     const result = response.get("result") orelse std.json.Value.null;
     try client.reply(id,sdk.CommandResult{
-        .message = if (result == .bool and result.bool) null else "无法打开历史记录。",
+        .message = if (result == .bool and result.bool) null else "无法打开插件页面。",
     });
 }

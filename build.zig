@@ -23,6 +23,14 @@ pub fn build(b: *std.Build) void {
     for ([_][]const u8{ "user32", "gdi32", "d2d1", "dwrite", "gdiplus", "shlwapi", "shell32", "ole32", "comdlg32", "advapi32", "psapi", "imm32", "comctl32", "winhttp", "bcrypt" }) |library|
         app.root_module.linkSystemLibrary(library, .{});
     b.installArtifact(app);
+    const request_filter = b.addLibrary(.{
+        .name = "MoonRequestFilter",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true }),
+    });
+    request_filter.root_module.addIncludePath(b.path("third_party"));
+    request_filter.root_module.addCSourceFile(.{ .file = b.path("src/request_filter.c"), .flags = &.{"-std=c17"} });
+    b.installArtifact(request_filter);
 
     const example = b.addExecutable(.{
         .name = "MoonExamplePlugin",
@@ -43,12 +51,14 @@ pub fn build(b: *std.Build) void {
     });
     devtools.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(devtools);
-    const history = b.addExecutable(.{
-        .name = "MoonHistory",
-        .root_module = b.createModule(.{ .root_source_file=b.path("examples/history/main.zig"), .target=target, .optimize=optimize, .link_libc=true }),
-    });
-    history.root_module.addImport("moon_plugin",plugin_sdk);
-    b.installArtifact(history);
+    for ([_][]const u8{ "MoonHistory", "MoonBlocker" }) |name| {
+        const opener = b.addExecutable(.{
+            .name = name,
+            .root_module = b.createModule(.{ .root_source_file=b.path("examples/open_plugin_page.zig"), .target=target, .optimize=optimize, .link_libc=true }),
+        });
+        opener.root_module.addImport("moon_plugin",plugin_sdk);
+        b.installArtifact(opener);
+    }
     const fixture = b.addExecutable(.{
         .name = "MoonPluginContractClient",
         .root_module = b.createModule(.{ .root_source_file = b.path("tests/plugin_contract_client.zig"), .target = target, .optimize = optimize, .link_libc = true }),

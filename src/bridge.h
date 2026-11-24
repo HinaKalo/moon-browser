@@ -10,7 +10,7 @@ enum MoonCommand {
     MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
     MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_TOGGLE_THEME, MOON_OPEN_PLUGINS, MOON_UPDATES,
     MOON_SCRIPTS_INSTALL, MOON_SCRIPTS_TOGGLE, MOON_SCRIPTS_REMOVE, MOON_PLUGIN_GRANT_LUA, MOON_PLUGIN_SETTINGS, MOON_PLUGIN_GRANT_INSPECT, MOON_MARKET,
-    MOON_PLUGIN_GRANT_HISTORY
+    MOON_PLUGIN_GRANT_HISTORY, MOON_PLUGIN_GRANT_FILTER
 };
 enum MoonEngineEvent {
     MOON_STARTED = 1, MOON_COMMITTED, MOON_FINISHED, MOON_FAILED, MOON_CHANGED,
@@ -59,6 +59,7 @@ bool moon_process_exited(void *watch);
 void moon_process_unwatch(void *watch);
 
 const char *moon_engine_init(void);
+bool moon_engine_set_request_policy(const char *rules, const char *document_script);
 void moon_engine_shutdown(void);
 MoonView *moon_engine_open(uint64_t token);
 void moon_engine_close(MoonView *view);

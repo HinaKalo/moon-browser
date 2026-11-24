@@ -2,6 +2,7 @@ const std = @import("std");
 const native = @import("native");
 const sdk = @import("moon_plugin");
 const api = @import("plugin_host_api.zig");
+const network = @import("network_policy.zig");
 const allocator = std.heap.page_allocator;
 
 pub const Snapshot = api.Snapshot;
@@ -17,7 +18,7 @@ const LegacyManifest = struct {
     permissions: []const []const u8 = &.{},
     events: []const []const u8 = &.{},
 };
-const Grant = struct { id: []const u8, enabled: bool, tabs_read: bool, lua_scripts_manage: bool = false, page_inspect: bool = false, history_manage: bool = false };
+const Grant = struct { id: []const u8, enabled: bool, tabs_read: bool, lua_scripts_manage: bool = false, page_inspect: bool = false, history_manage: bool = false, network_filter: bool = false };
 const Outcome = enum { ok, failed, timed_out, crashed };
 const Trigger = enum { command, changed, timeout_test, crash_test };
 const CallState = enum(u8) { idle, queued, serving, ready };
@@ -54,6 +55,7 @@ const Plugin = struct {
     action_count: usize,
     executable: [4096:0]u8,
     settings_page: [96:0]u8 = @splat(0),
+    network_rules: [96:0]u8 = @splat(0),
     protocol: Protocol,
     requests: Permissions,
     default_grants: Permissions = .empty,
@@ -93,13 +95,16 @@ fn contains(items: []const []const u8, value: []const u8) bool {
     return false;
 }
 
-fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []const u8, entry: []const u8, settings_page: ?[]const u8, commands: []const sdk.Command, requests: Permissions, subscribes: bool, protocol: Protocol, bundled: bool) void {
+fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []const u8, entry: []const u8, settings_page: ?[]const u8, network_rules: ?[]const u8, commands: []const sdk.Command, requests: Permissions, subscribes: bool, protocol: Protocol, bundled: bool) void {
     if (!validComponent(id) or !validComponent(entry) or !std.ascii.endsWithIgnoreCase(entry, ".exe") or
         name.len == 0 or commands.len == 0 or commands.len > sdk.command_limit) return;
     if (protocol == .v2 and std.mem.indexOfScalar(u8, id, '.') == null) return;
     if (settings_page) |page| {
         if (!validComponent(page) or !std.mem.endsWith(u8,page,".html")) return;
     }
+    if (network_rules) |file| {
+        if (!validComponent(file) or !std.mem.endsWith(u8,file,".rules") or !requests.contains(.@"network.filter")) return;
+    } else if (requests.contains(.@"network.filter")) return;
     for (all[0..len]) |*existing| if (std.ascii.eqlIgnoreCase(std.mem.sliceTo(&existing.id, 0), id)) return;
     var path: [4096]u8 = undefined;
     const executable = std.fmt.bufPrint(&path, "{s}\\{s}\\{s}", .{ directory, sub, entry }) catch return;
@@ -110,6 +115,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     };
     if (!copy(&plugin.id, id) or !copy(&plugin.label, name) or !copy(&plugin.executable, executable)) return;
     if (!copy(&plugin.settings_page,settings_page orelse "")) return;
+    if (!copy(&plugin.network_rules,network_rules orelse "")) return;
     for (commands, 0..) |item, index| {
         if (!validComponent(item.id) or item.label.len == 0) return;
         for (commands[0..index]) |prior| if (std.mem.eql(u8, prior.id, item.id)) return;
@@ -128,6 +134,8 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
                 plugin.grants = plugin.default_grants;
             }
         }
+        if (std.mem.eql(u8,id,"moon.blocker") and requests.contains(.@"network.filter"))
+            plugin.default_grants.insert(.@"network.filter");
     }
     len += 1;
 }
@@ -154,7 +162,7 @@ fn discover(root: []const u8, bundled: bool) void {
             for (manifest.permissions) |permission| requested.insert(permission);
             const subscribes = std.mem.indexOfScalar(sdk.Event, manifest.events, .@"tabs.changed") != null;
             if (subscribes and !requested.contains(.@"tabs.read")) continue;
-            addManifest(directory, sub, manifest.id, manifest.name, manifest.entry, manifest.settingsPage, manifest.contributes.commands, requested, subscribes, .v2, bundled);
+            addManifest(directory, sub, manifest.id, manifest.name, manifest.entry, manifest.settingsPage, manifest.networkRules, manifest.contributes.commands, requested, subscribes, .v2, bundled);
         } else |_| {
             const parsed = std.json.parseFromSlice(LegacyManifest, allocator, bytes, .{}) catch continue;
             defer parsed.deinit();
@@ -162,7 +170,7 @@ fn discover(root: []const u8, bundled: bool) void {
             if (manifest.api_version != 1) continue;
             var requested = Permissions.empty;
             if (contains(manifest.permissions, "tabs.read")) requested.insert(.@"tabs.read");
-            addManifest(directory, sub, manifest.id, manifest.name, manifest.executable, null, &.{.{ .id = "run", .label = manifest.command }},
+            addManifest(directory, sub, manifest.id, manifest.name, manifest.executable, null, null, &.{.{ .id = "run", .label = manifest.command }},
                 requested, contains(manifest.events, "tabs.changed"), .legacy, bundled);
         }
     }
@@ -184,6 +192,7 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.lua_scripts_manage and plugin.requests.contains(.@"lua.scripts.manage")) plugin.grants.insert(.@"lua.scripts.manage");
         if (grant.enabled and grant.page_inspect and plugin.requests.contains(.@"page.inspect")) plugin.grants.insert(.@"page.inspect");
         if (grant.enabled and grant.history_manage and plugin.requests.contains(.@"history.manage")) plugin.grants.insert(.@"history.manage");
+        if (grant.enabled and grant.network_filter and plugin.requests.contains(.@"network.filter")) plugin.grants.insert(.@"network.filter");
         break;
     };
 }
@@ -197,6 +206,7 @@ fn persist() bool {
         .lua_scripts_manage = plugin.grants.contains(.@"lua.scripts.manage"),
         .page_inspect = plugin.grants.contains(.@"page.inspect"),
         .history_manage = plugin.grants.contains(.@"history.manage"),
+        .network_filter = plugin.grants.contains(.@"network.filter"),
     };
     const bytes = std.json.Stringify.valueAlloc(allocator, items[0..len], .{}) catch return false;
     defer allocator.free(bytes);
@@ -222,12 +232,18 @@ fn toggle(index: usize, permission: ?sdk.Permission) void {
                 .@"lua.scripts.manage" => "此插件可导入、停用或移除 Lua 用户脚本。新脚本首次启用时，浏览器会单独确认网站范围。",
                 .@"page.inspect" => "此插件可为触发命令时的网页打开开发者工具。控制台和站点存储可在工具中查看。",
                 .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
+                .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",
             };
             if (!native.moon_shell_confirm("授予插件权限？", disclosure)) return;
             plugin.grants.insert(scope);
         }
     } else {
-        if (!enabled and !native.moon_shell_confirm("启用本地插件？", &plugin.executable)) return;
+        if (!enabled) {
+            const disclosure = if (plugin.default_grants.contains(.@"network.filter"))
+                "启用后将立即拦截匹配规则的网页请求。你可以在插件面板为单个站点暂停过滤。"
+            else &plugin.executable;
+            if (!native.moon_shell_confirm("启用本地插件？",disclosure)) return;
+        }
         plugin.enabled = !plugin.enabled;
         plugin.grants = if (plugin.enabled) plugin.default_grants else .empty;
     }
@@ -271,7 +287,9 @@ pub fn flags(index: usize) c_uint {
         (@as(c_uint, @intFromBool(plugin.grants.contains(.@"page.inspect"))) << 4) |
         (@as(c_uint, @intFromBool(plugin.requests.contains(.@"page.inspect"))) << 5) |
         (@as(c_uint, @intFromBool(plugin.grants.contains(.@"history.manage"))) << 6) |
-        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"history.manage"))) << 7);
+        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"history.manage"))) << 7) |
+        (@as(c_uint, @intFromBool(plugin.grants.contains(.@"network.filter"))) << 8) |
+        (@as(c_uint, @intFromBool(plugin.requests.contains(.@"network.filter"))) << 9);
 }
 
 pub fn hasSettings(index: usize) bool {
@@ -296,6 +314,14 @@ pub fn historyEnabled() bool {
         if (plugin.default_grants.contains(.@"history.manage")) return plugin.enabled and plugin.grants.contains(.@"history.manage");
     }
     return false;
+}
+
+pub fn networkSource() ?network.Source {
+    for (all[0..len]) |*plugin| {
+        if (plugin.enabled and plugin.grants.contains(.@"network.filter") and plugin.network_rules[0] != 0)
+            return .{ .id=std.mem.sliceTo(&plugin.id,0),.executable=std.mem.sliceTo(&plugin.executable,0),.filename=std.mem.sliceTo(&plugin.network_rules,0) };
+    }
+    return null;
 }
 
 pub fn addressForId(id: []const u8, buffer: []u8) ?[:0]u8 {

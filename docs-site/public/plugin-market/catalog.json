@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.blocker",
+      "name": "严格去广告",
+      "description": "在 WebKit 网页资源加载时匹配广告和跟踪规则，支持站点例外。",
+      "permission": "拦截网页请求",
+      "url": "https://docs.browser.moonl.cloud/blocker.html"
+    },
+    {
       "id": "moon.history",
       "name": "历史记录",
       "description": "搜索、打开和移除最近的浏览记录，支持按日期浏览。",
