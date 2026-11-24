@@ -2096,6 +2096,8 @@ def run_win32(exe, base, root):
                               "Reader did not invalidate the old article",15)
             if not result.get("passed"):
                 raise RuntimeError(f"Reader invalidation check: {result}")
+            # The reader fixture is finished. Free its plugin slot for the task fixture after restart.
+            (profile / "plugins" / "reader-contract" / "plugin.json").unlink()
             print("reader_system_plugin=ok shortcut=ok live_dom=ok structure=ok appearance=ok return_to_tab=ok owner_isolation=ok stale_snapshot=ok",flush=True)
 
         if blocker.exists():
