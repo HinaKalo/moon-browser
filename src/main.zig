@@ -17,7 +17,7 @@ const market = @import("market.zig");
 const updater = @import("updater.zig");
 
 const max_tabs = 128;
-const Phase = enum { blank, live, dormant, crashed, restoring, failed };
+const Phase = sdk.TaskTabPhase;
 const Opening = enum { none, navigate, restore };
 const Tab = struct {
     id: u64,
@@ -53,6 +53,8 @@ var boot: u64 = 0;
 var settings: policy.Settings = .{};
 var pressure = false;
 var commit: u64 = 0;
+var process_samples: [1024]native.MoonSample = undefined;
+var process_count: usize = 0;
 var sampled: u64 = 0;
 var last_before: u64 = 0;
 var last_after: u64 = 0;
@@ -531,10 +533,18 @@ fn sync(tab: *Tab) void {
         }
     }
 }
+fn tabProtection(tab: *const Tab) ?sdk.TaskProtection {
+    if (count != 0 and site_data.protected(tab.id,tabs[active].id)) return .siteInspection;
+    if (tab.download_count != 0) return .download;
+    if (tab.activity) return .media;
+    if (tab.unsafe_history) return .nonGet;
+    if (tab.dirty) return .input;
+    if (tab.loading or !tab.loaded) return .loading;
+    if (!safeURL(slice(&tab.url))) return .internal;
+    return null;
+}
 fn protected(tab: *const Tab) bool {
-    if (count != 0 and site_data.protected(tab.id,tabs[active].id)) return true;
-    return tab.loading or !tab.loaded or tab.dirty or tab.unsafe_history or tab.download_count != 0 or
-        tab.activity or !safeURL(slice(&tab.url));
+    return tabProtection(tab) != null;
 }
 export fn moon_userscript_reload_active(id: [*c]const u8) c_int {
     if (stopped or count == 0) return native.MOON_RELOAD_NO_MATCH;
@@ -554,11 +564,10 @@ export fn moon_devtools_open(panel: c_int, tab_id: u64) bool {
     return if (tab.view) |view| native.moon_engine_inspect(view,panel) else false;
 }
 fn sampleMemory() u64 {
-    var samples: [1024]native.MoonSample = undefined;
-    var present: [samples.len]policy.Sample = undefined;
-    const used = native.moon_memory_samples(&samples[0], samples.len);
-    for (samples[0..used], 0..) |sample, index| present[index] = .{ .pid = sample.pid, .bytes = sample.bytes };
-    return policy.totalCommit(present[0..used]);
+    process_count = native.moon_memory_samples(&process_samples[0],process_samples.len);
+    var present: [process_samples.len]policy.Sample = undefined;
+    for (process_samples[0..process_count],0..) |sample,index| present[index] = .{ .pid=sample.pid,.bytes=sample.bytes };
+    return policy.totalCommit(present[0..process_count]);
 }
 fn stateCounts() struct { live: usize = 0, sleep: usize = 0, protected: usize = 0 } {
     var result: @typeInfo(@TypeOf(stateCounts)).@"fn".return_type.? = .{};
@@ -595,20 +604,21 @@ fn manage(now: u64) void {
         candidates[index] = .{ .live = live, .protected = protected(tab), .last_used = tab.last_used, .pid = if (live) native.moon_engine_pid(tab.view.?) else 0 };
     }
     if (policy.choose(candidates[0..count], active, now, pressure, settings)) |index| {
-        const tab = &tabs[index];
-        if (settle_at == 0) last_before = commit;
-        settle_at = now + 500;
-        storeSession(tab);
-        const pid = candidates[index].pid;
-        tab.phase = .dormant;
-        detach(tab);
-        evictions += 1;
-        next_evict = now + (if (pressure) @as(u64, 350) else 150);
-        if (smoke != .off) log("evict tab={d} pid={d} pressure={d} commit={d}", .{
-            tab.id, pid, @intFromBool(pressure), commit,
-        });
-        native.moon_shell_refresh();
+        discardTab(&tabs[index],candidates[index].pid,now);
     }
+}
+fn discardTab(tab: *Tab, pid: u32, now: u64) void {
+    if (settle_at == 0) last_before = commit;
+    settle_at = now + 500;
+    storeSession(tab);
+    tab.phase = .dormant;
+    detach(tab);
+    evictions += 1;
+    next_evict = now + (if (pressure) @as(u64,350) else 150);
+    if (smoke != .off) log("evict tab={d} pid={d} pressure={d} commit={d}", .{
+        tab.id,pid,@intFromBool(pressure),commit,
+    });
+    native.moon_shell_refresh();
 }
 fn maintenance() void {
     const now = native.moon_clock();
@@ -655,24 +665,59 @@ fn maintenance() void {
     plugins.tick(tabSnapshot(), smoke != .off);
     if (smoke != .off) smokeTick(now);
 }
-fn diagnostics() void {
-    const current = sampleMemory();
+export fn moon_tasks_overview(output: *native.MoonTaskOverview) void {
     const counts = stateCounts();
-    var buffer: [8192]u8 = undefined;
-    const basic = std.fmt.bufPrint(&buffer, "Private commit: {d} MiB\r\nTabs: {d} open, {d} live, {d} sleeping, {d} protected\r\n" ++
-        "Pressure: {s}. Threshold {d} MiB, target {d} MiB.\r\nWarm background limit: {d}, idle time: {d}s\r\n" ++
-        "Evictions: {d}. Last sweep before / after: {d} / {d} MiB. Peak: {d} MiB.\r\nPending exits: {d}\r\n\r\n", .{ current / policy.mib, count, counts.live, counts.sleep, counts.protected, if (pressure) "active" else "normal", settings.high_bytes / policy.mib, settings.target_bytes / policy.mib, settings.warm_limit, settings.idle_ms / 1000, evictions, last_before / policy.mib, last_after / policy.mib, peak_commit / policy.mib, retiring_count }) catch return;
-    var length = basic.len;
-    for (tabs[0..count], 0..) |*tab, index| {
-        const pid = if (tab.view) |view| native.moon_engine_pid(view) else 0;
-        const label = slice(moon_tab_label(index));
-        const row = std.fmt.bufPrint(buffer[length .. buffer.len - 1], "{d}. {s} {s} · PID {d} · {s}\r\n", .{
-            index + 1, if (index == active or (tab.view != null and protected(tab))) "protected" else "eligible", @tagName(tab.phase), pid, label,
-        }) catch break;
-        length += row.len;
+    output.* = .{
+        .private_bytes=commit,.peak_bytes=peak_commit,.high_bytes=settings.high_bytes,.target_bytes=settings.target_bytes,
+        .before_bytes=last_before,.after_bytes=last_after,.pressure=pressure,.has_sweep=evictions!=0,.sweep_pending=settle_at!=0,
+        .open=@intCast(count),.live=@intCast(counts.live),.dormant=@intCast(counts.sleep),.protected_tabs=@intCast(counts.protected),
+        .processes=@intCast(process_count),.retiring=@intCast(retiring_count),.evictions=@intCast(@min(evictions,std.math.maxInt(u32))),
+        .warm_limit=@intCast(settings.warm_limit),.idle_seconds=@intCast(settings.idle_ms/1000),
+    };
+}
+export fn moon_tasks_tabs(offset: u32, rows: [*]native.MoonTaskTab, cap: usize) usize {
+    const width = @min(cap,count -| offset);
+    for (rows[0..width],0..) |*row,i| {
+        const index = offset+i;
+        const tab = &tabs[index];
+        const protection: ?sdk.TaskProtection = if (index==active) .current else if (tab.phase==.live and tab.view!=null) tabProtection(tab) else null;
+        row.* = .{
+            .id=tab.id,.phase=@intFromEnum(tab.phase),.pid=if (tab.view) |view| native.moon_engine_pid(view) else 0,
+            .protection=if (protection) |reason| @intCast(@intFromEnum(reason)) else -1,.title=@splat(0),
+        };
+        const title = slice(&tab.title);
+        var end = @min(title.len,row.title.len-1);
+        while (end != 0 and end < title.len and title[end] & 0xc0 == 0x80) end -= 1;
+        if (end != 0 and std.unicode.utf8ValidateSlice(title[0..end])) @memcpy(row.title[0..end],title[0..end]);
     }
-    buffer[length] = 0;
-    native.moon_shell_info("Memory & diagnostics", buffer[0..length :0].ptr);
+    return width;
+}
+export fn moon_tasks_processes(offset: u32, rows: [*]native.MoonTaskProcess, cap: usize) usize {
+    const width = @min(cap,process_count -| offset);
+    var pids: [max_tabs]u32 = undefined;
+    for (tabs[0..count],0..) |tab,i| pids[i] = if (tab.view) |view| native.moon_engine_pid(view) else 0;
+    for (rows[0..width],0..) |*row,i| {
+        const sample = process_samples[offset+i];
+        row.* = .{
+            .private_bytes=sample.bytes,.pid=sample.pid,.browser=sample.pid==native.moon_current_pid(),
+            .tabs=@intCast(std.mem.countScalar(u32,pids[0..count],sample.pid)),
+        };
+    }
+    return width;
+}
+export fn moon_tasks_action(source: u64, id: u64, discard: bool) c_uint {
+    if (stopped or count==0 or tabs[active].id!=source) return @intFromEnum(sdk.TaskAction.unavailable);
+    const index = tabIndex(id) orelse return @intFromEnum(sdk.TaskAction.notFound);
+    if (!discard) {
+        chooseTab(index,true);
+        return @intFromEnum(sdk.TaskAction.done);
+    }
+    const tab = &tabs[index];
+    if (index==active) return @intFromEnum(sdk.TaskAction.protected);
+    if (tab.phase!=.live or tab.view==null) return @intFromEnum(sdk.TaskAction.unavailable);
+    if (protected(tab) or native.moon_engine_media(tab.view.?)) return @intFromEnum(sdk.TaskAction.protected);
+    discardTab(tab,native.moon_engine_pid(tab.view.?),native.moon_clock());
+    return @intFromEnum(sdk.TaskAction.done);
 }
 
 export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
@@ -797,7 +842,8 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_INPUT => if (tab.view != null) {
             tab.dirty = true;
         },
-        native.MOON_DIAGNOSTICS => diagnostics(),
+        native.MOON_DIAGNOSTICS => if (!plugins.shortcut(.@"Ctrl+Shift+M",tabSnapshot()))
+            native.moon_shell_toast("内存诊断","请在插件菜单启用浏览器任务管理器。"),
         native.MOON_TICK => maintenance(),
         native.MOON_PLUGIN_ENABLE => {
             plugins.enable(index);
@@ -1016,6 +1062,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"page.reading" => "允许打开页内查找和调整缩放",
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
         .@"privacy.clear" => "允许在确认后清除浏览数据",
+        .@"taskManager.manage" => "允许查看和管理标签与进程",
     };
 }
 export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {

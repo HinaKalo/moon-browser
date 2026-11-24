@@ -22,6 +22,7 @@ export default defineConfig({
         { text: '网页开发者工具', link: '/devtools' },
         { text: '站点数据', link: '/site-data' },
         { text: '清除浏览数据', link: '/privacy' },
+        { text: '浏览器任务管理器', link: '/task-manager' },
         { text: '查找与缩放', link: '/reading' },
         { text: '最近关闭的标签', link: '/recent-tabs' },
         { text: '浏览历史', link: '/history' },

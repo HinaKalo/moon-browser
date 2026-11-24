@@ -40,6 +40,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
+        .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => .@"taskManager.manage",
     };
 }
 
@@ -88,6 +89,50 @@ pub fn tabId(id: u64, buffer: *[24]u8) []const u8 {
     return std.fmt.bufPrint(buffer, "t-{d}", .{id}) catch unreachable;
 }
 
+fn taskSnapshot(allocator: std.mem.Allocator, id: []const u8, query: sdk.TaskQuery) ![]u8 {
+    const page_size = 24;
+    var info: native.MoonTaskOverview = undefined;
+    native.moon_tasks_overview(&info);
+    var result: sdk.TaskSnapshot = .{
+        .overview = .{
+            .privateBytes=info.private_bytes,.peakBytes=info.peak_bytes,.highBytes=info.high_bytes,
+            .targetBytes=info.target_bytes,.pressure=info.pressure,.warmLimit=info.warm_limit,.idleSeconds=info.idle_seconds,
+            .open=info.open,.live=info.live,.dormant=info.dormant,.protected=info.protected_tabs,
+            .processes=info.processes,.evictions=info.evictions,.retiring=info.retiring,
+            .beforeBytes=if (info.has_sweep) info.before_bytes else null,
+            .afterBytes=if (info.has_sweep and !info.sweep_pending) info.after_bytes else null,
+        },
+        .next = null,
+    };
+    switch (query.view) {
+        .tabs => {
+            var rows: [page_size]native.MoonTaskTab = undefined;
+            const len = native.moon_tasks_tabs(query.offset,&rows,rows.len);
+            var ids: [page_size][24]u8 = undefined;
+            var items: [page_size]sdk.TaskTab = undefined;
+            for (rows[0..len],items[0..len],ids[0..len]) |*row,*item,*tab_id| {
+                item.* = .{
+                    .id=tabId(row.id,tab_id),.title=std.mem.sliceTo(&row.title,0),.phase=@enumFromInt(row.phase),
+                    .pid=if (row.pid!=0) row.pid else null,.protection=std.enums.fromInt(sdk.TaskProtection,row.protection),
+                };
+            }
+            result.tabs = items[0..len];
+            result.next = if (info.open -| query.offset > len) query.offset+@as(u32,@intCast(len)) else null;
+            return sdk.result(allocator,id,result);
+        },
+        .processes => {
+            var rows: [page_size]native.MoonTaskProcess = undefined;
+            const len = native.moon_tasks_processes(query.offset,&rows,rows.len);
+            var items: [page_size]sdk.TaskProcess = undefined;
+            for (rows[0..len],items[0..len]) |row,*item|
+                item.* = .{ .pid=row.pid,.privateBytes=row.private_bytes,.tabs=row.tabs,.browser=row.browser };
+            result.processes = items[0..len];
+            result.next = if (info.processes -| query.offset > len) query.offset+@as(u32,@intCast(len)) else null;
+            return sdk.result(allocator,id,result);
+        },
+    }
+}
+
 pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) ![]u8 {
     var arena = std.heap.ArenaAllocator.init(output);
     defer arena.deinit();
@@ -106,6 +151,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"siteData.status", .@"siteData.list", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
         .@"privacy.clear", .@"privacy.status" => {},
+        .@"taskManager.snapshot", .@"taskManager.focus", .@"taskManager.discard" => {},
         else => return sdk.failure(output,id,.MethodNotFound),
     };
     if (!context.consent.valid(context.consent.context)) return sdk.failure(output, id, .Cancelled);
@@ -349,6 +395,18 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             return sdk.result(output,id,privacy.start(selection,context.target_tab_id,owner,context.consent));
         },
         .@"privacy.status" => sdk.result(output,id,privacy.status(context.plugin_id)),
+        .@"taskManager.snapshot" => {
+            const query = decode(sdk.TaskQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            return taskSnapshot(output,id,query);
+        },
+        .@"taskManager.focus", .@"taskManager.discard" => {
+            if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(struct { id: []const u8 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (!std.mem.startsWith(u8,options.id,"t-")) return sdk.failure(output,id,.InvalidParams);
+            const target = std.fmt.parseInt(u64,options.id[2..],10) catch return sdk.failure(output,id,.InvalidParams);
+            const result = native.moon_tasks_action(context.target_tab_id,target,method==.@"taskManager.discard");
+            return sdk.result(output,id,@as(sdk.TaskAction,@enumFromInt(result)));
+        },
     };
 }
 

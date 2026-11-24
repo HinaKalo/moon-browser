@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.task-manager",
+      "name": "浏览器任务管理器",
+      "description": "查看进程树内存、标签保护和卸载记录，手动卸载可回收的标签。",
+      "permission": "查看和管理标签与进程",
+      "url": "https://docs.browser.moonl.cloud/task-manager.html"
+    },
+    {
       "id": "moon.privacy",
       "name": "清除浏览数据",
       "description": "按类别清除当前配置文件的浏览历史、站点数据和网页缓存。",

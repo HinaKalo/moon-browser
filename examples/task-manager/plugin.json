@@ -1,0 +1,15 @@
+{
+  "id": "moon.task-manager",
+  "name": "浏览器任务管理器",
+  "version": "0.1.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonTaskManager.exe",
+  "settingsPage": "tasks.html",
+  "contributes": {
+    "commands": [
+      { "id": "open", "label": "浏览器任务管理器", "shortcut": "Ctrl+Shift+M" }
+    ]
+  },
+  "permissions": ["taskManager.manage"]
+}

@@ -21,6 +21,22 @@ enum MoonDownloadResult { MOON_DL_COMPLETE, MOON_DL_FAILED, MOON_DL_CANCELLED, M
 typedef struct MoonView MoonView;
 typedef struct MoonPipe MoonPipe;
 typedef struct MoonSample { uint32_t pid; uint64_t bytes; } MoonSample;
+typedef struct MoonTaskOverview {
+    uint64_t private_bytes, peak_bytes, high_bytes, target_bytes, before_bytes, after_bytes;
+    uint32_t open, live, dormant, protected_tabs, processes, evictions, retiring, warm_limit, idle_seconds;
+    bool pressure, has_sweep, sweep_pending;
+} MoonTaskOverview;
+typedef struct MoonTaskTab {
+    uint64_t id;
+    uint32_t phase, pid;
+    int protection;
+    char title[193];
+} MoonTaskTab;
+typedef struct MoonTaskProcess { uint64_t private_bytes; uint32_t pid, tabs; bool browser; } MoonTaskProcess;
+void moon_tasks_overview(MoonTaskOverview *overview);
+size_t moon_tasks_tabs(uint32_t offset, MoonTaskTab *rows, size_t cap);
+size_t moon_tasks_processes(uint32_t offset, MoonTaskProcess *rows, size_t cap);
+unsigned moon_tasks_action(uint64_t source, uint64_t id, bool discard);
 enum { MOON_DOM_SET_TEXT = 1, MOON_DOM_HIDE, MOON_DOM_ADD_CLASS, MOON_DOM_MAX_OPS = 32 };
 enum { MOON_RELOAD_NO_MATCH = 0, MOON_RELOAD_OK, MOON_RELOAD_PROTECTED };
 typedef struct MoonDomOp { unsigned kind; char selector[257]; char value[1025]; } MoonDomOp;

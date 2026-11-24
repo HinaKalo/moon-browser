@@ -19,6 +19,7 @@ pub const Permission = enum {
     @"page.reading",
     @"tabs.closed.manage",
     @"privacy.clear",
+    @"taskManager.manage",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -26,6 +27,7 @@ pub const Shortcut = enum {
     @"Ctrl+F", @"Ctrl++", @"Ctrl+-", @"Ctrl+0",
     @"Ctrl+Shift+T",
     @"Ctrl+Shift+Delete",
+    @"Ctrl+Shift+M",
 };
 pub const Command = struct { id: []const u8, label: []const u8, interactive: bool = false, shortcut: ?Shortcut = null };
 pub const Manifest = struct {
@@ -58,6 +60,23 @@ pub const PrivacySelection = struct { history: bool = false, siteData: bool = fa
 pub const PrivacyStart = enum { started, cancelled, busy, unavailable };
 pub const PrivacyState = enum { idle, running, waitingForEngine, complete, incomplete };
 pub const PrivacyStatus = struct { state: PrivacyState, failed: PrivacySelection = .{} };
+pub const TaskTabPhase = enum(u32) { blank, live, dormant, crashed, restoring, failed };
+pub const TaskProtection = enum(u32) { current, loading, input, nonGet, download, media, siteInspection, internal };
+pub const TaskTab = struct { id: []const u8, title: []const u8, phase: TaskTabPhase, pid: ?u32, protection: ?TaskProtection };
+pub const TaskProcess = struct { pid: u32, privateBytes: u64, tabs: u32, browser: bool };
+pub const TaskOverview = struct {
+    privateBytes: u64, peakBytes: u64, highBytes: u64, targetBytes: u64, pressure: bool, warmLimit: u32, idleSeconds: u32,
+    open: u32, live: u32, dormant: u32, protected: u32, processes: u32, evictions: u32, retiring: u32,
+    beforeBytes: ?u64, afterBytes: ?u64,
+};
+pub const TaskQuery = struct { view: enum { tabs, processes }, offset: u32 = 0 };
+pub const TaskSnapshot = struct {
+    overview: TaskOverview,
+    tabs: ?[]const TaskTab = null,
+    processes: ?[]const TaskProcess = null,
+    next: ?u32,
+};
+pub const TaskAction = enum(c_uint) { done, notFound, protected, unavailable };
 pub const Script = struct { id: []const u8, name: []const u8, enabled: bool };
 pub const ScriptId = struct { id: []const u8 };
 pub const ScriptSwitch = struct { id: []const u8, enabled: bool };
@@ -151,6 +170,9 @@ pub const Method = enum {
     @"tabs.closed.clear",
     @"privacy.clear",
     @"privacy.status",
+    @"taskManager.snapshot",
+    @"taskManager.focus",
+    @"taskManager.discard",
 };
 pub const Reason = enum(i32) {
     ParseError = -32700,

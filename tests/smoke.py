@@ -179,7 +179,7 @@ class Fixture(BaseHTTPRequestHandler):
                     '};addEventListener("scroll",report);addEventListener("resize",report);'
                     'addEventListener("load",report);</script>'
                 )
-            if name in ("closed-first", "closed-second", "closed-item", "closed-protected"):
+            if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "closed-post":
                 demo = ('<form action="/closed-submit" method="post"><input name="fixture" value="test"></form>'
@@ -449,6 +449,11 @@ def run_win32(exe, base, root):
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     recent = exe.parent / "plugins" / "recent-tabs" / "MoonRecentTabs.exe"
     privacy = exe.parent / "plugins" / "privacy" / "MoonPrivacy.exe"
+    task_manager = exe.parent / "plugins" / "task-manager" / "MoonTaskManager.exe"
+    if task_manager.exists():
+        profile.mkdir(parents=True,exist_ok=True)
+        (profile / "memory.json").write_text(
+            json.dumps({"warm_tabs": 20, "idle_seconds": 3600, "pressure_mib": 32768, "target_mib": 32000}), encoding="utf-8")
     if manager.exists():
         fixture = profile / "plugins" / "settings"
         fixture.mkdir(parents=True)
@@ -464,6 +469,7 @@ def run_win32(exe, base, root):
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.privacy-data-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
+            {"id": "moon.task-fixture", "enabled": True, "tabs_read": False, "task_manager_manage": True},
         ]), encoding="utf-8")
         (fixture / "plugin.json").write_text(json.dumps({
             "id": "moon.settings-fixture", "name": "Settings fixture", "version": "1.0.0",
@@ -491,6 +497,9 @@ def run_win32(exe, base, root):
             ('const privacyDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"5",method:"privacy.clear",params:{siteData:true}}));'
              'if(JSON.parse(privacyDenied).error?.code!==-32001)return;' if privacy.exists() else '') +
+            ('const tasksDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"6",method:"taskManager.snapshot",params:{view:"tabs"}}));'
+             'if(JSON.parse(tasksDenied).error?.code!==-32001)return;' if task_manager.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -704,6 +713,51 @@ def run_win32(exe, base, root):
                 'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
             )
             (fixture / "privacy.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
+    if task_manager.exists():
+        fixture = profile / "plugins" / "task-contract"
+        fixture.mkdir(parents=True)
+        (fixture / "plugin.json").write_text(json.dumps({
+            "id": "moon.task-fixture", "name": "Task manager contract", "version": "1.0.0",
+            "apiVersion": 2, "runtime": "native", "entry": "Unused.exe", "settingsPage": "tasks.html",
+            "permissions": ["taskManager.manage"], "contributes": {"commands": [{"id": "open", "label": "Fixture"}]},
+        }), encoding="utf-8")
+        page = task_manager.with_name("tasks.html").read_text(encoding="utf-8")
+        contract = (
+            '<script>(async()=>{'
+            'const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:"write",value}));'
+            'const wait=async(fn,label)=>{for(let i=0;i<200;i++){if(await fn())return;'
+            'await new Promise(r=>setTimeout(r,50));}throw Error(label);};'
+            'try{const tabPage=await host("taskManager.snapshot",{view:"tabs"});'
+            'const ready=tabPage.tabs.find(tab=>tab.title==="Moon fixture task-eligible");'
+            'const held=tabPage.tabs.find(tab=>tab.title==="Moon fixture task-protected");'
+            'if(!ready?.pid||ready?.protection!==null||held?.protection!=="input")'
+            'throw Error("eligibility: "+JSON.stringify({ready,held}));'
+            'if(tabPage.tabs.length!==24||tabPage.next!==24)throw Error("tab pagination");'
+            'const remaining=await host("taskManager.snapshot",{view:"tabs",offset:tabPage.next});'
+            'const current=remaining.tabs.find(tab=>tab.protection==="current");'
+            'if(!current||tabPage.overview.open!==tabPage.tabs.length+remaining.tabs.length)throw Error("second page");'
+            'if(await host("taskManager.discard",{id:current.id})!=="protected"||'
+            'await host("taskManager.discard",{id:held.id})!=="protected")throw Error("protection bypass");'
+            'find("view-processes").click();'
+            'await wait(()=>find("rows").rows.length,"process view");'
+            'const processPage=await host("taskManager.snapshot",{view:"processes"});'
+            'const processes=processPage.processes;'
+            'if(processes.length!==new Set(processes.map(p=>p.pid)).size||'
+            'processPage.next!==null||processes.reduce((sum,p)=>sum+p.privateBytes,0)!==processPage.overview.privateBytes||'
+            '!processes.some(p=>p.browser)||!processes.some(p=>p.pid===ready.pid&&p.tabs>=1))'
+            'throw Error("process accounting: "+JSON.stringify(processPage));'
+            'find("view-tabs").click();'
+            'const button=action=>[...find("rows").querySelectorAll("button")].find(b=>b.dataset.action===action&&b.dataset.tab===ready.id);'
+            'await wait(()=>button("discard")&&!button("discard").disabled,"discard button");button("discard").click();'
+            'await wait(()=>find("status").textContent.includes("已卸载"),"manual discard");'
+            'await wait(async()=>{const snap=await host("taskManager.snapshot",{view:"tabs"});'
+            'const tab=snap.tabs.find(t=>t.id===ready.id);return tab.phase==="dormant"&&tab.pid===null&&'
+            'snap.overview.beforeBytes>0&&snap.overview.afterBytes>0;},"sample after discard");'
+            'button("focus").click();await wait(()=>!busy,"focus");'
+            'await emit({passed:true,shared:processes.some(p=>p.tabs>1)});}'
+            'catch(error){await emit({error:String(error)});}})();</script>'
+        )
+        (fixture / "tasks.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
     def browser_frame(process):
         deadline = monotonic() + 20
         while monotonic() < deadline:
@@ -1249,6 +1303,34 @@ def run_win32(exe, base, root):
                 raise RuntimeError("Privacy clearing modified the bookmark or download library")
             print(f"privacy_plugin=ok native_cancel=ok scoped_clear=ok http_cache=ok http_only=ok "
                   f"private_site_storage=ok service_worker={'ok' if worker else 'unavailable'}",flush=True)
+        if task_manager.exists():
+            target = closed_page("task-eligible")
+            invoke("新建标签页")
+            wait_for(lambda: user.IsWindowVisible(home),"Could not create the protected task tab")
+            closed_page("task-protected")
+            protected_view = user.FindWindowExW(content,None,None,None)
+            while protected_view and not user.IsWindowVisible(protected_view):
+                protected_view = user.FindWindowExW(content,protected_view,None,None)
+            if not protected_view:
+                raise RuntimeError("The protected task's WebKit window was unavailable")
+            user.PostMessageW(protected_view,0x0102,ord('x'),1)
+            for _ in range(24):
+                click(px(251),px(104))
+            wait_for(lambda: user.IsWindowVisible(home),"Could not create blank tabs for task pagination")
+            client = wt.RECT()
+            user.GetClientRect(frame,ctypes.byref(client))
+            click(px(70),client.bottom-px(26))
+            wait_for(lambda: read_address()=="extension://moon.task-manager/tasks.html",
+                     "Native diagnostics did not open the packaged task manager")
+            initial = Fixture.closed_loaded.get("task-eligible",0)
+            set_control(edit,"extension://moon.task-fixture/tasks.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            library_result("moon.task-fixture")
+            wait_for(lambda: read_address()==target and Fixture.closed_loaded.get("task-eligible",0)>initial,
+                     "A manually unloaded tab did not recover on switching back")
+            report = profile / f'extension-{sha256(b"moon.task-fixture").hexdigest()}.json'
+            shared = bool(json.loads(report.read_text(encoding="utf-8")).get("shared"))
+            print(f"task_manager=ok unique_pid_accounting=ok paging=ok protected_discard=ok reload_on_focus=ok shared_pid={'observed' if shared else 'not_observed'}",flush=True)
     finally:
         Fixture.slow_download_release.set()
         if frame:

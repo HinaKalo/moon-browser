@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>浏览器任务管理器</title>
+<style>
+  :root {
+    color-scheme: light;
+    font: 14px/1.5 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    --bg: #f6f7fa; --surface: #fff; --ink: #141820; --quiet: #545d70;
+    --rule: #dce0eb; --hover: #eef1f8; --accent: #4158bf; --warn: #a05a0b;
+    color: var(--ink); background: var(--bg);
+  }
+  :root[data-moon-theme="dark"] {
+    color-scheme: dark;
+    --bg: #171a22; --surface: #202430; --ink: #edf0f7; --quiet: #b8c0d2;
+    --rule: #3a4359; --hover: #292f41; --accent: #a6b5ff; --warn: #f0bd77;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { width: min(100%, 1080px); margin: auto; padding: 38px clamp(15px, 4vw, 45px) 48px; }
+  h1 { font-size: clamp(23px, 4.5vw, 30px); margin: 0 0 19px; letter-spacing: -.02em; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0; }
+  p { margin: 0; color: var(--quiet); }
+  .overview { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0,1fr); border: 1px solid var(--rule); background: var(--surface); border-radius: 12px; }
+  .overview > section { min-width: 0; padding: 16px; }
+  .overview > section + section { border-left: 1px solid var(--rule); }
+  .metric { display: block; font-size: 27px; margin: 4px 0; line-height: 1.2; font-variant-numeric: tabular-nums; }
+  .detail { font-size: 12px; margin-top: 5px; }
+  .bar { height: 6px; margin: 11px 0; border-radius: 4px; overflow: hidden; background: var(--hover); }
+  #usage { height: 100%; width: 0; background: var(--accent); }
+  [data-pressure] #usage { background: var(--warn); }
+  .toolbar, .pager { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .toolbar { margin-top: 23px; }
+  #status { margin: 10px 0; min-height: 1.5em; font-size: 13px; }
+  button { font: inherit; color: var(--ink); border: 1px solid var(--rule); border-radius: 7px; padding: 6px 10px; background: var(--surface); cursor: pointer; }
+  button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button:disabled { opacity: .5; cursor: default; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .table { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+  table { width: 100%; border-collapse: collapse; text-align: left; }
+  th, td { padding: 9px 11px; font-weight: 400; border-bottom: 1px solid var(--rule); }
+  th { color: var(--quiet); background: var(--hover); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  td:first-child { width: 50%; }
+  .open { text-align: left; overflow-wrap: anywhere; padding: 5px 0; border: 0; background: transparent; color: var(--accent); }
+  .pid, td:last-child { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pager { justify-content: end; margin-top: 11px; }
+  .hint { margin-top: 10px; font-size: 12px; }
+  @media (max-width: 540px) {
+    .overview { grid-template-columns: 1fr; }
+    .overview > section + section { border: 0; border-top: 1px solid var(--rule); }
+    th, td { padding: 7px 6px; }
+  }
+</style>
+<main>
+  <h1>浏览器任务管理器</h1>
+  <div id="overview" class="overview">
+    <section>
+      <h2>进程树私有提交内存</h2>
+      <strong class="metric" id="commit">—</strong>
+      <div class="bar" aria-hidden="true"><div id="usage"></div></div>
+      <p class="detail" id="limits"></p>
+      <p class="detail" id="sweep"></p>
+    </section>
+    <section>
+      <h2>已打开的标签</h2>
+      <strong class="metric" id="total">—</strong>
+      <p id="counts"></p>
+      <p class="detail" id="policy"></p>
+    </section>
+  </div>
+  <div class="toolbar" role="group" aria-label="数据视图">
+    <button type="button" id="view-tabs" aria-pressed="true">标签</button>
+    <button type="button" id="view-processes" aria-pressed="false">进程</button>
+  </div>
+  <p id="status" role="status">正在读取浏览器状态…</p>
+  <div class="table">
+    <table aria-label="浏览器任务"><thead><tr id="head"></tr></thead><tbody id="rows"></tbody></table>
+  </div>
+  <div class="pager">
+    <button id="previous" type="button" disabled>上一页</button>
+    <span id="range"></span>
+    <button id="next" type="button" disabled>下一页</button>
+  </div>
+  <p class="hint" id="hint"></p>
+</main>
+<script>
+  const find = id => document.getElementById(id);
+  const phases = { blank: '新标签页', live: '运行中', dormant: '已卸载', crashed: '已崩溃', restoring: '正在恢复', failed: '加载失败' };
+  const protections = { current: '当前标签', loading: '加载中', input: '有页面输入', nonGet: '有非 GET 导航',
+    download: '正在下载', media: '媒体播放或采集', siteInspection: '正在检查站点数据', internal: '内部页面' };
+  const headers = { tabs: ['网页', '状态', 'PID', '操作'], processes: ['进程', 'PID', '关联标签', '私有提交内存'] };
+  let view = 'tabs', offset = 0, generation = 0, callId = 0, nextOffset = null, busy = false, signature = '';
+
+  async function host(method, params) {
+    const response = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(
+      JSON.stringify({ jsonrpc: '2.0', id: String(++callId), method, params })
+    ));
+    if (response.error) throw new Error(response.error.message);
+    return response.result;
+  }
+
+  function memory(bytes) { return bytes == null ? '—' : `${Math.round(bytes / 1048576)} MiB`; }
+
+  function overview(data) {
+    find('overview').toggleAttribute('data-pressure', data.pressure);
+    find('commit').textContent = data.processes ? memory(data.privateBytes) : '采样中…';
+    find('usage').style.width = Math.min(100, 100 * data.privateBytes / data.highBytes) + '%';
+    find('limits').textContent = `峰值 ${memory(data.peakBytes)} · 阈值 ${memory(data.highBytes)} · 目标 ${memory(data.targetBytes)}`;
+    find('sweep').textContent = data.beforeBytes == null ? '暂无卸载记录' :
+      `最近一次卸载 ${memory(data.beforeBytes)} → ${data.afterBytes == null ? '等待采样' : memory(data.afterBytes)}`;
+    find('total').textContent = data.open;
+    find('counts').textContent = `${data.live} 个有视图 · ${data.dormant} 个已卸载 · ${data.protected} 个受保护`;
+    find('policy').textContent = `热标签上限 ${data.warmLimit} · 空闲 ${data.idleSeconds} 秒 · ${data.retiring} 个进程待退出`;
+  }
+
+  function appendCell(row, content, className) {
+    const cell = row.insertCell();
+    if (className) cell.className = className;
+    if (typeof content === 'string') cell.textContent = content;
+    else cell.append(content);
+  }
+
+  function actionButton(text, item, action) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = text;
+    button.dataset.action = action;
+    button.dataset.tab = item.id;
+    button.addEventListener('click', () => interact(action, item.id));
+    return button;
+  }
+
+  function render(data) {
+    overview(data.overview);
+    const records = data[view];
+    const nextSignature = view + JSON.stringify(records);
+    if (signature !== nextSignature) {
+      const focused = document.activeElement;
+      const replacement = document.createDocumentFragment();
+      for (const entry of records) {
+        const row = document.createElement('tr');
+        if (view === 'tabs') {
+          const link = actionButton(entry.title || (entry.phase === 'blank' ? '新标签页' : '网页'), entry, 'focus');
+          link.className = 'open';
+          appendCell(row, link);
+          appendCell(row, protections[entry.protection] || phases[entry.phase]);
+          appendCell(row, entry.pid == null ? '—' : String(entry.pid), 'pid');
+          const discard = actionButton('卸载', entry, 'discard');
+          discard.disabled = entry.phase !== 'live' || entry.protection !== null || entry.pid === null;
+          appendCell(row, discard);
+        } else {
+          appendCell(row, entry.browser ? '浏览器' : entry.tabs ? '网页渲染' : '后台进程');
+          appendCell(row, String(entry.pid), 'pid');
+          appendCell(row, String(entry.tabs));
+          appendCell(row, memory(entry.privateBytes));
+        }
+        replacement.append(row);
+      }
+      find('rows').replaceChildren(replacement);
+      if (focused && focused.dataset.tab) {
+        [...find('rows').querySelectorAll('button')].find(button => button.dataset.tab === focused.dataset.tab &&
+          button.dataset.action === focused.dataset.action && !button.disabled)?.focus({ preventScroll: true });
+      }
+      signature = nextSignature;
+    }
+    nextOffset = data.next;
+    find('previous').disabled = offset === 0;
+    find('next').disabled = nextOffset === null;
+    find('range').textContent = records.length ? `${offset + 1}–${offset + records.length}` : '';
+  }
+
+  async function refresh() {
+    const current = ++generation;
+    try {
+      const data = await host('taskManager.snapshot', { view, offset });
+      if (current !== generation) return;
+      if (!data[view].length && offset) {
+        offset = Math.max(0, offset - 24);
+        return refresh();
+      }
+      render(data);
+      if (find('status').dataset.error) find('status').textContent = '';
+      delete find('status').dataset.error;
+    } catch {
+      if (current !== generation) return;
+      find('rows').replaceChildren();
+      signature = '';
+      find('status').dataset.error = 'true';
+      find('status').textContent = '无法读取任务，请检查插件权限。';
+    }
+  }
+
+  async function interact(action, id) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await host('taskManager.' + action, { id });
+      find('status').textContent = result === 'done' ? (action === 'discard' ? '已卸载。切回该标签即可恢复。' : '') :
+        result === 'protected' ? '此标签正在使用或受保护。' : '此标签当前不可用。';
+    } catch {
+      find('status').textContent = '操作失败，请检查插件权限。';
+    } finally {
+      busy = false;
+      await refresh();
+    }
+  }
+
+  function setView(value) {
+    view = value;
+    offset = 0;
+    nextOffset = null;
+    find('rows').replaceChildren();
+    signature = '';
+    find('view-tabs').setAttribute('aria-pressed', String(view === 'tabs'));
+    find('view-processes').setAttribute('aria-pressed', String(view === 'processes'));
+    find('head').replaceChildren(...headers[view].map(text => {
+      const heading = document.createElement('th');
+      heading.scope = 'col';
+      heading.textContent = text;
+      return heading;
+    }));
+    find('hint').textContent = view === 'tabs' ? '点击网页标题切换标签。卸载只适用于可回收的后台标签。' :
+      '一个 PID 只列一次。多个标签可能共用一个渲染进程。';
+    find('status').dataset.error = 'true';
+    find('status').textContent = '正在读取浏览器状态…';
+    refresh();
+  }
+
+  find('view-tabs').addEventListener('click', () => setView('tabs'));
+  find('view-processes').addEventListener('click', () => setView('processes'));
+  find('previous').addEventListener('click', () => { offset = Math.max(0, offset - 24); refresh(); });
+  find('next').addEventListener('click', () => { if (nextOffset !== null) { offset = nextOffset; refresh(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !busy) refresh(); });
+  setInterval(() => { if (!document.hidden && !busy) refresh(); }, 1800);
+  setView('tabs');
+</script>
+</html>
