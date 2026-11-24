@@ -42,6 +42,7 @@ pub const Shortcut = enum {
     @"Ctrl+Shift+N",
     @"Ctrl+U",
     F11,
+    @"Ctrl+Shift+C",
 };
 pub const MenuGroup = enum { page, library, privacy, developer, extensions };
 pub const LinkMenuAction = enum(c_uint) { open = 1, copy, bookmark };
@@ -140,7 +141,7 @@ pub const ScriptSwitch = struct { id: []const u8, enabled: bool };
 pub const ScriptSource = struct { sourceBase64: []const u8 };
 pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
 pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
-pub const InspectorPanel = enum { inspector, console, resources };
+pub const InspectorPanel = enum(c_int) { inspector, console, resources, elements };
 pub const InspectorPlacement = enum { docked, window };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
 pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
@@ -217,6 +218,7 @@ pub const Method = enum {
     @"settings.read",
     @"settings.write",
     @"devtools.open",
+    @"devtools.toggle",
     @"pageSource.open",
     @"pageSource.status",
     @"pageSource.read",

@@ -97,6 +97,8 @@ MoonView *moon_engine_open_extension(uint64_t token, const char *plugin_id, cons
 bool moon_engine_load_extension(MoonView *view, const char *html);
 void moon_engine_refresh_extension_theme(void);
 bool moon_engine_inspect(MoonView *view, int panel, bool independent);
+bool moon_engine_close_inspector(MoonView *view);
+bool moon_engine_cancel_pick(MoonView *view);
 bool moon_engine_inspecting(MoonView *view);
 void moon_engine_update_inspectors(void);
 void moon_engine_resize_views(bool dpi_changed);
@@ -177,7 +179,9 @@ const char *moon_plugin_permission_label(size_t permission);
 unsigned moon_plugin_permission_flags(size_t index, size_t permission);
 bool moon_plugin_has_settings(size_t index);
 int moon_userscript_reload_active(const char *id);
-bool moon_devtools_open(int panel, bool independent, uint64_t tab_id);
+bool moon_devtools_open(int panel, bool independent, uint64_t tab_id, uint64_t navigation);
+int moon_devtools_toggle(uint64_t tab_id, uint64_t navigation);
+bool moon_devtools_cancel_picker(void);
 bool moon_extension_settings(const char *id, const char *request, char *result, size_t cap);
 bool moon_extension_request(uint64_t page, const char *id, const char *request, char *result, size_t cap);
 #define MOON_PLUGIN_MANAGER_ADDRESS "moon://plugins/"

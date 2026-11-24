@@ -68,6 +68,7 @@ class Fixture(BaseHTTPRequestHandler):
     privacy_asset_requests = 0
     chrome_layout = None
     chrome_sequence = 0
+    inspector_clicks = 0
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -176,6 +177,9 @@ class Fixture(BaseHTTPRequestHandler):
             if sequence >= self.chrome_sequence:
                 type(self).chrome_sequence = sequence
                 type(self).chrome_layout = tuple(layout)
+            data, content_type = b"ok", "text/plain"
+        elif path == "/inspector-click":
+            type(self).inspector_clicks += 1
             data, content_type = b"ok", "text/plain"
         elif path.startswith("/privacy-report/"):
             stage = path.removeprefix("/privacy-report/")
@@ -301,8 +305,11 @@ class Fixture(BaseHTTPRequestHandler):
             if name == "chrome-window":
                 demo = (
                     '<style>body{min-height:300vh;background:#64bfa8}main{position:sticky;top:0}'
-                    'aside{position:fixed;right:0;top:0;width:42px;height:100%;background:#ed795b;transform:translateZ(0)}</style>'
-                    '<aside></aside><script>let timer,sequence=0;const report=()=>{clearTimeout(timer);'
+                    'aside{position:fixed;right:0;top:0;width:42px;height:100%;background:#ed795b;transform:translateZ(0)}'
+                    '#pick-target{position:fixed;left:15px;top:15px;z-index:2;width:144px;height:44px}</style>'
+                    '<aside></aside><button id="pick-target">Inspector target</button><script>'
+                    'document.querySelector("#pick-target").onclick=()=>fetch("/inspector-click",{cache:"no-store"});'
+                    'let timer,sequence=0;const report=()=>{clearTimeout(timer);'
                     'timer=setTimeout(()=>fetch("/chrome-layout/"+'
                     '[++sequence,Math.round(performance.timeOrigin),innerWidth,innerHeight,Math.round(scrollY)].join("/"),'
                     '{cache:"no-store"}),90);};'
@@ -608,8 +615,10 @@ def run_win32(exe, base, root):
     profile = Path(preview_env(root)["MOON_BROWSER_PROFILE_DIR"])
     manager = exe.parent / "plugins" / "lua-manager" / "MoonLuaManager.exe"
     devtools = exe.parent / "plugins" / "devtools" / "MoonDevTools.exe"
-    docked_devtools = devtools.exists() and any(command["id"] == "window" for command in
-        json.loads(devtools.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"])
+    devtools_commands = {command["id"] for command in
+        json.loads(devtools.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"]} if devtools.exists() else set()
+    docked_devtools = "window" in devtools_commands
+    picker_devtools = "elements" in devtools_commands
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
@@ -1486,7 +1495,43 @@ def run_win32(exe, base, root):
                 close_independent_inspector()
                 wait_for(lambda: not attached_inspector(),"The detached inspector remained in the tab")
                 user.PostMessageW(edit,0x0100,0x7B,1)  # F12 through the installed system plugin
-                wait_for(attached_inspector,"F12 did not dock the inspector",20)
+                panel = wait_for(attached_inspector,"F12 did not dock the inspector",20)
+                if picker_devtools:
+                    user.PostMessageW(panel,0x0100,0x7B,1|(1<<30))
+                    sleep(0.35)
+                    if not attached_inspector():
+                        raise RuntimeError("A held F12 closed the inspector again")
+                    user.PostMessageW(panel,0x0100,0x7B,1)
+                    wait_for(lambda: not attached_inspector(),"F12 in the dock did not close the inspector")
+                    wait_for(lambda: user.IsWindowVisible(page),"Closing the inspector hid the inspected page")
+
+                    def click_inspector_target():
+                        target = px(36) | (px(33)<<16)
+                        user.PostMessageW(page,0x0200,0,target)  # WM_MOUSEMOVE updates WebKit's selection hit test
+                        sleep(0.12)
+                        user.PostMessageW(page,0x0201,1,target)  # WM_LBUTTONDOWN
+                        user.PostMessageW(page,0x0202,0,target)  # WM_LBUTTONUP
+
+                    clicks = Fixture.inspector_clicks
+                    click_inspector_target()
+                    wait_for(lambda: Fixture.inspector_clicks==clicks+1,"The uninspected element did not receive its click")
+                    invoke("拾取网页元素")
+                    wait_for(attached_inspector,"Element picking did not open the WebKit inspector",20)
+                    sleep(0.65)
+                    click_inspector_target()
+                    sleep(0.4)
+                    if Fixture.inspector_clicks!=clicks+1:
+                        raise RuntimeError("The inspector picker forwarded its selection click to the document")
+                    click_inspector_target()
+                    wait_for(lambda: Fixture.inspector_clicks==clicks+2,"The picker did not exit after selecting an element")
+
+                    invoke("拾取网页元素")
+                    sleep(0.6)
+                    user.PostMessageW(page,0x0100,0x1B,1)
+                    sleep(0.25)
+                    click_inspector_target()
+                    wait_for(lambda: Fixture.inspector_clicks==clicks+3,"Escape did not cancel the element picker")
+                    print("devtools_element_picker=ok selection_intercepted=ok escape_cancel=ok f12_toggle=ok repeat_suppression=ok",flush=True)
                 user.SetWindowPos(frame,None,window_rect.left,window_rect.top,px(700),px(375),0x0014)
                 close_independent_inspector()
                 user.SetWindowPos(frame,None,window_rect.left,window_rect.top,
@@ -2414,9 +2459,11 @@ def run_win32(exe, base, root):
                 "标签与页面": {"页内查找\tCtrl+F","放大页面\tCtrl++","切换浏览器全屏\tF11","恢复上一个关闭的标签\tCtrl+Shift+T"},
                 "浏览资料": {"历史记录\tCtrl+H","查看下载\tCtrl+J","管理书签\tCtrl+Shift+O"},
                 "隐私与安全": {"清除浏览数据\tCtrl+Shift+Delete","查看当前站点数据"},
-                "开发与诊断": {"打开网页开发者工具\tF12","打开网页控制台\tCtrl+Shift+J","浏览器任务管理器\tCtrl+Shift+M"},
+                "开发与诊断": {"打开网页控制台\tCtrl+Shift+J","浏览器任务管理器\tCtrl+Shift+M"},
                 "扩展工具": {"打开 Lua 脚本编辑器","配置菜单与快捷键示例","显示 Moon 命令提示"},
             }
+            expected["开发与诊断"].update(
+                {"切换网页开发者工具\tF12","拾取网页元素\tCtrl+Shift+C"} if picker_devtools else {"打开网页开发者工具\tF12"})
             if tab_tools.exists():
                 expected["标签与页面"].update({"切换当前标签的固定状态","切换当前标签的静音状态",
                                                  "复制当前标签","复制当前标签网址","关闭其他标签","关闭下方标签"})

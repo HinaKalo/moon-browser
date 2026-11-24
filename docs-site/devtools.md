@@ -1,16 +1,17 @@
 # 网页开发者工具
 
-进入要检查的网页后，按 F12 打开开发者工具，按 Ctrl+Shift+J 打开控制台。地址栏左侧的站点菜单也提供控制台和网页源代码入口。新配置文件默认启用系统插件，已有配置保持原有启用和授权状态。
+进入要检查的网页后，按 Ctrl+Shift+J 打开控制台。从 0.1.0-preview.38 起，F12 或 Ctrl+Shift+I 可以打开或关闭开发者工具。已有的自定义快捷键优先。地址栏左侧的站点菜单也提供控制台和网页源代码入口。新配置文件默认启用系统插件，已有配置保持原有启用和授权状态。
 
 从 0.1.0-preview.34 起，开发者工具默认停靠在被检查的标签页。切换标签时，工具跟随原网页隐藏或恢复。窗口空间不足时会自动打开独立窗口。也可从「… → 开发与诊断」选择「在独立窗口打开开发者工具」。调试期间，后台标签会保留，关闭工具后恢复常规内存调度。
 
 - **打开网页控制台**。查看日志并在当前网页上下文使用 JavaScript 控制台。
 - **查看网页资源和站点数据**。打开 WebKit Inspector 后选择 Storage，查看该页面可用的 Cookies、Local Storage、Session Storage 等。
-- **打开网页开发者工具**。在 WebKit Inspector 中使用 Elements、Network、Sources 等面板。
+- **切换网页开发者工具**。在 WebKit Inspector 中使用 Elements、Network、Sources 等面板。
+- **拾取网页元素**。从 0.1.0-preview.38 起，按 Ctrl+Shift+C 或从「… → 开发与诊断」启动。鼠标悬停预览元素，点击后在 Elements 中检查。选择中的点击由检查器处理。按 Esc 或切换网页可取消。
 
 常用的 Cookie、Local Storage 和 Session Storage 可直接从独立的「查看当前站点数据」命令打开。[站点数据](./site-data)
 
-插件用 `devtools.open` 请求打开工具，可通过 `placement` 选择停靠或独立窗口。网页数据由 WebKit Inspector 显示，该请求仅对触发命令的当前网页生效。
+插件在用户触发的命令中使用 `devtools.open` 打开指定面板，可通过 `placement` 选择停靠或独立窗口。传入 `panel: "elements"` 会开始拾取。`devtools.toggle` 切换当前标签的工具。命令绑定触发时的页面，网页切换后自动失效。
 
 ## 查看网页源代码
 

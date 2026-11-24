@@ -80,6 +80,7 @@ extern void WKHTTPCookieStoreDeleteAllCookies(WKHTTPCookieStoreRef, void *, void
     X(WKPreferencesSetDeveloperExtrasEnabled) \
     X(WKPageGetInspector) X(WKInspectorShow) X(WKInspectorShowConsole) X(WKInspectorShowResources) \
     X(WKInspectorIsVisible) X(WKInspectorIsAttached) X(WKInspectorAttach) X(WKInspectorDetach) X(WKInspectorClose) \
+    X(WKInspectorIsElementSelectionActive) X(WKInspectorToggleElementSelection) \
     X(WKPageGetMainFrame) X(WKPageGetSourceForFrame) X(WKStringGetUTF8CStringNonStrict) \
     X(WKPageGoBack) X(WKPageCanGoBack) X(WKPageGoForward) X(WKPageCanGoForward) X(WKPageReload) \
     X(WKPageSetPageFindClient) X(WKPageFindString) X(WKPageHideFindUI) \
@@ -110,6 +111,7 @@ static bool filter_bundle_available;
 static WKStringRef current_request_policy;
 
 typedef enum { INSPECTOR_KEEP, INSPECTOR_DOCK, INSPECTOR_WINDOW } InspectorPlacement;
+typedef enum { PICK_IDLE, PICK_WAIT_VISIBLE, PICK_STARTING, PICK_CANCEL_START, PICK_STOPPING } InspectorPicker;
 
 struct MoonView {
     WKViewRef view;
@@ -119,6 +121,8 @@ struct MoonView {
     WKInspectorRef inspector;
     InspectorPlacement inspector_placement;
     uint64_t inspector_deadline;
+    InspectorPicker picker;
+    uint64_t picker_deadline;
     bool docked;
     uint64_t token;
     uintptr_t extension_serial;
@@ -225,6 +229,7 @@ static void navigation_response(WKPageRef page, WKNavigationResponseRef response
     else wk.WKFramePolicyListenerUse(listener);
 }
 static void started(WKPageRef page, WKNavigationRef nav, WKTypeRef user, const void *client) {
+    moon_engine_cancel_pick((MoonView *)client);
     emit(client, MOON_STARTED, NULL);
 }
 static void committed(WKPageRef page, WKNavigationRef nav, WKTypeRef user, const void *client) {
@@ -804,6 +809,7 @@ void moon_engine_close(MoonView *view) {
     free(view);
 }
 void moon_engine_show(MoonView *view, bool visible) {
+    if (!visible) moon_engine_cancel_pick(view);
     ShowWindow(view->surface,visible ? SW_SHOWNA : SW_HIDE);
     wk.WKViewSetIsInWindow(view->view,visible);
     if (visible && GetForegroundWindow() == moon_shell_window()) SetFocus(view->hwnd);
@@ -875,6 +881,43 @@ bool moon_engine_page_window(void *window) {
     return false;
 }
 
+bool moon_engine_cancel_pick(MoonView *view) {
+    if (!view->inspector) return false;
+    if (view->picker==PICK_WAIT_VISIBLE) {
+        view->picker=PICK_IDLE;
+        return true;
+    }
+    if (view->picker==PICK_STARTING) view->picker=PICK_CANCEL_START;
+    if (view->picker==PICK_CANCEL_START || view->picker==PICK_STOPPING) return true;
+    if (!wk.WKInspectorIsElementSelectionActive(view->inspector)) return false;
+    wk.WKInspectorToggleElementSelection(view->inspector);
+    view->picker=PICK_STOPPING;
+    view->picker_deadline=moon_clock()+2000;
+    return true;
+}
+
+static void update_picker(MoonView *view, uint64_t now, bool visible) {
+    if (!IsWindowVisible(view->surface)) moon_engine_cancel_pick(view);
+    if (view->picker==PICK_IDLE) return;
+    const bool active=wk.WKInspectorIsElementSelectionActive(view->inspector);
+    if (now>=view->picker_deadline) {
+        view->picker=PICK_IDLE;
+    } else if (view->picker==PICK_WAIT_VISIBLE && visible) {
+        view->picker=PICK_IDLE;
+        if (!active) {
+            view->picker=PICK_STARTING;
+            view->picker_deadline=now+2000;
+            wk.WKInspectorToggleElementSelection(view->inspector);
+        }
+    } else if (active && (view->picker==PICK_STARTING || view->picker==PICK_CANCEL_START)) {
+        const bool cancel=view->picker==PICK_CANCEL_START;
+        view->picker=PICK_IDLE;
+        if (cancel) moon_engine_cancel_pick(view);
+    } else if (!active && view->picker==PICK_STOPPING) {
+        view->picker=PICK_IDLE;
+    }
+}
+
 static void update_inspector(MoonView *view, uint64_t now) {
     if (!view->inspector) return;
     const bool visible=wk.WKInspectorIsVisible(view->inspector);
@@ -892,13 +935,17 @@ static void update_inspector(MoonView *view, uint64_t now) {
         view->docked=docked;
         resize_view(view,false);
     }
-    if (opening && view->docked && GetForegroundWindow()==moon_shell_window()) {
-        for (HWND child=GetWindow(view->surface,GW_CHILD); child; child=GetWindow(child,GW_HWNDNEXT)) {
-            if (child==view->hwnd || !IsWindowVisible(child)) continue;
-            SetFocus(child);
-            break;
+    if (opening && view->docked && GetForegroundWindow()==moon_shell_window() && IsWindowVisible(view->surface)) {
+        if (view->picker!=PICK_IDLE) SetFocus(view->hwnd);
+        else {
+            for (HWND child=GetWindow(view->surface,GW_CHILD); child; child=GetWindow(child,GW_HWNDNEXT)) {
+                if (child==view->hwnd || !IsWindowVisible(child)) continue;
+                SetFocus(child);
+                break;
+            }
         }
     }
+    update_picker(view,now,visible);
 }
 
 void moon_engine_update_inspectors(void) {
@@ -910,8 +957,19 @@ bool moon_engine_inspecting(MoonView *view) {
     return view->inspector && (view->inspector_placement!=INSPECTOR_KEEP || wk.WKInspectorIsVisible(view->inspector));
 }
 
+bool moon_engine_close_inspector(MoonView *view) {
+    if (!moon_engine_inspecting(view)) return false;
+    view->inspector_placement=INSPECTOR_KEEP;
+    moon_engine_cancel_pick(view);
+    wk.WKInspectorClose(view->inspector);
+    view->picker=PICK_IDLE;
+    update_inspector(view,moon_clock());
+    if (GetForegroundWindow()==moon_shell_window() && IsWindowVisible(view->surface)) SetFocus(view->hwnd);
+    return true;
+}
+
 bool moon_engine_inspect(MoonView *view, int panel, bool independent) {
-    if (view->extension_address || panel<0 || panel>2) return false;
+    if (view->extension_address || panel<0 || panel>3) return false;
     wk.WKPreferencesSetDeveloperExtrasEnabled(view->view_preferences,true);
     WKInspectorRef inspector = wk.WKPageGetInspector(view->page);
     if (!inspector) return false;
@@ -919,10 +977,18 @@ bool moon_engine_inspect(MoonView *view, int panel, bool independent) {
     view->inspector=inspector;
     view->inspector_placement=independent ? INSPECTOR_WINDOW : INSPECTOR_DOCK;
     view->inspector_deadline=now+5000;
+    if (panel!=3) moon_engine_cancel_pick(view);
     switch (panel) {
         case 0: wk.WKInspectorShow(inspector); break;
         case 1: wk.WKInspectorShowConsole(inspector); break;
         case 2: wk.WKInspectorShowResources(inspector); break;
+        case 3:
+            if (view->picker==PICK_IDLE) {
+                view->picker=PICK_WAIT_VISIBLE;
+                view->picker_deadline=view->inspector_deadline;
+            }
+            wk.WKInspectorShow(inspector);
+            break;
     }
     update_inspector(view,now);
     return true;

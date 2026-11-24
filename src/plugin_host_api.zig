@@ -56,7 +56,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"tabs.getActive" => .@"tabs.read",
         .@"lua.scripts.list", .@"lua.scripts.install", .@"lua.scripts.setEnabled", .@"lua.scripts.remove" => .@"lua.scripts.manage",
         .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive" => .@"lua.scripts.manage",
-        .@"devtools.open" => .@"page.inspect",
+        .@"devtools.open", .@"devtools.toggle" => .@"page.inspect",
         .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
         .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
@@ -302,9 +302,17 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             break :write sdk.result(output,id,null);
         },
         .@"devtools.open" => inspect: {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
             const value = decode(struct { panel: sdk.InspectorPanel, placement: sdk.InspectorPlacement = .docked },allocator,params) catch
                 return sdk.failure(output,id,.InvalidParams);
-            break :inspect sdk.result(output,id,native.moon_devtools_open(@intCast(@intFromEnum(value.panel)),value.placement==.window,context.target_tab_id));
+            break :inspect sdk.result(output,id,native.moon_devtools_open(@intFromEnum(value.panel),value.placement==.window,context.target_tab_id,context.target_navigation));
+        },
+        .@"devtools.toggle" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+            const state = native.moon_devtools_toggle(context.target_tab_id,context.target_navigation);
+            const result: ?bool = if (state<0) null else state==1;
+            return sdk.result(output,id,result);
         },
         .@"pageSource.open" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

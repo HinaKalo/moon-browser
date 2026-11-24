@@ -1450,6 +1450,8 @@ static bool keyboard(MSG *msg) {
             return true;
         }
     }
+    if (!modifiers && msg->wParam==VK_ESCAPE && (!in_content || in_page) &&
+        !moon_ime_composing(msg->hwnd) && moon_devtools_cancel_picker()) return true;
     if (fullscreen && !modifiers && msg->wParam==VK_ESCAPE && !moon_ime_composing(msg->hwnd)) {
         if (!repeated) moon_shell_leave_fullscreen();
         return true;
@@ -1478,7 +1480,8 @@ static bool keyboard(MSG *msg) {
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
     if (modifiers==MOD_ALT && msg->wParam=='I' && !moon_ime_composing(msg->hwnd))
         return repeated || site_menu(frame);
-    if (in_content && !in_page && msg->wParam!=VK_F11 && msg->wParam!=VK_F12) return false;
+    const bool devtools_chord=modifiers==(MOD_CONTROL|MOD_SHIFT) && (msg->wParam=='I' || msg->wParam=='C');
+    if (in_content && !in_page && msg->wParam!=VK_F11 && msg->wParam!=VK_F12 && !devtools_chord) return false;
     if ((ctrl || alt || msg->wParam==VK_F11 || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
         moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
     return false;

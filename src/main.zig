@@ -875,11 +875,25 @@ export fn moon_userscript_reload_active(id: [*c]const u8) c_int {
     native.moon_engine_reload(view);
     return native.MOON_RELOAD_OK;
 }
-export fn moon_devtools_open(panel: c_int, independent: bool, tab_id: u64) bool {
-    if (stopped or count == 0 or tabs[active].id != tab_id) return false;
+fn devtoolsTarget(tab_id: u64, navigation: u64) ?*native.MoonView {
+    if (stopped or count==0) return null;
     const tab = &tabs[active];
-    if (tab.extension or !tab.has_document or !safeURL(slice(&tab.url))) return false;
-    return if (tab.view) |view| native.moon_engine_inspect(view,panel,independent) else false;
+    if (tab.id!=tab_id or tab.navigation!=navigation or !hasSite(tab)) return null;
+    return tab.view;
+}
+export fn moon_devtools_open(panel: c_int, independent: bool, tab_id: u64, navigation: u64) bool {
+    const view = devtoolsTarget(tab_id,navigation) orelse return false;
+    return native.moon_engine_inspect(view,panel,independent);
+}
+export fn moon_devtools_toggle(tab_id: u64, navigation: u64) c_int {
+    const view = devtoolsTarget(tab_id,navigation) orelse return -1;
+    if (native.moon_engine_close_inspector(view)) return 0;
+    return if (native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.inspector),false)) 1 else -1;
+}
+export fn moon_devtools_cancel_picker() bool {
+    if (stopped or count==0) return false;
+    const view = tabs[active].view orelse return false;
+    return native.moon_engine_cancel_pick(view);
 }
 fn sampleMemory() u64 {
     process_count = native.moon_memory_samples(&process_samples[0],process_samples.len);

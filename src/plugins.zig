@@ -699,7 +699,9 @@ fn sameChord(left: Hotkey, right: Hotkey) bool {
 
 fn hotkeyReserved(key: Hotkey) bool {
     const text = std.mem.sliceTo(&key.text,0);
-    if (std.meta.stringToEnum(sdk.Shortcut,text)!=null) return true;
+    if (std.meta.stringToEnum(sdk.Shortcut,text)) |shortcut| {
+        if (shortcut!=.@"Ctrl+Shift+C") return true;
+    }
     if (key.mods!=0x0006) return false;
     return switch (key.key) {
         'B','K','L','R','W' => true,
@@ -852,6 +854,8 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
             else => null,
         },
         ctrl_shift => switch (vk) {
+            'C' => .@"Ctrl+Shift+C",
+            'I' => .F12,
             'J' => .@"Ctrl+Shift+J",
             'O' => .@"Ctrl+Shift+O",
             'T' => .@"Ctrl+Shift+T",
@@ -898,7 +902,8 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
             if (entry.shortcut!=key or entry.user_shortcut!=null or registeredShortcut(index,command_index)!=null) continue;
             if (key==.F11 and ((!plugin.bundled and !canContribute(plugin)) or
                 !plugin.grants.contains(.@"window.fullscreen"))) continue;
-            if (key!=.F11 or !repeated) runShortcut(index,command_index,snapshot,repeated);
+            if (!repeated or (key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C"))
+                runShortcut(index,command_index,snapshot,repeated);
             return true;
         }
     }
