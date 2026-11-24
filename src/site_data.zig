@@ -21,6 +21,19 @@ const DatabaseRequest = struct {
     deadline: ?u64 = null,
     result: ?std.json.Parsed(DatabaseSnapshot) = null,
 };
+const RecordsSnapshot = struct {
+    state: sdk.SiteDatabaseDetailsState,
+    records: []const sdk.SiteRecord = &.{},
+    next: ?u16 = null,
+    capped: bool = false,
+};
+const RecordsRequest = struct {
+    store: u32,
+    offset: u16,
+    token: u64,
+    deadline: ?u64 = null,
+    result: ?std.json.Parsed(RecordsSnapshot) = null,
+};
 const allocator = std.heap.page_allocator;
 var captured: ?std.json.Parsed(Snapshot) = null;
 var cookies: ?cookie_store.Snapshot = null;
@@ -28,6 +41,7 @@ var catalog: ?std.json.Parsed(Catalog) = null;
 var catalog_deadline: ?u64 = null;
 var catalog_requested = false;
 var database: ?DatabaseRequest = null;
+var record_page: ?RecordsRequest = null;
 var database_serial: u64 = 0;
 var source: u64 = 0;
 var panel: u64 = 0;
@@ -57,6 +71,12 @@ fn dropValues() void {
 fn dropDatabase() void {
     if (database) |inspection| if (inspection.result) |result| result.deinit();
     database = null;
+    dropRecordPreview();
+}
+
+pub fn dropRecordPreview() void {
+    if (record_page) |preview| if (preview.result) |result| result.deinit();
+    record_page = null;
 }
 
 pub fn dropCookies() void {
@@ -264,6 +284,11 @@ pub fn tick(now: u64) void {
             if (now >= expires) inspection.deadline = null;
         }
     }
+    if (record_page) |*preview| {
+        if (preview.deadline) |expires| {
+            if (now >= expires) preview.deadline = null;
+        }
+    }
     if (received == .pending and now >= deadline) {
         cache_pending = false;
         received=.unavailable;
@@ -325,26 +350,41 @@ pub fn requestDatabase(view: *native.MoonView, tab: u64, id: []const u8, query: 
     if (database) |inspection| {
         if (inspection.deadline!=null or (inspection.index==query.index and !query.refresh)) return true;
     }
-    const bytes = std.json.Stringify.valueAlloc(allocator,.{
-        .name=entry.name,.version=entry.version.?,.revision=sequence,
-    },.{}) catch return false;
-    defer allocator.free(bytes);
-    const payload = allocator.dupeSentinel(u8,bytes,0) catch return false;
-    defer allocator.free(payload);
     dropDatabase();
     database_serial += 1;
     database = .{ .index=query.index,.token=database_serial };
-    if (native.moon_engine_inspect_database(view,database_serial,payload.ptr))
+    if (inspectDatabase(view,.{ .name=entry.name,.version=entry.version.?,.revision=sequence }))
         database.?.deadline = native.moon_clock()+5000;
     return true;
 }
 
+fn inspectDatabase(view: *native.MoonView, query: anytype) bool {
+    const bytes = std.json.Stringify.valueAlloc(allocator,query,.{}) catch return false;
+    defer allocator.free(bytes);
+    const payload = std.fmt.allocPrintSentinel(allocator,"{s}\n{s}",.{bytes,@embedFile("site_database.js")},0) catch return false;
+    defer allocator.free(payload);
+    return native.moon_engine_inspect_database(view,database_serial,payload.ptr);
+}
+
 pub fn completeDatabase(tab: u64, token: u64, json: []const u8) void {
-    if (tab!=source or received!=.ready) return;
+    if (tab!=source or received!=.ready or json.len>20*1024) return;
+    if (record_page) |*preview| {
+        if (preview.token==token and preview.deadline!=null) {
+            preview.deadline = null;
+            const parsed = std.json.parseFromSlice(RecordsSnapshot,allocator,json,.{ .allocate=.alloc_always }) catch return;
+            if (parsed.value.records.len>sdk.site_record_page_size or
+                (parsed.value.next!=null and (parsed.value.next.?!=preview.offset+sdk.site_record_page_size or
+                    parsed.value.next.?>=sdk.site_record_preview_limit))) {
+                parsed.deinit();
+                return;
+            }
+            preview.result = parsed;
+            return;
+        }
+    }
     if (database) |*inspection| {
         if (inspection.token!=token or inspection.deadline==null) return;
         inspection.deadline = null;
-        if (json.len>20*1024) return;
         inspection.result = std.json.parseFromSlice(DatabaseSnapshot,allocator,json,.{ .allocate=.alloc_always }) catch return;
     }
 }
@@ -354,6 +394,7 @@ pub fn databaseDetails(tab: u64, id: []const u8, query: sdk.SiteDatabaseQuery) ?
     const inspection = database orelse return null;
     var result: sdk.SiteDatabaseDetails = .{ .index=query.index,.generation=sequence,.state=.pending };
     if (inspection.index!=query.index or inspection.deadline!=null) return result;
+    result.revision = inspection.token;
     result.state = .unavailable;
     if (inspection.result) |parsed| {
         result.state = parsed.value.state;
@@ -361,6 +402,37 @@ pub fn databaseDetails(tab: u64, id: []const u8, query: sdk.SiteDatabaseQuery) ?
         result.more = parsed.value.more;
     }
     return result;
+}
+
+pub fn requestRecords(view: *native.MoonView, tab: u64, id: []const u8, query: sdk.SiteDatabaseRecordsQuery) bool {
+    if (query.offset>=sdk.site_record_preview_limit or query.offset%sdk.site_record_page_size!=0) return false;
+    const entry = selectedDatabase(tab,id,.{ .index=query.index,.generation=query.generation }) orelse return false;
+    const inspection = database orelse return false;
+    if (inspection.index!=query.index or inspection.token!=query.revision) return false;
+    const parsed = inspection.result orelse return false;
+    if (parsed.value.state!=.ready or query.store>=parsed.value.stores.len) return false;
+    const store = parsed.value.stores[query.store];
+    if (store.shortened) return false;
+    if (record_page) |preview| {
+        if (preview.deadline!=null or (preview.store==query.store and preview.offset==query.offset and !query.refresh)) return true;
+    }
+    dropRecordPreview();
+    database_serial += 1;
+    record_page = .{ .store=query.store,.offset=query.offset,.token=database_serial };
+    if (inspectDatabase(view,.{
+        .name=entry.name,.version=entry.version.?,.revision=sequence,
+        .records=.{ .store=store.name,.offset=query.offset,.size=sdk.site_record_page_size,.limit=sdk.site_record_preview_limit },
+    })) record_page.?.deadline = native.moon_clock()+5000;
+    return true;
+}
+
+pub fn databaseRecords(query: sdk.SiteDatabaseRecordsQuery) sdk.SiteDatabaseRecords {
+    const preview = record_page orelse return .{ .offset=query.offset,.state=.unavailable };
+    if (preview.store!=query.store or preview.offset!=query.offset or preview.deadline!=null)
+        return .{ .offset=query.offset,.state=.pending };
+    const result = preview.result orelse return .{ .offset=query.offset,.state=.unavailable };
+    return .{ .offset=query.offset,.state=result.value.state,.records=result.value.records,
+        .next=result.value.next,.capped=result.value.capped };
 }
 
 fn resolve(kind: sdk.SiteDataGroup) ?Group {
@@ -372,10 +444,10 @@ fn resolve(kind: sdk.SiteDataGroup) ?Group {
     };
 }
 
-pub fn status(tab: u64, id: []const u8, writable: bool, cookie_details: bool, cache_writable: bool) sdk.SiteDataStatus {
+pub fn status(tab: u64, id: []const u8, writable: bool, cookie_details: bool, cache_writable: bool, record_preview: bool) sdk.SiteDataStatus {
     if (!owns(tab,id)) return .{ .state=.idle,.origin="",.generation=0 };
     return .{ .state=received,.origin=origin[0..origin_len],.generation=sequence,.failure=failure,
-        .mutation=mutation,.writable=writable,.cookieDetails=cookie_details,.cacheWritable=cache_writable };
+        .mutation=mutation,.writable=writable,.cookieDetails=cookie_details,.cacheWritable=cache_writable,.recordPreview=record_preview };
 }
 
 pub fn cookieDetails(tab: u64, id: []const u8, generation: u64, url: []const u8) ?sdk.SiteCookiePage {

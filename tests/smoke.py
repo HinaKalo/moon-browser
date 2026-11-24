@@ -317,6 +317,11 @@ class Fixture(BaseHTTPRequestHandler):
                     'store.createIndex("by-topic",["topic","updated"],{unique:true});'
                     'store.createIndex("by-tags","tags",{multiEntry:true});'
                     'for(let i=0;i<10;i++)store.createIndex("z-"+i,"extra");'
+                    'for(let id=1;id<=203;id++){const row={id,topic:"topic-"+id,updated:id,tags:["fixture"]};'
+                    'if(id===1)row.note="<mark>月亮</mark>";'
+                    'if(id===2){row.cycle={};row.cycle.self=row.cycle;}'
+                    'if(id===3)row.bytes=new Uint8Array([9,7,5,3]);'
+                    'if(id===4)row.note="长".repeat(2000);store.put(row);}'
                     'for(let i=0;i<12;i++)db.createObjectStore("z-extra-"+i);};'
                     'request.onsuccess=()=>{request.result.close();ok()};request.onerror=fail}),'
                     'new Promise((ok,fail)=>{const request=indexedDB.open("moon-temporary-schema",1);'
@@ -749,6 +754,7 @@ def run_win32(exe, base, root):
     has_site_menu = site_data.exists() and json.loads(site_data.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"][0].get("siteMenu")
     cache_remove = site_data.exists() and '"siteData.cacheWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     database_schema = site_data.exists() and "siteData.database" in site_data.with_name("site-data.html").read_text(encoding="utf-8")
+    database_records = site_data.exists() and '"siteData.records"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
     has_page_save = page_source.exists() and any(
         command["id"]=="save" for command in
@@ -799,7 +805,8 @@ def run_win32(exe, base, root):
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
             {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True,
-             "site_data_write": True, "site_data_cookie_details": True, "site_data_cache_write": cache_remove},
+             "site_data_write": True, "site_data_cookie_details": True, "site_data_cache_write": cache_remove,
+             "site_data_records": database_records},
             {"id": "moon.source-fixture", "enabled": True, "tabs_read": False, "page_source": True},
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
@@ -831,6 +838,9 @@ def run_win32(exe, base, root):
              'JSON.stringify({jsonrpc:"2.0",id:"11",method:"siteData.cookieDetails",params:{generation:1}}));'
              'if(JSON.parse(cookieDenied).error?.code!==-32001)return;'
              if site_data.exists() and "siteData.cookieDetails" in (site_data.parent / "plugin.json").read_text(encoding="utf-8") else '') +
+            ('const recordsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"13",method:"siteData.databaseRecords",params:{index:0,generation:1,revision:1,store:0}}));'
+             'if(JSON.parse(recordsDenied).error?.code!==-32001)return;' if database_records else '') +
             ('const readingDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"3",method:"reading.find",params:{}}));'
              'if(JSON.parse(readingDenied).error?.code!==-32601)return;' if reading.exists() else '') +
@@ -1149,6 +1159,40 @@ def run_win32(exe, base, root):
             'if(!(await inventory("indexedDB")).indexedDB.entries.some(e=>e.name==="moon-inventory"))throw Error("IndexedDB was removed");'
             'if(await host("siteData.cacheRemove",{index,generation})!=="unavailable")throw Error("cache removal allowed the old snapshot");'
         ) if cache_remove else ""
+        record_contract = (
+            'if(!result.recordPreview||schema.revision<=0)throw Error("record permission or structure revision");'
+            'const storeIndex=schema.stores.indexOf(store);'
+            'const recordQuery={...schemaQuery,revision:schema.revision,store:storeIndex};'
+            'const recordsOf=query=>wait(async()=>{const result=await host("siteData.databaseRecords",query);'
+            'return result.state!=="pending"&&result;},"database records");'
+            'const recordToggle=()=>[...document.querySelectorAll("[data-record-focus]")]'
+            '.find(button=>button.dataset.recordFocus==="store-"+storeIndex);'
+            'recordToggle().click();'
+            'const firstKey=()=>el("record-preview")?.querySelector("tbody tr td pre")?.textContent;'
+            'await wait(()=>firstKey()==="1","first record page rendered");'
+            'const first=await recordsOf(recordQuery);'
+            'if(first.state!=="ready"||first.records.length!==10||first.next!==10||first.capped||'
+            '!first.records[0].value.text.includes("<mark>月亮</mark>")||el("record-preview").querySelector("mark")||'
+            '!first.records[1].value.shortened||!first.records[1].value.text.includes("循环引用")||'
+            '!first.records[2].value.text.includes("09 07 05 03")||!first.records[3].value.shortened||'
+            'first.records[3].value.text.length>320)throw Error("record preview "+JSON.stringify(first));'
+            'document.querySelector("[data-record-focus=next]").click();'
+            'await wait(()=>firstKey()==="11","next record page");'
+            'document.querySelector("[data-record-focus=previous]").click();'
+            'await wait(()=>firstKey()==="1","previous record page");'
+            'recordToggle().click();if(el("record-preview"))throw Error("closed preview retained the records");'
+            'const edge=await recordsOf({...recordQuery,offset:190});'
+            'if(edge.records[0]?.key.text!=="191"||edge.records.length!==10||edge.next!==null||!edge.capped)'
+            'throw Error("record cap "+JSON.stringify(edge));'
+            'const emptyStore=schema.stores.findIndex(item=>item.name==="z-extra-0");'
+            'const empty=await recordsOf({...recordQuery,store:emptyStore});'
+            'if(empty.state!=="ready"||empty.records.length||empty.next!==null)throw Error("empty store preview");'
+            'const limit=await host("siteData.databaseRecords",{...recordQuery,offset:200})'
+            '.then(()=>false,e=>e.message==="INVALID_PARAMS");'
+            'const stale=await host("siteData.databaseRecords",{...recordQuery,revision:schema.revision-1})'
+            '.then(()=>false,e=>e.message==="NOT_FOUND");'
+            'if(!limit||!stale)throw Error("invalid record scope was accepted");'
+        ) if database_records else ""
         database_contract = (
             'const dbIndex=databases.indexedDB.entries.findIndex(db=>db.name==="moon-inventory");'
             'const schemaQuery={index:dbIndex,generation:databases.generation};'
@@ -1167,6 +1211,7 @@ def run_win32(exe, base, root):
             'store.keyPath.compound||!store.more||store.indexes.length!==8||!compound?.unique||'
             '!compound.keyPath.compound||compound.keyPath.parts.join(",")!=="topic,updated"||'
             '!multi?.multiEntry||multi.keyPath.parts[0]!=="tags")throw Error("schema details "+JSON.stringify(schema));'
+            + record_contract +
             'schemaButton().click();'
             'if(el("database-preview"))throw Error("schema did not collapse");'
             'const unknown=await host("siteData.database",{...schemaQuery,index:4096}).then(()=>false,e=>e.message==="NOT_FOUND");'
@@ -2409,6 +2454,8 @@ def run_win32(exe, base, root):
                 print("site_catalog=ok indexeddb_version=ok cache_limit=ok isolated_apis=ok catalog_search=ok stale_catalog=ok",flush=True)
             if database_schema:
                 print("indexeddb_schema=ok store_and_index_limits=ok compound_key=ok index_flags=ok isolated_open=ok stale_database=ok no_recreation=ok",flush=True)
+            if database_records:
+                print("indexeddb_records=ok primary_key_pages=ok preview_limit=ok literal_values=ok cyclic_and_binary=ok empty_store=ok stale_revision=ok",flush=True)
             if cache_remove:
                 print("site_cache_removal=ok native_cancel=ok named_cache_only=ok stale_generation=ok long_name_rejected=ok",flush=True)
             if "siteData.cookieDetails" in json.loads((site_data.parent / "plugin.json").read_text(encoding="utf-8"))["permissions"]:
@@ -2647,8 +2694,9 @@ def run_win32(exe, base, root):
                 if (audible,silent) != ("NotAllowedError","playing"):
                     raise RuntimeError(f"Muted autoplay did not distinguish silent media: {(audible,silent)}")
                 configure_site_rule(base,"automatic",autoplay=True)
-                if playback(base,"reset") != baseline:
-                    raise RuntimeError("Restoring default autoplay did not restore the engine policy")
+                restored = playback(base,"reset")
+                if restored != baseline:
+                    raise RuntimeError(f"Restoring default autoplay changed the engine outcome: {baseline!r} to {restored!r}")
                 rules = json.loads((profile / "autoplay-rules.json").read_text(encoding="utf-8"))
                 if rules != [{"origin":allow_origin,"mode":"allow"}]:
                     raise RuntimeError(f"Unexpected persisted autoplay rules: {rules}")

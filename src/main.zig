@@ -1866,6 +1866,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"siteData.cookieDetails" => "允许查看 Cookie 属性和 HttpOnly Cookie",
         .@"siteData.cacheWrite" => "允许经确认删除单个站点缓存",
+        .@"siteData.records" => "允许查看 IndexedDB 记录预览",
         .@"page.source" => "允许查看当前网页源代码",
         .@"page.reader" => "允许提取当前网页正文以打开阅读模式",
         .@"page.save" => "允许通过文件对话框保存当前网页",
@@ -1919,7 +1920,8 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     const result = plugins.toggle(index,permission);
     if (result != .saved) return result;
     if (permission == null or permission == .@"network.filter") network.select(plugins.networkSource());
-    if (permission == null or permission == .@"siteData.read" or permission == .@"siteData.cookieDetails") checkSiteDataGrant();
+    if (permission == null or permission == .@"siteData.read" or permission == .@"siteData.cookieDetails" or
+        permission == .@"siteData.records") checkSiteDataGrant();
     if (permission == null or permission == .@"page.source") checkPageSourceGrant();
     if (permission == null or permission == .@"page.reader") {
         if (reader.ownerId()) |id| {
@@ -2338,8 +2340,12 @@ fn checkSiteDataGrant() void {
         site_data.reset();
         return;
     };
-    if (!grants.contains(.@"siteData.read")) site_data.reset()
-    else if (!grants.contains(.@"siteData.cookieDetails")) site_data.dropCookies();
+    if (!grants.contains(.@"siteData.read")) {
+        site_data.reset();
+        return;
+    }
+    if (!grants.contains(.@"siteData.cookieDetails")) site_data.dropCookies();
+    if (!grants.contains(.@"siteData.records")) site_data.dropRecordPreview();
 }
 
 export fn moon_site_data_open(id: [*c]const u8, source: u64, expected: [*c]const u8) bool {
@@ -2398,6 +2404,15 @@ export fn moon_site_database_result(tab: u64, request: u64, result: [*c]const u8
     if (!stopped and result!=null) site_data.completeDatabase(tab,request,slice(result));
 }
 
+export fn moon_site_database_records(panel: u64, id: [*c]const u8, index: c_uint, generation: u64,
+    revision: u64, store: c_uint, offset: u16, refresh: bool) bool {
+    const owner = slice(id);
+    const view = sitePanelView(panel,owner,.@"siteData.records") orelse return false;
+    return site_data.requestRecords(view,panel,owner,.{
+        .index=index,.generation=generation,.revision=revision,.store=store,.offset=offset,.refresh=refresh,
+    });
+}
+
 export fn moon_site_data_cookie_url(panel: u64, id: [*c]const u8, url: [*c]u8, cap: usize) bool {
     if (native.moon_shell_private()) return false;
     const view = sitePanelView(panel,slice(id),.@"siteData.cookieDetails") orelse return false;
@@ -2435,7 +2450,7 @@ fn clearSiteStorage(panel: u64, owner: []const u8, session: bool, generation: u6
         !site_data.canMutate(panel,owner,group,generation)) return .unavailable;
     var body: [640]u8 = undefined;
     const message = std.fmt.bufPrintSentinel(&body,"清空 {s} 的{s}全部条目？\n此操作也会移除筛选结果之外的条目。",.{
-        site_data.status(panel,owner,true,false,false).origin,
+        site_data.status(panel,owner,true,false,false,false).origin,
         if (session) "当前标签 Session Storage " else " Local Storage ",
     },0) catch return .unavailable;
     site_clear_confirming = true;
@@ -2464,7 +2479,7 @@ fn removeSiteCache(panel: u64, owner: []const u8, target: sdk.SiteCacheRemove) s
     const allocator = std.heap.page_allocator;
     const quoted = std.json.Stringify.valueAlloc(allocator,name,.{}) catch return .unavailable;
     defer allocator.free(quoted);
-    const origin = site_data.status(panel,owner,false,false,true).origin;
+    const origin = site_data.status(panel,owner,false,false,true,false).origin;
     var body: [8192]u8 = undefined;
     const message = std.fmt.bufPrintSentinel(&body,"删除来源 {s} 的缓存 {s}？\n此缓存中的全部响应都会移除。",.{origin,quoted},0) catch return .unavailable;
     site_clear_confirming = true;

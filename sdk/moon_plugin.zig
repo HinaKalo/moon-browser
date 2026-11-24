@@ -39,6 +39,7 @@ pub const Permission = enum {
     @"browser.defaultApp",
     @"page.reader",
     @"siteData.cacheWrite",
+    @"siteData.records",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -210,6 +211,7 @@ pub const SiteDataStatus = struct {
     failure: ?SiteDataFailure = null, mutation: ?SiteDataMutation = null, writable: bool = false,
     cookieDetails: bool = false,
     cacheWritable: bool = false,
+    recordPreview: bool = false,
 };
 pub const SiteDataEntry = struct { id: u32, name: []const u8, length: usize, shortened: bool };
 pub const SiteDataPage = struct { available: bool, entries: []const SiteDataEntry, more: bool, generation: u64 };
@@ -243,9 +245,21 @@ pub const SiteDatabaseDetails = struct {
     state: SiteDatabaseDetailsState,
     generation: u64,
     index: u32,
+    revision: u64 = 0,
     stores: []const SiteObjectStore = &.{},
     more: bool = false,
 };
+pub const SiteDatabaseRecordsQuery = struct {
+    index: u32, generation: u64, revision: u64, store: u32, offset: u16 = 0, refresh: bool = false,
+};
+pub const SiteRecordPreview = struct { text: []const u8, shortened: bool };
+pub const SiteRecord = struct { key: SiteRecordPreview, value: SiteRecordPreview };
+pub const SiteDatabaseRecords = struct {
+    state: SiteDatabaseDetailsState, offset: u16, records: []const SiteRecord = &.{},
+    next: ?u16 = null, capped: bool = false,
+};
+pub const site_record_page_size = 10;
+pub const site_record_preview_limit = 200;
 pub const SiteCache = struct { name: []const u8, shortened: bool };
 pub const SiteCatalogGroup = enum { indexedDB, cacheStorage };
 pub const SiteStorageCatalog = struct {
@@ -329,6 +343,7 @@ pub const Method = enum {
     @"siteData.list",
     @"siteData.catalog",
     @"siteData.database",
+    @"siteData.databaseRecords",
     @"siteData.value",
     @"siteData.cookieDetails",
     @"siteData.cookieValue",

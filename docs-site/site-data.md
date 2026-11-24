@@ -10,7 +10,9 @@
 
 从 0.1.0-preview.34 起，可筛选当前来源的 IndexedDB 数据库和 Cache Storage 缓存。IndexedDB 列表显示数据库名称和版本，Cache Storage 列表显示缓存名称。每类最多预览 32 条。
 
-从 0.1.0-preview.53 起，选择 IndexedDB 库旁的「查看结构」可读取对象仓库、键路径、自动递增设置，以及索引的唯一和多值属性。每个数据库最多展示 12 个对象仓库，每个仓库最多展示 8 个索引。数据库删除或版本变化后可用「刷新」重新获取目录。数据库记录可在开发者工具的 Storage 面板查看。
+从 0.1.0-preview.53 起，选择 IndexedDB 库旁的「查看结构」可读取对象仓库、键路径、自动递增设置，以及索引的唯一和多值属性。每个数据库最多展示 12 个对象仓库，每个仓库最多展示 8 个索引。数据库删除或版本变化后可用「刷新」重新获取目录。
+
+从 0.1.0-preview.54 起，在仓库旁选择「查看记录」，可按主键顺序查看前 200 条记录，每页 10 条。长内容会截断，二进制、集合和深层对象会以摘要显示。「刷新记录」会重新读取当前页。需要完整记录时，可打开开发者工具的 Storage 面板。
 
 从 0.1.0-preview.51 起，可在 Cache Storage 列表选择「删除缓存」。系统确认框会显示来源和缓存名称。确认后移除该缓存及其中的响应，面板自动刷新。其他缓存和站点数据保留原样。
 
@@ -27,6 +29,8 @@ Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限�
 面板调用 `siteData.catalog` 时传入 `{ group }`，其值为 `indexedDB` 或 `cacheStorage`。首次调用会按需读取，响应为 `pending` 时可再次查询同一代快照。目录条目包含 `name`、`shortened`，IndexedDB 还包含 `version`。对应目录为 `null` 表示当前网页无法读取该类别。
 
 有 `siteData.read` 权限的活动绑定面板可用 `siteData.database({ index, generation })` 查看结构。下标按 IndexedDB 原始目录从 0 开始。首次请求可加 `refresh: true` 重新读取结构，查询进度时省略该字段。返回状态为 `pending`、`ready`、`changed` 或 `unavailable`。仓库包含 `name`、`keyPath`、`autoIncrement`、`indexes` 和截断标记。键路径为 `null` 或 `{ parts, compound, shortened }`。索引包含名称、键路径及 `unique`、`multiEntry` 标记。响应的 `more` 字段表示还有未展示的仓库。
+
+`siteData.databaseRecords({ index, generation, revision, store, offset?, refresh? })` 同时需要 `siteData.read` 和 `siteData.records`。使用结构响应的 `revision`，以及 `stores` 列表中从 0 开始的仓库下标。偏移量默认为 0，支持 0 至 190 之间的 10 的倍数。返回 `{ state, offset, records, next, capped }`。每条记录的 `key` 和 `value` 都包含 `text` 与 `shortened`。使用 `next` 继续翻页，`capped` 表示仍有记录超过预览上限。首次读取或手动刷新可传 `refresh: true`，查询进度时省略。原网页导航、重新读取结构或撤销权限会使旧记录预览失效。
 
 编辑还需要独立的 `siteData.write` 权限，并从当前显示且已绑定的面板调用 `siteData.update`。参数为 `{ group, id, generation, value }`。字符串表示替换值，`null` 表示删除。提交后通过 `siteData.status` 等待新一代快照，`mutation` 会返回 `saved`、`removed`、`conflict` 或 `failed`。浏览到其他文档、旧快照或截断条目均不能继续提交修改。
 

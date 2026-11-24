@@ -34,6 +34,12 @@
   .db-preview ul { margin:8px 0; border:0; background:none; }
   .db-preview li { padding:8px 0; overflow-wrap:anywhere; }
   .db-preview li li { padding:4px 0 4px 12px; }
+  .record-preview { margin:10px 0 2px; overflow:auto; }
+  .record-preview table { width:100%; table-layout:fixed; border-collapse:collapse; }
+  .record-preview th,.record-preview td { text-align:start; vertical-align:top; padding:6px 8px; border-bottom:1px solid var(--line); }
+  .record-preview th:first-child { width:30%; }
+  .record-preview pre { margin:0; padding:0; font-size:13px; }
+  .record-controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:10px 0; }
   pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:10px 0 0; background:var(--page); border-radius:6px; padding:9px 11px; }
   .actions { display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
   #editor { margin-top:16px; padding:14px; background:var(--surface); border:1px solid var(--line); border-radius:9px; }
@@ -93,6 +99,7 @@
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
   let clearing=false, cookieGeneration, cacheWritable=false;
   let databasePreview;
+  let recordView, recordsAllowed=false;
   let dismissedMutation;
   const isCatalog=() => group==='indexedDB' || group==='cacheStorage';
   async function host(method,params={}) {
@@ -109,7 +116,7 @@
     editor.hidden=true;
     if (refocus && previous?.button.isConnected) previous.button.focus();
   }
-  function clear() { rows.replaceChildren(); rows.hidden=true; page=catalog=databasePreview=undefined; storageActions.hidden=true; closeEditor(); }
+  function clear() { rows.replaceChildren(); rows.hidden=true; page=catalog=databasePreview=recordView=undefined; storageActions.hidden=true; closeEditor(); }
   function lengthHint() {
     const length=new TextEncoder().encode(newValue.value).length;
     el('bytes').textContent=length + ' / 1024 字节';
@@ -280,6 +287,7 @@
     }
   }
   async function toggleDatabase(index,generation) {
+    recordView=undefined;
     if (databasePreview?.index===index) {
       databasePreview=undefined;
       renderCatalog();
@@ -287,11 +295,14 @@
     }
     const selection={index,generation,state:'pending'};
     databasePreview=selection;
+    await fillDatabaseView('siteData.database',selection,{index,generation},() => databasePreview===selection);
+  }
+  async function fillDatabaseView(method, selection, query, active) {
     renderCatalog();
     try {
-      for (let attempt=0; attempt<80 && databasePreview===selection; ++attempt) {
-        const result=await host('siteData.database',{index,generation,refresh:attempt===0});
-        if (databasePreview!==selection) return;
+      for (let attempt=0; attempt<80 && active(); ++attempt) {
+        const result=await host(method,{...query,refresh:attempt===0});
+        if (!active()) return;
         if (result.state!=='pending') {
           Object.assign(selection,result);
           renderCatalog();
@@ -300,10 +311,73 @@
         await new Promise(resolve => setTimeout(resolve,150));
       }
     } catch {}
-    if (databasePreview===selection) {
+    if (active()) {
       selection.state='unavailable';
       renderCatalog();
     }
+  }
+  function viewRecords(store,offset=0) {
+    const {index,generation,revision}=databasePreview;
+    const selection={store,offset,state:'pending'};
+    recordView=selection;
+    return fillDatabaseView('siteData.databaseRecords',selection,{index,generation,revision,store,offset},() => recordView===selection);
+  }
+  function renderRecordView() {
+    const panel=document.createElement('section');
+    panel.id='record-preview';
+    panel.className='record-preview';
+    panel.setAttribute('aria-label','记录预览');
+    const notice=text => {
+      const line=document.createElement('p');
+      line.setAttribute('role','status');
+      line.textContent=text;
+      panel.append(line);
+    };
+    if (recordView.state==='pending') { notice('正在读取记录…'); return panel; }
+    if (recordView.state==='changed') { notice('数据库已变化。请刷新目录后重试。'); return panel; }
+    if (recordView.state==='unavailable') { notice('暂时无法读取记录。'); return panel; }
+    if (recordView.records.length) {
+      const table=document.createElement('table');
+      const header=table.createTHead().insertRow();
+      for (const label of ['主键','值预览']) {
+        const column=document.createElement('th');
+        column.scope='col';
+        column.textContent=label;
+        header.append(column);
+      }
+      const body=table.createTBody();
+      for (const record of recordView.records) {
+        const row=body.insertRow();
+        for (const value of [record.key,record.value]) {
+          const cell=row.insertCell(), text=document.createElement('pre');
+          text.textContent=value.text;
+          cell.append(text);
+          if (value.shortened) {
+            const note=document.createElement('small');
+            note.className='caption';
+            note.textContent='已截断或以摘要显示';
+            cell.append(note);
+          }
+        }
+      }
+      panel.append(table);
+    } else notice(recordView.offset ? '这一页没有记录。' : '此仓库没有记录。');
+    if (recordView.capped) notice('已到前 200 条的预览上限。');
+    const controls=document.createElement('div');
+    controls.className='record-controls';
+    const addControl=(text,key,offset) => {
+      const button=document.createElement('button');
+      button.textContent=text;
+      button.dataset.recordFocus=key;
+      button.disabled=offset===null;
+      button.onclick=() => viewRecords(recordView.store,offset);
+      controls.append(button);
+    };
+    addControl('上一页','previous',recordView.offset ? recordView.offset-10 : null);
+    addControl('下一页','next',recordView.next);
+    addControl('刷新记录','refresh',recordView.offset);
+    panel.append(controls);
+    return panel;
   }
   function displayKey(key) {
     if (key===null) return '无';
@@ -330,13 +404,27 @@
       return preview;
     }
     const list=document.createElement('ul');
-    for (const store of databasePreview.stores) {
+    for (const [index,store] of databasePreview.stores.entries()) {
       const item=document.createElement('li'), title=document.createElement('strong'), summary=document.createElement('small');
       title.textContent=store.name || '（空名称）';
       summary.className='caption';
       summary.textContent='键路径 ' + displayKey(store.keyPath) + (store.autoIncrement ? ' · 自动递增' : '') +
         (store.shortened ? ' · 名称已截断' : '');
       item.append(title,summary);
+      if (recordsAllowed && !store.shortened) {
+        const open=document.createElement('button'), expanded=recordView?.store===index;
+        open.textContent=expanded ? '收起记录' : '查看记录';
+        open.setAttribute('aria-label',open.textContent+' '+(store.name || '（空名称）'));
+        open.setAttribute('aria-expanded',String(expanded));
+        if (expanded) open.setAttribute('aria-controls','record-preview');
+        open.dataset.recordFocus='store-'+index;
+        open.onclick=() => {
+          if (expanded) { recordView=undefined; renderCatalog(); }
+          else viewRecords(index);
+        };
+        item.append(open);
+        if (expanded) item.append(renderRecordView());
+      }
       if (store.indexes.length) {
         const indexes=document.createElement('ul');
         indexes.setAttribute('aria-label','索引');
@@ -364,6 +452,7 @@
   }
   function renderCatalog() {
     const focusedDatabase=document.activeElement?.dataset.databaseIndex;
+    const focusedRecords=document.activeElement?.dataset.recordFocus;
     rows.replaceChildren();
     rows.hidden=true;
     details.textContent='';
@@ -411,10 +500,13 @@
     }
     if (focusedDatabase!==undefined)
       rows.querySelector('[data-database-index="' + focusedDatabase + '"]')?.focus();
+    if (focusedRecords!==undefined)
+      (rows.querySelector('[data-record-focus="' + focusedRecords + '"]:not(:disabled)') ||
+        rows.querySelector('[data-record-focus="store-' + recordView?.store + '"]'))?.focus();
     rows.hidden=rows.children.length===0;
     status.textContent=rows.hidden ? (query ? '没有匹配的条目。' : `此网页尚未创建 ${label} 条目。`) : '';
     details.textContent=(section.more ? '已显示前 32 条。' : '') +
-      (group==='indexedDB' ? '在开发者工具的 Storage 面板查看数据库记录。' : '');
+      (group==='indexedDB' ? '可在开发者工具的 Storage 面板继续检查。' : '');
   }
   async function load() {
     const ticket=++request;
@@ -422,7 +514,7 @@
       if (isCatalog()) {
         const value=await host('siteData.catalog',{group});
         if (ticket!==request) return;
-        if (databasePreview?.generation!==value.generation) databasePreview=undefined;
+        if (databasePreview?.generation!==value.generation) databasePreview=recordView=undefined;
         catalog=value;
         renderCatalog();
         return;
@@ -464,11 +556,12 @@
       const current=await host('siteData.status');
       writable=current.writable;
       cacheWritable=current.cacheWritable;
+      recordsAllowed=current.recordPreview;
       cookieGeneration=current.cookieDetails ? current.generation : undefined;
       el('origin').textContent=current.origin;
       const unavailable=['idle','stale','pending'].includes(current.state);
       el('refresh').disabled=el('inspector').disabled=unavailable;
-      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails + ':' + cacheWritable;
+      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails + ':' + cacheWritable + ':' + recordsAllowed;
       if (identity===latest) {
         if (selected==='ready' && isCatalog() && (!catalog || catalog.state==='pending')) await load();
         return;
@@ -476,7 +569,8 @@
       latest=identity;
       selected=current.state;
       request++;
-      if (databasePreview?.generation!==current.generation) databasePreview=undefined;
+      if (databasePreview?.generation!==current.generation) databasePreview=recordView=undefined;
+      if (!recordsAllowed) recordView=undefined;
       closeEditor();
       if (current.state!=='ready' || current.generation!==dismissedMutation)
         feedback.textContent=messages[current.mutation] || '';
@@ -508,6 +602,7 @@
   };
   document.addEventListener('visibilitychange',() => {
     if (document.hidden) {
+      if (recordView) { recordView=undefined; renderCatalog(); }
       closeEditor();
       for (const value of rows.querySelectorAll('pre')) { value.textContent=''; value.hidden=true; }
       for (const button of rows.querySelectorAll('[data-reveal]')) button.textContent='显示值';

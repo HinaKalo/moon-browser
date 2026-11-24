@@ -77,6 +77,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteData.cookieDetails", .@"siteData.cookieValue" => .@"siteData.cookieDetails",
         .@"siteData.update", .@"siteData.create", .@"siteData.clear" => .@"siteData.write",
         .@"siteData.cacheRemove" => .@"siteData.cacheWrite",
+        .@"siteData.databaseRecords" => .@"siteData.records",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"reading.open", .@"reading.article", .@"reading.read", .@"reading.returnToPage" => .@"page.reader",
         .@"window.toggleFullscreen" => .@"window.fullscreen",
@@ -201,6 +202,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.cacheRemove", .@"siteData.database" => {},
+        .@"siteData.databaseRecords" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
@@ -545,7 +547,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             return sdk.result(output,id,site_data.status(context.target_tab_id,context.plugin_id,
                 context.grants.contains(.@"siteData.write"),
                 !native.moon_shell_private() and context.grants.contains(.@"siteData.cookieDetails"),
-                context.grants.contains(.@"siteData.cacheWrite")));
+                context.grants.contains(.@"siteData.cacheWrite"),context.grants.contains(.@"siteData.records")));
         },
         .@"siteData.list" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
@@ -595,6 +597,17 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const result = site_data.databaseDetails(context.target_tab_id,context.plugin_id,query) orelse
                 return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,result);
+        },
+        .@"siteData.databaseRecords" => {
+            if (!context.from_page or !context.grants.contains(.@"siteData.read"))
+                return sdk.failure(output,id,.PermissionDenied);
+            const query = decode(sdk.SiteDatabaseRecordsQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (query.offset>=sdk.site_record_preview_limit or query.offset%sdk.site_record_page_size!=0)
+                return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (!native.moon_site_database_records(context.target_tab_id,owner.ptr,query.index,query.generation,
+                query.revision,query.store,query.offset,query.refresh)) return sdk.failure(output,id,.NotFound);
+            return sdk.result(output,id,site_data.databaseRecords(query));
         },
         .@"siteData.update" => {
             if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);

@@ -35,6 +35,7 @@ const Grant = struct {
     site_data_write: ?bool = null,
     site_data_cookie_details: ?bool = null,
     site_data_cache_write: ?bool = null,
+    site_data_records: ?bool = null,
     site_settings_autoplay: ?bool = null,
     site_settings_sound: ?bool = null,
     popups_manage: bool = false,
@@ -259,6 +260,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"siteData.cacheWrite");
             plugin.grants.insert(.@"siteData.cacheWrite");
         }
+        if (std.mem.eql(u8,id,"moon.site-data") and plugin.enabled and requests.contains(.@"siteData.records")) {
+            plugin.default_grants.insert(.@"siteData.records");
+            plugin.grants.insert(.@"siteData.records");
+        }
         if (std.mem.eql(u8,id,"moon.popups") and plugin.enabled and requests.contains(.@"siteSettings.autoplay")) {
             plugin.default_grants.insert(.@"siteSettings.autoplay");
             plugin.grants.insert(.@"siteSettings.autoplay");
@@ -378,6 +383,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"siteData.cookieDetails")) plugin.grants.insert(.@"siteData.cookieDetails");
         if (grant.enabled and (grant.site_data_cache_write orelse plugin.default_grants.contains(.@"siteData.cacheWrite")) and
             plugin.requests.contains(.@"siteData.cacheWrite")) plugin.grants.insert(.@"siteData.cacheWrite");
+        if (grant.enabled and (grant.site_data_records orelse plugin.default_grants.contains(.@"siteData.records")) and
+            plugin.requests.contains(.@"siteData.records")) plugin.grants.insert(.@"siteData.records");
         if (grant.enabled and (grant.site_settings_autoplay orelse plugin.default_grants.contains(.@"siteSettings.autoplay")) and
             plugin.requests.contains(.@"siteSettings.autoplay")) plugin.grants.insert(.@"siteSettings.autoplay");
         if (grant.enabled and (grant.site_settings_sound orelse plugin.default_grants.contains(.@"siteSettings.sound")) and
@@ -466,6 +473,7 @@ fn persist() bool {
         .site_data_write = plugin.grants.contains(.@"siteData.write"),
         .site_data_cookie_details = plugin.grants.contains(.@"siteData.cookieDetails"),
         .site_data_cache_write = plugin.grants.contains(.@"siteData.cacheWrite"),
+        .site_data_records = plugin.grants.contains(.@"siteData.records"),
         .site_settings_autoplay = plugin.grants.contains(.@"siteSettings.autoplay"),
         .site_settings_sound = plugin.grants.contains(.@"siteSettings.sound"),
         .page_source = plugin.grants.contains(.@"page.source"),
@@ -529,6 +537,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
                 .@"siteData.cookieDetails" => "此插件可在绑定到网页的站点数据面板查看 Cookie 属性及值，包含可能用于登录的 HttpOnly Cookie。",
                 .@"siteData.cacheWrite" => "此插件经你确认后，可删除当前站点数据面板中指定的 Cache Storage 缓存。",
+                .@"siteData.records" => "此插件可在当前站点数据面板按需读取 IndexedDB 记录的键和值预览。",
                 .@"page.reading" => "此插件可在当前页打开查找栏，并调整页面缩放。",
                 .@"page.reader" => "你从网页打开阅读模式时，此插件的专属页面可以读取该网页提取的正文。",
                 .@"window.fullscreen" => "此插件可在你触发命令时切换浏览器全屏。按 Esc 可以退出全屏。",
