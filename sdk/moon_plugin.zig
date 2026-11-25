@@ -365,7 +365,16 @@ pub const SiteCookieEntry = struct {
     metadataShortened: bool,
 };
 pub const SiteCookiePage = struct { available: bool, entries: []const SiteCookieEntry, more: bool, generation: u64 };
-pub const SiteCookieItem = struct { id: u32, generation: u64 };
+pub const SiteCookieQuery = struct { generation: u64, query: []const u8 = "", offset: u32 = 0 };
+pub const SiteCookieSearchPage = struct {
+    available: bool,
+    generation: u64,
+    offset: u32,
+    pageRevision: u64 = 0,
+    entries: []const SiteCookieEntry = &.{},
+    next: ?u32 = null,
+};
+pub const SiteCookieItem = struct { id: u32, generation: u64, pageRevision: ?u64 = null };
 pub const SiteDatabase = struct { name: []const u8, version: ?u64, shortened: bool };
 pub const SiteDatabaseQuery = struct { index: u32, generation: u64, refresh: bool = false };
 pub const SiteDatabaseDetailsState = enum { pending, ready, changed, unavailable };
@@ -516,6 +525,7 @@ pub const Method = enum {
     @"siteData.value",
     @"siteData.cookieDetails",
     @"siteData.cookieValue",
+    @"siteData.cookiePage",
     @"siteData.clearCookies",
     @"siteData.refresh",
     @"siteData.openInspector",

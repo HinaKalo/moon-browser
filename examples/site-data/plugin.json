@@ -1,7 +1,7 @@
 {
   "id": "moon.site-data",
   "name": "站点数据",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonSiteData.exe",

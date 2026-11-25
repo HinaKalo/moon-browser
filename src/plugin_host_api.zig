@@ -84,7 +84,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => .@"downloads.preferences",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.storagePage", .@"siteData.catalog", .@"siteData.database", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
-        .@"siteData.cookieDetails", .@"siteData.cookieValue" => .@"siteData.cookieDetails",
+        .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.cookiePage" => .@"siteData.cookieDetails",
         .@"siteData.clearCookies" => .@"siteData.cookieClear",
         .@"siteData.update", .@"siteData.create", .@"siteData.clear" => .@"siteData.write",
         .@"siteData.cacheRemove" => .@"siteData.cacheWrite",
@@ -220,7 +220,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.clearCookies",
-        .@"siteData.cacheRemove", .@"siteData.database", .@"siteData.storagePage" => {},
+        .@"siteData.cacheRemove", .@"siteData.database", .@"siteData.storagePage", .@"siteData.cookiePage" => {},
         .@"siteData.databaseRecords", .@"siteData.clearObjectStore", .@"siteData.removeRecord" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
@@ -840,20 +840,29 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const result = site_data.value(context.target_tab_id,context.plugin_id,options) orelse return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,result);
         },
-        .@"siteData.cookieDetails", .@"siteData.cookieValue" => {
+        .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.cookiePage" => {
             if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             var url: [4096:0]u8 = @splat(0);
             if (!native.moon_site_data_cookie_url(context.target_tab_id,owner.ptr,&url,url.len))
                 return sdk.failure(output,id,.NotFound);
+            const committed = std.mem.span(@as([*:0]const u8,&url));
+            if (method == .@"siteData.cookiePage") {
+                const query = decode(sdk.SiteCookieQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+                if (query.query.len>sdk.site_storage_query_limit or !std.unicode.utf8ValidateSlice(query.query))
+                    return sdk.failure(output,id,.InvalidParams);
+                const result = site_data.cookiePage(context.target_tab_id,context.plugin_id,query,committed) orelse
+                    return sdk.failure(output,id,.NotFound);
+                return sdk.result(output,id,result);
+            }
             if (method == .@"siteData.cookieDetails") {
                 const options = decode(struct { generation: u64 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
-                const result = site_data.cookieDetails(context.target_tab_id,context.plugin_id,options.generation,std.mem.span(@as([*:0]const u8,&url))) orelse
+                const result = site_data.cookieDetails(context.target_tab_id,context.plugin_id,options.generation,committed) orelse
                     return sdk.failure(output,id,.NotFound);
                 return sdk.result(output,id,result);
             }
             const options = decode(sdk.SiteCookieItem,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
-            const result = site_data.cookieValue(allocator,context.target_tab_id,context.plugin_id,options,std.mem.span(@as([*:0]const u8,&url))) orelse
+            const result = site_data.cookieValue(allocator,context.target_tab_id,context.plugin_id,options,committed) orelse
                 return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,result);
         },

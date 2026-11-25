@@ -50,6 +50,8 @@ var captured: ?std.json.Parsed(Snapshot) = null;
 var storage_page: ?StorageRequest = null;
 var storage_serial: u64 = 0;
 var cookies: ?cookie_store.Snapshot = null;
+var cookie_page: ?cookie_store.Snapshot = null;
+var cookie_serial: u64 = 0;
 var catalog: ?std.json.Parsed(Catalog) = null;
 var catalog_deadline: ?u64 = null;
 var catalog_requested = false;
@@ -101,6 +103,12 @@ pub fn dropRecordPreview() void {
 pub fn dropCookies() void {
     if (cookies) |*snapshot| snapshot.deinit();
     cookies = null;
+    dropCookiePage();
+}
+
+fn dropCookiePage() void {
+    if (cookie_page) |*snapshot| snapshot.deinit();
+    cookie_page = null;
 }
 
 pub fn reset() void {
@@ -571,7 +579,7 @@ pub fn status(tab: u64, id: []const u8, writable: bool, cookie_details: bool, ca
 
 pub fn cookieDetails(tab: u64, id: []const u8, generation: u64, url: []const u8) ?sdk.SiteCookiePage {
     if (!owns(tab,id) or received != .ready or generation != sequence) return null;
-    if (cookies == null) cookies = cookie_store.list(url) catch
+    if (cookies == null) cookies = cookie_store.list(url,"",0) catch
         return .{ .available=false,.entries=&.{},.more=false,.generation=sequence };
     if (cookies) |*snapshot| return .{
         .available=true,.entries=snapshot.entries[0..snapshot.len],.more=snapshot.more,.generation=sequence,
@@ -579,8 +587,27 @@ pub fn cookieDetails(tab: u64, id: []const u8, generation: u64, url: []const u8)
     unreachable;
 }
 
+pub fn cookiePage(tab: u64, id: []const u8, target: sdk.SiteCookieQuery, url: []const u8) ?sdk.SiteCookieSearchPage {
+    if (!owns(tab,id) or received != .ready or target.generation != sequence) return null;
+    dropCookiePage();
+    var response: sdk.SiteCookieSearchPage = .{ .available=false,.generation=sequence,.offset=target.offset };
+    cookie_page = cookie_store.list(url,target.query,target.offset) catch return response;
+    cookie_serial+=1;
+    const snapshot = &cookie_page.?;
+    response.available=true;
+    response.pageRevision=cookie_serial;
+    response.entries=snapshot.entries[0..snapshot.len];
+    if (snapshot.more) response.next=target.offset+|@as(u32,@intCast(snapshot.len));
+    return response;
+}
+
 pub fn cookieValue(alloc: std.mem.Allocator, tab: u64, id: []const u8, target: sdk.SiteCookieItem, url: []const u8) ?[]const u8 {
     if (!owns(tab,id) or received != .ready or target.generation != sequence) return null;
+    if (target.pageRevision) |revision| {
+        if (revision!=cookie_serial) return null;
+        if (cookie_page) |*snapshot| return cookie_store.value(snapshot,alloc,url,target.id) catch null;
+        return null;
+    }
     if (cookies) |*snapshot| return cookie_store.value(snapshot,alloc,url,target.id) catch null;
     return null;
 }

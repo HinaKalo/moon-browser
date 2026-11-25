@@ -543,7 +543,10 @@ fn selectTab(index: usize, notify: bool, expand_group: bool) void {
     const now = native.moon_clock();
     tabs[active].last_used = now;
     if (site_data.ownerId()) |owner| {
-        if (site_data.owns(tabs[active].id,owner)) site_data.dropStoragePage();
+        if (site_data.owns(tabs[active].id,owner)) {
+            site_data.dropStoragePage();
+            site_data.dropCookies();
+        }
     }
     if (tabs[active].view) |view| native.moon_engine_show(view, false);
     active = index;

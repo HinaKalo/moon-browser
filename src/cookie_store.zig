@@ -20,7 +20,7 @@ const Key = struct {
     name: []const u8,
     domain: []const u8,
     path: []const u8,
-    updated: i64,
+    updated: []const u8,
 };
 
 pub const Snapshot = struct {
@@ -66,13 +66,17 @@ fn textPrefix(bytes: []const u8, cap: usize) ![]const u8 {
     return bytes[0..len];
 }
 
-pub fn list(url: []const u8) !Snapshot {
+pub fn list(url: []const u8, term: []const u8, offset: u32) !Snapshot {
     const conn = try open();
     defer db.close(conn);
     const query = try db.prepare(conn,"SELECT rowid,name,domain,path,expires,session,httponly,secure," ++
-        "length(CAST(value AS BLOB)),CAST(lastupdated AS INTEGER)" ++ scope ++ " ORDER BY name,domain,path LIMIT 33");
+        "length(CAST(value AS BLOB)),CAST(lastupdated AS TEXT)" ++ scope ++
+        " AND (?5='' OR instr(lower(name),lower(?5))>0 OR instr(lower(domain),lower(?5))>0 OR instr(lower(path),lower(?5))>0)" ++
+        " ORDER BY name,domain,path LIMIT 33 OFFSET ?6");
     defer _ = db.sqlite.sqlite3_finalize(query);
     try bindScope(query,url);
+    try db.bindText(query,5,term);
+    try bindInt(query,6,offset);
     var snapshot: Snapshot = .{ .arena=std.heap.ArenaAllocator.init(std.heap.page_allocator) };
     errdefer snapshot.deinit();
     const allocator = snapshot.arena.allocator();
@@ -102,7 +106,7 @@ pub fn list(url: []const u8) !Snapshot {
         budget -= display_size;
         const key: Key = .{
             .rowid=colInt(query,0),.name=try allocator.dupe(u8,name),.domain=try allocator.dupe(u8,domain),
-            .path=try allocator.dupe(u8,path),.updated=colInt(query,9),
+            .path=try allocator.dupe(u8,path),.updated=try allocator.dupe(u8,try db.columnText(query,9)),
         };
         const length: usize = @intCast(@max(0,colInt(query,8)));
         snapshot.keys[snapshot.len] = key;
@@ -123,14 +127,14 @@ pub fn value(snapshot: *const Snapshot, allocator: std.mem.Allocator, url: []con
     const conn = try open();
     defer db.close(conn);
     const query = try db.prepare(conn,"SELECT value" ++ scope ++
-        " AND rowid=?5 AND name=?6 AND domain=?7 AND path=?8 AND CAST(lastupdated AS INTEGER)=?9");
+        " AND rowid=?5 AND name=?6 AND domain=?7 AND path=?8 AND CAST(lastupdated AS TEXT)=?9");
     defer _ = db.sqlite.sqlite3_finalize(query);
     try bindScope(query,url);
     try bindInt(query,5,key.rowid);
     try db.bindText(query,6,key.name);
     try db.bindText(query,7,key.domain);
     try db.bindText(query,8,key.path);
-    try bindInt(query,9,key.updated);
+    try db.bindText(query,9,key.updated);
     if (db.sqlite.sqlite3_step(query) != db.row) return error.NotFound;
     return allocator.dupe(u8,try textPrefix(try db.columnText(query,0),value_limit));
 }

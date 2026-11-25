@@ -430,6 +430,7 @@ class Fixture(BaseHTTPRequestHandler):
                       'let count=0;'
                       'const report=(event,detail)=>fetch("/media-control-report/"+stage+"-"+event+"?"+detail,{cache:"no-store"});'
                       'media.onplaying=()=>report("playing",++count);'
+                      'media.ontimeupdate=()=>{if(media.currentTime>=0.6){media.ontimeupdate=null;report("advanced","yes");}};'
                       'media.onpause=()=>report("pause","yes");'
                       'document.querySelector("button").onclick=()=>media.play().catch(error=>report("error",error.name));'
                       'report("ready","yes");'
@@ -611,6 +612,9 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", "moon-http-only=unrelated-value; HttpOnly; Path=/page/site")
             self.send_header("Set-Cookie", "moon-http-only=scoped-value; HttpOnly; Path=/page")
             self.send_header("Set-Cookie", "moon-persistent=persistent-value; Max-Age=3600; Path=/")
+            for index in range(38):
+                self.send_header("Set-Cookie", f"zz-cookie-{index:02d}=paged-value-{index}; HttpOnly; Path=/page")
+            self.send_header("Set-Cookie", "zz-cookie-offscope=outside; HttpOnly; Path=/page/private")
         if path == "/page/site-cookie-other":
             self.send_header("Set-Cookie", "moon-unrelated-site=untouched; HttpOnly; Path=/")
         if path == "/page/privacy-seed":
@@ -1770,6 +1774,28 @@ def run_win32(exe, base, root):
             'show.click();await wait(()=>!hidden.hidden&&hidden.textContent==="private-value","reveal HttpOnly value");'
             'show.click();if(!hidden.hidden||hidden.textContent)throw Error("HttpOnly value remains in DOM");'
         ) if "siteData.cookieDetails" in manifest["permissions"] else ""
+        cookie_paging_contract = (
+            'const findCookie=name=>[...el("results").querySelectorAll("li")].find(row=>row.querySelector("code").textContent===name);'
+            'const filterCookie=query=>{el("search").value=query;el("search").dispatchEvent(new Event("input"));};'
+            'const firstCookie=page;'
+            'if(!firstCookie.next||findCookie("zz-cookie-37"))throw Error("Cookie first page bounds");'
+            'const oldCookie={id:firstCookie.entries[0].id,generation:firstCookie.generation,pageRevision:firstCookie.pageRevision};'
+            'el("storage-next").click();'
+            'await wait(()=>page!==firstCookie&&findCookie("zz-cookie-37")&&el("storage-next").disabled,"Cookie second page");'
+            'if(await host("siteData.cookieValue",oldCookie).then(()=>true,e=>e.message!=="NOT_FOUND"))throw Error("old Cookie page remained readable");'
+            'el("storage-prev").click();await wait(()=>page?.offset===0&&findCookie("moon-visible"),"previous Cookie page");'
+            'filterCookie("ZZ-COOKIE-37");'
+            'const lastCookie=await wait(()=>page?.entries.length===1&&findCookie("zz-cookie-37"),"Cookie search across pages");'
+            'if(lastCookie.querySelector("pre").textContent)throw Error("Cookie search returned a secret");'
+            'lastCookie.querySelector("button").click();'
+            'await wait(()=>lastCookie.querySelector("pre").textContent==="paged-value-37","paged HttpOnly Cookie value");'
+            'filterCookie("offscope");await wait(()=>page?.entries.length===0,"path isolation during search");'
+            'filterCookie(new URL(result.origin).hostname);'
+            'await wait(()=>page?.next&&findCookie("moon-visible"),"domain matches");'
+            'filterCookie("/page");'
+            'await wait(()=>page?.next&&page.entries.every(row=>row.path==="/page"),"path matches");'
+            'filterCookie("");await wait(()=>findCookie("moon-visible"),"Cookie search reset");'
+        ) if "siteData.cookiePage" in page else ""
         cookie_clear_contract = r'''
             if(!result.cookieClear) throw Error('Cookie cleanup permission or engine support missing');
             const oldCookies={generation:result.generation};
@@ -1802,11 +1828,11 @@ def run_win32(exe, base, root):
             'const truncated=cached.entries.findIndex(e=>e.shortened);'
             'if(await host("siteData.cacheRemove",{index:truncated,generation})!=="unavailable"||'
             'await host("siteData.cacheRemove",{index,generation:generation-1})!=="unavailable")throw Error("unsafe cache selection");'
-            'const remove=await wait(()=>el("results").querySelector("button"),"cache remove action");'
-            'await emit({cacheStage:"cancel"});remove.click();'
+            'const removeCacheButton=()=>el("results").querySelector(\'[aria-label="删除缓存 moon-request-cache"]:not(:disabled)\');'
+            'await emit({cacheStage:"cancel"});(await wait(removeCacheButton,"cache remove action")).click();'
             'await wait(()=>el("feedback").textContent==="已取消。","cache cancel feedback");'
             'if((await host("siteData.status")).generation!==generation)throw Error("cancel removed cache");'
-            'await emit({cacheStage:"confirm"});remove.click();'
+            'await emit({cacheStage:"confirm"});(await wait(removeCacheButton,"cache remove after cancel")).click();'
             'result=await wait(async()=>{const state=await host("siteData.status");'
             'if(state.state==="unavailable"||state.state==="ready"&&state.generation>generation&&state.mutation!=="removed")'
             'throw Error("cache removal result: "+JSON.stringify(state));'
@@ -1993,7 +2019,7 @@ def run_win32(exe, base, root):
             'if(data.state==="unavailable"||data.state==="stale")throw Error("snapshot "+data.state+": "+data.failure);'
             'return data.state==="ready"&&data;},"snapshot ready");'
             f'if(result.origin!=="{base}")throw Error("origin");'
-            + cookie_contract +
+            + cookie_contract + cookie_paging_contract +
             'for(const [section,key,secret] of [["cookies","moon-visible","cookie-value"],'
             '["local","moon-local","local-value"],["session","moon-session","session-value"]]){'
             'document.querySelector("[data-group="+section+"]").click();'
@@ -3382,6 +3408,8 @@ def run_win32(exe, base, root):
                         if stage==stages[-1]: raise
                         continue
                     if sample=="1":
+                        wait_for(lambda: Fixture.media_reports.get(stage+"-advanced")=="yes",
+                                 f"Media source {stage} started but did not advance")
                         break
                 else:
                     raise RuntimeError(f"No test media source played: {Fixture.media_reports}")
@@ -3694,6 +3722,8 @@ def run_win32(exe, base, root):
                 print("site_cache_removal=ok native_cancel=ok named_cache_only=ok stale_generation=ok long_name_rejected=ok",flush=True)
             if "siteData.cookieDetails" in json.loads((site_data.parent / "plugin.json").read_text(encoding="utf-8"))["permissions"]:
                 print("site_cookie_details=ok httponly_reveal=ok expiry=ok cookie_path_scope=ok stale_cookie_value=ok",flush=True)
+                if "siteData.cookiePage" in (site_data.parent / "site-data.html").read_text(encoding="utf-8"):
+                    print("site_cookie_paging=ok full_name_domain_path_search=ok paged_httponly=ok stale_page_rejected=ok path_isolation=ok",flush=True)
             print("site_data_system_plugin=ok isolated_storage=ok storage_edit=ok storage_remove=ok stale_write_rejected=ok conflict_preserved=ok site_data_navigation_cleanup=ok",flush=True)
             if bulk_storage:
                 print("site_storage_create=ok duplicate_conflict=ok full_group_clear=ok other_group_kept=ok cancel=ok stale_confirmation=ok",flush=True)
