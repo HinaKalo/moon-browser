@@ -1168,6 +1168,72 @@ def run_win32(exe, base, root):
                 command["label"] = "未授权的书签链接命令"
         (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
         page = (bookmarks.parent / "bookmarks.html").read_text(encoding="utf-8")
+        folder_contract = r'''
+            const source = '工作 / %_ 项目';
+            const destination = '归档 / 已完成';
+            const urlPrefix = 'http://127.0.0.1/bookmark-batch-';
+            const add = (token, folder) => host('bookmarks.save', {title:token, url:urlPrefix + token, folder});
+            for (let i = 0; i < 27; ++i) {
+                if (await add('source-' + i, source) !== 'saved') throw Error('folder seed');
+            }
+            await add('nested', source + ' / 子目录');
+            await add('adjacent', '工作组 / 同名');
+            await add('root', '');
+
+            const children = await host('bookmarks.folders', {parent:'工作'});
+            if (children.folders.join(',') !== '%_ 项目' || children.next !== null ||
+                (await host('bookmarks.folders', {parent:'工作',after:'%_ 项目'})).folders.length)
+                throw Error('exact ancestor or folder cursor');
+            const exact = await host('bookmarks.list', {folder:source});
+            if (exact.bookmarks.length !== 24 || exact.next === null || exact.bookmarks.some(item => item.folder !== source))
+                throw Error('exact folder page');
+            const root = await host('bookmarks.list', {folder:'',query:'bookmark-batch'});
+            if (root.bookmarks.length !== 1 || root.bookmarks[0].title !== 'root') throw Error('root-only filter');
+            try {
+                await host('bookmarks.move', {ids:[exact.bookmarks[0].id,0],folder:destination});
+                throw Error('invalid batch accepted');
+            } catch (error) { if (error.message !== 'INVALID_PARAMS') throw error; }
+            if ((await host('bookmarks.list', {folder:destination})).bookmarks.length) throw Error('invalid batch changed a bookmark');
+
+            const byPath = path => [...document.querySelectorAll('#folders [data-folder]')].find(button => button.dataset.folder === path);
+            const choices = () => [...document.querySelectorAll('#results input[data-bookmark]')];
+            document.querySelectorAll('#folder-path button')[1].click();
+            (await wait(() => byPath('工作')));
+            byPath('工作').click();
+            await wait(() => byPath(source));
+            byPath(source).click();
+            await wait(() => byPath(source + ' / 子目录') && choices().length===24 && !document.getElementById('more').disabled);
+            choices()[0].click();
+            document.getElementById('more').click();
+            await wait(() => choices().length === 27 && !document.getElementById('more').disabled);
+            choices().at(-1).click();
+            const ids = choices().filter(choice => choice.checked).map(choice => Number(choice.dataset.bookmark));
+            if (ids.length !== 2) throw Error('selection across bookmark pages');
+            const move = document.getElementById('move-selected');
+            const dialog = document.getElementById('move-dialog');
+            move.click();
+            if (!dialog.open) throw Error('missing move confirmation');
+            document.getElementById('move-cancel').click();
+            if (dialog.open || (await host('bookmarks.list', {folder:destination})).bookmarks.length)
+                throw Error('cancelling changed bookmarks');
+            move.click();
+            document.getElementById('destination').value = destination;
+            document.getElementById('move-confirm').click();
+            await wait(() => !dialog.open && document.getElementById('status').textContent === '已移动 2 条书签。');
+            const moved = (await host('bookmarks.list', {folder:destination})).bookmarks;
+            if (moved.length !== 2 || moved.some(item => !ids.includes(item.id) || !item.url.startsWith(urlPrefix)))
+                throw Error('incorrect move result');
+            if ((await host('bookmarks.list', {folder:source})).bookmarks.some(item => ids.includes(item.id)) ||
+                (await host('bookmarks.list', {folder:source + ' / 子目录'})).bookmarks.length !== 1)
+                throw Error('visible folder or descendant changed incorrectly');
+            if ((await host('bookmarks.move', {ids,folder:destination})).moved !== 0) throw Error('same folder was counted as a move');
+            for (let before=null;;) {
+                const batch = await host('bookmarks.list', {query:'bookmark-batch',before});
+                for (const item of batch.bookmarks) await host('bookmarks.remove', {id:item.id});
+                if (batch.next===null) break;
+                before=batch.next;
+            }
+        ''' if 'id="move-selected"' in page else ''
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
             'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
@@ -1182,6 +1248,7 @@ def run_win32(exe, base, root):
             'await wait(()=>document.querySelector("#results").textContent.includes("编辑后的书签"));'
             'if(document.getElementById("export")){document.getElementById("export").click();'
             'await wait(()=>document.getElementById("transfer-status").textContent.includes("已导出 1 个"));}'
+            + folder_contract +
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "bookmarks.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
@@ -2688,6 +2755,8 @@ def run_win32(exe, base, root):
             if row != [("编辑后的书签",target,"测试文件夹")]:
                 raise RuntimeError(f"Bookmark save or edit was not persisted: {row}")
             print("bookmark_system_plugin=ok native_bookmark_toast=ok bookmark_edit=ok",flush=True)
+            if 'id="move-selected"' in bookmarks.with_name("bookmarks.html").read_text(encoding="utf-8"):
+                print("bookmark_folders=ok exact_root=ok nested_paths=ok move_across_pages=ok cancel=ok atomic_validation=ok",flush=True)
             if bookmark_transfer:
                 if "编辑后的书签" not in page_export.read_text(encoding="utf-8"):
                     raise RuntimeError("Exporting from the bookmark page did not write its bookmark")

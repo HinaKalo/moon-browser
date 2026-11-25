@@ -14,6 +14,11 @@
   .toolbar,.actions,li { display:flex; align-items:center; gap:8px; }
   .toolbar { flex-wrap:wrap; }
   .toolbar input { min-width:min(210px,100%); }
+  #folder-path,#folders,#selection { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:13px; }
+  #folders[hidden],#selection[hidden] { display:none; }
+  #folder-path button[aria-current=location] { background:var(--soft); }
+  #folder-status,#selection-count,#move-description,#move-error { color:var(--muted); }
+  #folder-status:empty,#selection-count:empty,#move-error:empty { display:none; }
   input,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
   input { min-width:0; flex:1; }
   button { cursor:pointer; }
@@ -30,6 +35,7 @@
   a strong,a small { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .folder { display:inline-block; color:var(--muted); background:var(--soft); border-radius:6px; padding:1px 6px; margin-left:7px; font-weight:400; }
   li button { border-color:transparent; }
+  li input { flex:none; margin:0 0 0 11px; width:17px; height:17px; accent-color:var(--accent); }
   #more { margin-top:14px; }
   dialog { width:min(450px,calc(100% - 32px)); color:var(--text); background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:22px; }
   dialog::backdrop { background:#161a3360; }
@@ -44,6 +50,13 @@
     <button id="import">导入 HTML</button>
     <button id="export">导出 HTML</button>
   </div>
+  <nav id="folder-path" aria-label="书签位置"></nav>
+  <div id="folders" aria-label="子文件夹" hidden></div>
+  <p id="folder-status" role="status"></p>
+  <div id="selection" hidden>
+    <button type="button" id="move-selected" disabled>移到文件夹…</button>
+    <span id="selection-count" role="status"></span>
+  </div>
   <p id="status" role="status">正在读取书签…</p>
   <p id="transfer-status" role="status"></p>
   <ul id="results" aria-label="书签列表" hidden></ul>
@@ -53,15 +66,32 @@
     <form id="fields">
       <label>标题<input id="title" maxlength="127" autocomplete="off"></label>
       <label>网址<input id="url" type="url" required maxlength="4095" placeholder="https://example.com"></label>
-      <label>文件夹<input id="folder" maxlength="40" placeholder="可选" autocomplete="off"></label>
+      <label>文件夹<input id="folder" maxlength="160" placeholder="例如工作 / 项目" autocomplete="off"></label>
       <p id="edit-error" role="alert"></p>
       <div class="actions"><button type="button" id="dismiss">取消</button><button id="save">保存</button></div>
+    </form>
+  </dialog>
+  <dialog id="move-dialog" aria-labelledby="move-title">
+    <h2 id="move-title">移到文件夹</h2>
+    <form id="move-form">
+      <p id="move-description"></p>
+      <label>目标文件夹<input id="destination" maxlength="160" placeholder="例如工作 / 项目" autocomplete="off" aria-describedby="destination-help"></label>
+      <small id="destination-help">留空移到根目录。可输入新文件夹路径。</small>
+      <p id="move-error" role="alert"></p>
+      <div class="actions"><button type="button" id="move-cancel">取消</button><button id="move-confirm">移动</button></div>
     </form>
   </dialog>
 </main>
 <script>
   const el = id => document.getElementById(id);
   const search = el('search'), results = el('results'), status = el('status'), more = el('more'), editor = el('editor');
+  const folderPath = el('folder-path'), folders = el('folders'), folderStatus = el('folder-status');
+  const selection = el('selection'), moveSelected = el('move-selected'), selectionCount = el('selection-count');
+  const moveDialog = el('move-dialog'), moveConfirm = el('move-confirm'), moveCancel = el('move-cancel');
+  const destination = el('destination');
+  const separator = ' / ', selectionLimit = 100;
+  const selected = new Set();
+  let folder = null, folderCursor = null, folderVersion = 0, loading = false;
   let sequence = 0, revision = 0, timer, cursor, editing;
   async function host(method, params) {
     const id = 'bookmark:' + ++sequence;
@@ -69,17 +99,92 @@
     if (reply.id !== id || reply.error) throw Error(reply.error?.message || 'INVALID_RESPONSE');
     return reply.result;
   }
+  function goFolder(path) {
+    folder = path;
+    search.value = '';
+    search.placeholder = path === null ? '搜索标题、网址或文件夹' : '搜索当前文件夹';
+    clearTimeout(timer);
+    renderPath();
+    load();
+    search.focus({ preventScroll:true });
+  }
+  function pathButton(label, path) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    if (path === folder) button.setAttribute('aria-current','location');
+    button.onclick = () => goFolder(path);
+    return button;
+  }
+  function renderPath() {
+    folderPath.replaceChildren(pathButton('全部书签',null),pathButton('根目录',''));
+    if (!folder) return;
+    let prefix = '';
+    for (const part of folder.split(separator)) {
+      prefix = prefix ? prefix + separator + part : part;
+      folderPath.append(pathButton(part,prefix));
+    }
+  }
+  async function loadFolders(append = false) {
+    const version = ++folderVersion;
+    folderStatus.textContent = '';
+    if (!append) folders.replaceChildren();
+    el('more-folders')?.remove();
+    folders.hidden = !folders.children.length;
+    if (folder === null) return;
+    try {
+      const page = await host('bookmarks.folders',{ parent:folder,after:append ? folderCursor : null });
+      if (version !== folderVersion) return;
+      for (const name of page.folders) {
+        const path = folder ? folder + separator + name : name;
+        const button = pathButton(name,path);
+        button.dataset.folder = path;
+        folders.append(button);
+      }
+      folderCursor = page.next;
+      if (folderCursor !== null) {
+        const next = document.createElement('button');
+        next.id = 'more-folders';
+        next.textContent = '更多文件夹';
+        next.onclick = () => loadFolders(true);
+        folders.append(next);
+      }
+      folders.hidden = !folders.children.length;
+    } catch {
+      if (version === folderVersion) folderStatus.textContent = '无法读取文件夹。';
+    }
+  }
+  function showSelection() {
+    const choices = results.querySelectorAll('input[data-bookmark]');
+    selection.hidden = choices.length===0;
+    moveSelected.disabled = loading || selected.size===0;
+    selectionCount.textContent = selected.size ? `已选择 ${selected.size} 条` +
+      (selected.size===selectionLimit ? '，已达上限' : '') : '';
+    for (const choice of choices) {
+      choice.checked = selected.has(Number(choice.dataset.bookmark));
+      choice.disabled = loading || (!choice.checked && selected.size===selectionLimit);
+    }
+  }
   function edit(item) {
     editing = item;
     el('editor-title').textContent = item ? '编辑书签' : '新建书签';
     el('title').value = item?.title ?? '';
     el('url').value = item?.url ?? '';
-    el('folder').value = item?.folder ?? '';
+    el('folder').value = item?.folder ?? folder ?? '';
     el('edit-error').textContent = '';
     editor.showModal();
   }
   function append(item) {
     const row = document.createElement('li');
+    const choice = document.createElement('input');
+    choice.type = 'checkbox';
+    choice.dataset.bookmark = item.id;
+    choice.setAttribute('aria-label','选择 ' + (item.title || item.url));
+    choice.onchange = () => {
+      if (choice.checked && selected.size < selectionLimit) selected.add(item.id);
+      else selected.delete(item.id);
+      showSelection();
+    };
     const link = document.createElement('a');
     link.href = item.url;
     const heading = document.createElement('strong');
@@ -109,30 +214,36 @@
         search.focus();
       } catch { remove.disabled = false; status.textContent = '无法删除书签。'; }
     };
-    row.append(link,change,remove);
+    row.append(choice,link,change,remove);
     results.append(row);
   }
   async function load(appendMore = false) {
     const request = ++revision;
+    loading = true;
+    if (!appendMore) { selected.clear(); loadFolders(); }
+    showSelection();
     more.disabled = true;
     try {
       const query = search.value.trim();
-      const page = await host('bookmarks.list',{ query,before:appendMore ? cursor : null });
+      const page = await host('bookmarks.list',{ query,before:appendMore ? cursor : null,folder });
       if (request !== revision) return;
       if (!appendMore) results.replaceChildren();
       page.bookmarks.forEach(append);
       results.hidden = !results.children.length;
       cursor = page.next;
       more.hidden = cursor === null;
-      status.textContent = results.hidden ? (query ? '没有匹配的书签。' : '用 Ctrl+D 保存网页，或新建书签。') : '';
+      status.textContent = results.hidden ? (query ? '没有匹配的书签。' : folder!==null ? '这里暂无书签。' : '用 Ctrl+D 保存网页，或新建书签。') : '';
       el('add').disabled = false;
     } catch (error) {
       if (request !== revision) return;
       results.replaceChildren();
+      selected.clear();
       results.hidden = more.hidden = true;
       el('add').disabled = true;
       status.textContent = error.message === 'PERMISSION_DENIED' ? '请在插件菜单允许管理书签。' : '无法读取书签。';
-    } finally { if (request === revision) more.disabled = false; }
+    } finally {
+      if (request === revision) { more.disabled = loading = false; showSelection(); }
+    }
   }
   el('add').onclick = () => edit(null);
   async function transfer(exporting) {
@@ -162,6 +273,31 @@
   el('import').onclick = () => transfer(false);
   el('export').onclick = () => transfer(true);
   el('dismiss').onclick = () => editor.close();
+  let movingIds = [];
+  moveSelected.onclick = () => {
+    movingIds = [...selected];
+    el('move-description').textContent = `移动所选的 ${movingIds.length} 条书签。`;
+    destination.value = folder ?? '';
+    el('move-error').textContent = '';
+    moveDialog.showModal();
+    destination.select();
+  };
+  moveCancel.onclick = () => moveDialog.close();
+  moveDialog.oncancel = event => { if (moveConfirm.disabled) event.preventDefault(); };
+  el('move-form').onsubmit = async event => {
+    event.preventDefault();
+    moveConfirm.disabled = moveCancel.disabled = true;
+    const path = destination.value.trim();
+    try {
+      const { moved } = await host('bookmarks.move',{ ids:movingIds,folder:path });
+      moveDialog.close();
+      await load();
+      status.textContent = moved ? `已移动 ${moved} 条书签。` : '没有书签需要移动。';
+      search.focus();
+    } catch (error) {
+      el('move-error').textContent = error.message==='INVALID_PARAMS' ? '请检查文件夹路径，最多 160 UTF-8 字节。' : '无法移动所选书签。';
+    } finally { moveConfirm.disabled = moveCancel.disabled = false; }
+  };
   el('fields').onsubmit = async event => {
     event.preventDefault();
     el('save').disabled = true;
@@ -174,12 +310,13 @@
       search.focus();
     } catch (error) {
       el('edit-error').textContent = error.message === 'ALREADY_EXISTS' ? '这个网址已在书签中。'
-        : error.message === 'INVALID_PARAMS' ? '请输入有效的 HTTP 或 HTTPS 网址。' : '无法保存书签。';
+        : error.message === 'INVALID_PARAMS' ? '请检查网址和文件夹路径。' : '无法保存书签。';
     } finally { el('save').disabled = false; }
   };
-  search.oninput = () => { clearTimeout(timer); timer = setTimeout(load,120); };
+  search.oninput = () => { selected.clear(); showSelection(); clearTimeout(timer); timer = setTimeout(load,120); };
   more.onclick = () => load(true);
   document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });
+  renderPath();
   load();
 </script>
 </html>

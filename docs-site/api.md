@@ -70,7 +70,9 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `history.clear` | `history.manage` | 清空当前配置文件的浏览历史，成功返回 `null`。 |
 | `network.filter.status` | `network.filter` | 返回 `{ preferred, active, exceptions }`，分别表示该插件是否被选中、规则是否已加载、已暂停的域名。 |
 | `network.filter.setSite` | `network.filter` | 当前规则插件可传入 `{ host, enabled }`。`false` 暂停该域名及其子域名，`true` 恢复，成功返回 `null`。 |
-| `bookmarks.list` | `bookmarks.manage` | 传入 `{ query?, before? }`。返回 `{ bookmarks, next }`，每项包含 `id`、`title`、`url` 和 `folder`。 |
+| `bookmarks.list` | `bookmarks.manage` | 传入 `{ query?, before?, folder? }`。指定 `folder` 时只列出该文件夹直接包含的书签，空字符串指根目录。返回 `{ bookmarks, next }`，每项包含 `id`、`title`、`url` 和 `folder`。 |
+| `bookmarks.folders` | `bookmarks.manage` | 传入 `{ parent?, after? }`。返回 `{ folders, next }`，每页最多 32 个直接子文件夹名称。省略 `parent` 时从根目录开始，使用 `next` 作为下一页的 `after`，用 ` / ` 拼接路径。 |
+| `bookmarks.move` | `bookmarks.manage` | 传入 `{ ids, folder }`，一次移动 1 至 100 个书签 ID。空字符串表示根目录。返回 `{ moved }`，计入实际更改位置的书签。 |
 | `bookmarks.save` | `bookmarks.manage` | 传入 `{ title, url, folder? }`，返回 `saved` 或 `alreadySaved`。 |
 | `bookmarks.saveActive` | `bookmarks.manage` | 在用户命令中传入 `{}`，保存触发时的网页。返回 `saved`、`alreadySaved` 或 `noPage`。 |
 | `bookmarks.bar.toggle` | `bookmarks.manage` | 在原生用户命令中传入 `{}`，切换并保存书签栏的显示状态。返回 `shown`、`hidden` 或 `unavailable`。参见[书签栏](./library#书签栏)。 |

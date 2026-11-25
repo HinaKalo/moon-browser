@@ -130,18 +130,8 @@ pub fn remove(id: u32) !void {
 pub fn removeMany(ids: []const u32) !u32 {
     if (ids.len==0 or ids.len>sdk.history_selection_limit or std.mem.indexOfScalar(u32,ids,0)!=null) return error.InvalidParams;
     const db = try connection();
-    const sql = comptime query: {
-        const prefix = "DELETE FROM visits WHERE id IN (";
-        var text: [prefix.len+2*sdk.history_selection_limit:0]u8 = @splat(0);
-        @memcpy(text[0..prefix.len],prefix);
-        for (0..sdk.history_selection_limit) |index| {
-            const at = prefix.len+2*index;
-            text[at] = '?';
-            text[at+1] = if (index+1==sdk.history_selection_limit) ')' else ',';
-        }
-        break :query text;
-    };
-    const statement = try prepare(db,&sql);
+    const sql = "DELETE FROM visits WHERE id IN (" ++ (comptime db_api.parameterList(sdk.history_selection_limit)) ++ ")";
+    const statement = try prepare(db,sql);
     defer _ = sqlite.sqlite3_finalize(statement);
     for (ids,1..) |id,index| {
         if (sqlite.sqlite3_bind_int64(statement,@intCast(index),id)!=ok) return error.IOError;

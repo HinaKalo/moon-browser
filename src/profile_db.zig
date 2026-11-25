@@ -3,6 +3,12 @@ const std = @import("std");
 pub const Database = opaque {};
 pub const Statement = opaque {};
 pub const Link = struct { title: []const u8, url: []const u8 };
+
+pub fn parameterList(comptime count: usize) [2*count-1]u8 {
+    var result: [2*count-1]u8 = undefined;
+    for (&result,0..) |*character,index| character.* = if (index%2==0) '?' else ',';
+    return result;
+}
 const Sqlite = struct {
     sqlite3_open: *const fn ([*:0]const u8,*?*Database) callconv(.c) c_int,
     sqlite3_open_v2: *const fn ([*:0]const u8,*?*Database,c_int,?[*:0]const u8) callconv(.c) c_int,

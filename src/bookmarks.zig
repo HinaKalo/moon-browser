@@ -102,10 +102,24 @@ pub fn remove(id: u32) !void {
     native.moon_shell_bookmarks_changed();
 }
 
-pub fn barEntries(folder: []const u8, offset: usize, output: []native.MoonBookmarkBarEntry, more: *bool) !usize {
-    if (!validLabel(folder,160)) return error.InvalidParams;
-    const db=try connection();
-    const statement=try db_api.prepare(db,
+pub fn move(options: sdk.BookmarkMove) !u32 {
+    if (options.ids.len==0 or options.ids.len>sdk.bookmark_selection_limit or
+        !validLabel(options.folder,160) or std.mem.indexOfScalar(u32,options.ids,0)!=null) return error.InvalidParams;
+    const db = try connection();
+    const sql = "UPDATE bookmarks SET folder=?1 WHERE folder<>?1 AND id IN (" ++ (comptime db_api.parameterList(sdk.bookmark_selection_limit)) ++ ")";
+    const statement = try db_api.prepare(db,sql);
+    defer _ = sqlite.sqlite3_finalize(statement);
+    try db_api.bindText(statement,1,options.folder);
+    for (options.ids,2..) |id,index| {
+        if (sqlite.sqlite3_bind_int64(statement,@intCast(index),id)!=db_api.ok) return error.IOError;
+    }
+    if (sqlite.sqlite3_step(statement)!=db_api.done) return error.IOError;
+    const moved: u32 = @intCast(sqlite.sqlite3_changes(db));
+    if (moved>0) native.moon_shell_bookmarks_changed();
+    return moved;
+}
+
+const folder_children =
         \\WITH items AS (
         \\  SELECT id,title,url,CASE WHEN folder=?1 THEN '' WHEN ?1='' THEN folder
         \\    ELSE substr(folder,length(?1||?2)+1) END AS tail
@@ -114,6 +128,35 @@ pub fn barEntries(folder: []const u8, offset: usize, output: []native.MoonBookma
         \\  SELECT id,title,url,CASE WHEN instr(tail,?2)>1 THEN substr(tail,1,instr(tail,?2)-1) ELSE tail END AS child
         \\  FROM items
         \\)
+        \\
+    ;
+
+pub fn folders(allocator: std.mem.Allocator, options: sdk.BookmarkFoldersQuery, buffer: *[32][]const u8) !sdk.BookmarkFolders {
+    const after = options.after orelse "";
+    if (!validLabel(options.parent,160) or !validLabel(after,160)) return error.InvalidParams;
+    const statement = try db_api.prepare(try connection(),folder_children ++
+        "SELECT DISTINCT child FROM children WHERE child>?3 ORDER BY child LIMIT 33");
+    defer _ = sqlite.sqlite3_finalize(statement);
+    try db_api.bindText(statement,1,options.parent);
+    try db_api.bindText(statement,2,html.separator);
+    try db_api.bindText(statement,3,after);
+    var length: usize = 0;
+    while (true) {
+        const status=sqlite.sqlite3_step(statement);
+        if (status==db_api.done) return .{ .folders=buffer[0..length],.next=null };
+        if (status!=db_api.row) return error.IOError;
+        const child = try db_api.columnText(statement,0);
+        if (length==buffer.len) return .{ .folders=buffer[0..length],.next=buffer[length-1] };
+        if (!validLabel(child,160)) continue;
+        buffer[length] = try allocator.dupe(u8,child);
+        length+=1;
+    }
+}
+
+pub fn barEntries(folder: []const u8, offset: usize, output: []native.MoonBookmarkBarEntry, more: *bool) !usize {
+    if (!validLabel(folder,160)) return error.InvalidParams;
+    const db=try connection();
+    const statement=try db_api.prepare(db,folder_children ++
         \\SELECT CASE WHEN child='' THEN id ELSE 0 END AS entry,child,title,url,MIN(id)
         \\FROM children GROUP BY child,entry ORDER BY MIN(id) LIMIT ?3 OFFSET ?4
     );
@@ -166,18 +209,22 @@ pub fn barTarget(id: u32, address: *[4096:0]u8, label: *[512:0]u8) !void {
     _=try std.fmt.bufPrintSentinel(label,"{s}",.{title},0);
 }
 
-pub fn list(allocator: std.mem.Allocator, options: sdk.HistoryQuery, buffer: *[24]sdk.Bookmark) !sdk.BookmarkPage {
-    if (options.query.len > 256) return error.InvalidParams;
+pub fn list(allocator: std.mem.Allocator, options: sdk.BookmarkQuery, buffer: *[24]sdk.Bookmark) !sdk.BookmarkPage {
+    const folder_filter = options.folder orelse "";
+    if (options.query.len > 256 or !validLabel(folder_filter,160)) return error.InvalidParams;
     const db = try connection();
     const statement = try db_api.prepare(db,
         \\SELECT id,title,url,folder FROM bookmarks WHERE id>0 AND id<?1
         \\AND (instr(lower(title),lower(?2)) OR instr(lower(url),lower(?2)) OR instr(lower(folder),lower(?2)))
+        \\AND (?3=0 OR folder=?4)
         \\ORDER BY id DESC LIMIT 25
     );
     defer _ = sqlite.sqlite3_finalize(statement);
     const end: i64 = if (options.before) |id| id else @as(i64,std.math.maxInt(u32))+1;
-    if (sqlite.sqlite3_bind_int64(statement,1,end) != db_api.ok) return error.IOError;
+    if (sqlite.sqlite3_bind_int64(statement,1,end) != db_api.ok or
+        sqlite.sqlite3_bind_int64(statement,3,@intFromBool(options.folder!=null)) != db_api.ok) return error.IOError;
     try db_api.bindText(statement,2,options.query);
+    try db_api.bindText(statement,4,folder_filter);
     var remaining: usize = 24*1024;
     var length: usize = 0;
     while (true) {

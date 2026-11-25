@@ -71,7 +71,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
-        .@"bookmarks.bar.toggle" => .@"bookmarks.manage",
+        .@"bookmarks.bar.toggle", .@"bookmarks.folders", .@"bookmarks.move" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
         .@"downloads.open" => .@"downloads.open",
@@ -204,6 +204,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     if (context.from_page) switch (method) {
         .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
+        .@"bookmarks.folders", .@"bookmarks.move",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
         .@"downloads.open" => {},
@@ -522,10 +523,21 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             break :site sdk.result(output,id,null);
         },
         .@"bookmarks.list" => list: {
-            const options = decode(sdk.HistoryQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const options = decode(sdk.BookmarkQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             var rows: [24]sdk.Bookmark = undefined;
             const page = bookmarks.list(allocator,options,&rows) catch |err| return sdk.failure(output,id,libraryReason(err));
             break :list sdk.result(output,id,page);
+        },
+        .@"bookmarks.folders" => {
+            const options = decode(sdk.BookmarkFoldersQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            var rows: [32][]const u8 = undefined;
+            const page = bookmarks.folders(allocator,options,&rows) catch |err| return sdk.failure(output,id,libraryReason(err));
+            return sdk.result(output,id,page);
+        },
+        .@"bookmarks.move" => {
+            const value = decode(sdk.BookmarkMove,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const moved = bookmarks.move(value) catch |err| return sdk.failure(output,id,libraryReason(err));
+            return sdk.result(output,id,.{ .moved=moved });
         },
         .@"bookmarks.saveActive" => save: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
