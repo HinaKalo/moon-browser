@@ -123,7 +123,7 @@
     {
       "id": "moon.devtools",
       "name": "网页开发者工具",
-      "description": "查看网页元素、控制台、网络资源和站点数据，并可强制刷新网页。",
+      "description": "查看网页元素、控制台、网络资源和站点数据，支持设置默认停靠方式。",
       "permission": "打开网页开发者工具",
       "url": "https://docs.browser.moonl.cloud/devtools.html"
     },

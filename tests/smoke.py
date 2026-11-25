@@ -802,6 +802,7 @@ def run_win32(exe, base, root):
     devtools_commands = {command["id"]: command for command in
         json.loads(devtools.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"]} if devtools.exists() else {}
     docked_devtools = "window" in devtools_commands
+    devtools_placement = "settings" in devtools_commands and "dock" in devtools_commands
     picker_devtools = "elements" in devtools_commands
     inspect_menu = devtools_commands.get("elements",{}).get("inspectElementMenu")
     appearance = exe.parent / "plugins" / "appearance" / "MoonAppearance.exe"
@@ -2426,6 +2427,50 @@ def run_win32(exe, base, root):
                     print("devtools_element_picker=ok selection_intercepted=ok escape_cancel=ok f12_toggle=ok repeat_suppression=ok",flush=True)
                 user.SetWindowPos(frame,None,window_rect.left,window_rect.top,px(700),px(375),0x0014)
                 close_independent_inspector()
+                if devtools_placement:
+                    user.SetWindowPos(frame,None,window_rect.left,window_rect.top,*large,0x0014)
+                    preference = profile / f'extension-{sha256(b"moon.devtools").hexdigest()}.json'
+
+                    def set_inspector_placement(mode, y):
+                        invoke("开发者工具设置")
+                        wait_for(lambda: read_address()=="extension://moon.devtools/settings.html",
+                                 "The devtools plugin did not open its settings page")
+                        wait_for(visible_page_view,"The devtools settings view did not load")
+                        def save_choice():
+                            if read_settings(preference).get("placement") == mode:
+                                return True
+                            page_click(px(120),px(y))
+                            sleep(0.1)
+                            return False
+                        wait_for(save_choice,"The settings page did not save the selected placement")
+                        invoke("Moon fixture chrome-window")
+                        wait_for(lambda: user.IsWindowVisible(page),"The settings page did not return to the inspected tab")
+
+                    set_inspector_placement("window",207)
+                    if inspect_menu:
+                        native_entries(trigger=right_click_element,choose=inspect_menu,owner_window=page)
+                        close_independent_inspector()
+                        if attached_inspector():
+                            raise RuntimeError("Inspect Element ignored the saved independent placement")
+                    user.PostMessageW(edit,0x0100,0x7B,1)
+                    floated = wait_for(inspector_window,"F12 ignored the saved independent placement",20)
+                    if attached_inspector():
+                        raise RuntimeError("The inspector also remained attached with the saved window placement")
+                    invoke("打开网页控制台")
+                    sleep(0.5)
+                    if inspector_window()!=floated or attached_inspector():
+                        raise RuntimeError("Opening Console moved the independent inspector")
+                    invoke("停靠开发者工具")
+                    panel = wait_for(attached_inspector,"The explicit dock command did not attach the open inspector",20)
+                    wait_for(lambda: not inspector_window() and covers_surface(panel),"The explicit dock left a window or overlap")
+                    invoke("打开网页控制台")
+                    sleep(0.5)
+                    if inspector_window() or attached_inspector()!=panel:
+                        raise RuntimeError("Opening Console ignored the current docked placement")
+                    user.PostMessageW(panel,0x0100,0x7B,1)
+                    wait_for(lambda: not attached_inspector(),"F12 did not close the moved inspector")
+                    set_inspector_placement("docked",160)
+                    print("devtools_placement=ok saved_window=ok saved_dock=ok panel_keeps_position=ok live_dock=ok",flush=True)
                 user.SetWindowPos(frame,None,window_rect.left,window_rect.top,
                     window_rect.right-window_rect.left,window_rect.bottom-window_rect.top,0x0014)
                 print("inspector_docking=ok layout_reflow=ok tab_isolation=ok detach=ok narrow_fallback=ok",flush=True)

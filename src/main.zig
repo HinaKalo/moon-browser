@@ -1175,9 +1175,16 @@ fn devtoolsTarget(tab_id: u64, navigation: u64) ?*native.MoonView {
     if (tab.id!=tab_id or tab.navigation!=navigation or !hasSite(tab)) return null;
     return tab.view;
 }
-export fn moon_devtools_open(panel: c_int, independent: bool, tab_id: u64, navigation: u64) bool {
+export fn moon_devtools_open(panel: c_int, placement: c_int, tab_id: u64, navigation: u64) bool {
     const view = devtoolsTarget(tab_id,navigation) orelse return false;
-    return native.moon_engine_inspect(view,panel,independent);
+    return native.moon_engine_inspect(view,panel,placement);
+}
+export fn moon_devtools_prefer_window() bool {
+    if (native.moon_shell_private()) return false;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const preferences = extension_settings.read(arena.allocator(),"moon.devtools") catch return false;
+    return equals(sdk.string(preferences.object.get("placement")) orelse "","window");
 }
 
 export fn moon_devtools_hard_reload(tab_id: u64, navigation: u64) c_int {
@@ -1195,7 +1202,7 @@ export fn moon_devtools_hard_reload(tab_id: u64, navigation: u64) c_int {
 export fn moon_devtools_toggle(tab_id: u64, navigation: u64) c_int {
     const view = devtoolsTarget(tab_id,navigation) orelse return -1;
     if (native.moon_engine_close_inspector(view)) return 0;
-    return if (native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.inspector),false)) 1 else -1;
+    return if (native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.inspector),native.MOON_INSPECT_PREFERRED)) 1 else -1;
 }
 export fn moon_devtools_cancel_picker() bool {
     if (stopped or count==0) return false;
@@ -2466,7 +2473,7 @@ export fn moon_site_data_action(panel: u64, id: [*c]const u8, action: c_int) boo
     }
     if (!plugins.systemEnabled(.@"page.inspect")) return false;
     chooseTab(index,true);
-    return native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.resources),false);
+    return native.moon_engine_inspect(view,@intFromEnum(sdk.InspectorPanel.resources),native.MOON_INSPECT_PREFERRED);
 }
 
 fn sitePanelView(panel: u64, owner: []const u8, permission: sdk.Permission) ?*native.MoonView {

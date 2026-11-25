@@ -89,7 +89,7 @@ const Task = struct {
 };
 const MenuOverride = enum { default, pinned, hidden };
 const UserShortcut = struct { plugin: []const u8, command: []const u8, shortcut: []const u8 };
-const PendingShortcut = struct { action: usize, tab: u64, navigation: u64 };
+const PendingCommand = struct { action: usize, tab: u64, navigation: u64 };
 const Command = struct {
     id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false,
     shortcut: ?sdk.Shortcut = null,
@@ -133,7 +133,7 @@ const Plugin = struct {
     epoch: std.atomic.Value(u32) = .init(0),
     work: ?*Task = null,
     queued_change: bool = false,
-    pending_shortcut: ?PendingShortcut = null,
+    pending_command: ?PendingCommand = null,
     pending_drop: ?native.MoonTabDrop = null,
     hotkey: ?Hotkey = null,
 };
@@ -623,7 +623,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
     };
     _ = plugin.epoch.fetchAdd(1, .acq_rel);
     plugin.queued_change = false;
-    plugin.pending_shortcut = null;
+    plugin.pending_command = null;
     plugin.pending_drop = null;
     return .saved;
 }
@@ -1024,7 +1024,7 @@ fn runShortcut(index: usize, command_index: usize, snapshot: ?Snapshot, repeated
         _ = launch(index,command_index,.command,snapshot);
     } else if (!repeated) {
         const tab = snapshot orelse return;
-        plugin.pending_shortcut = .{ .action=command_index,.tab=tab.id,.navigation=tab.navigation };
+        plugin.pending_command = .{ .action=command_index,.tab=tab.id,.navigation=tab.navigation };
     }
 }
 
@@ -1184,6 +1184,15 @@ pub fn tabDropCommand(drop: native.MoonTabDrop, snapshot: Snapshot) bool {
 }
 
 pub fn command(index: usize, command_index: usize, snapshot: ?Snapshot) void {
+    if (index<len and snapshot!=null) {
+        const plugin = &all[index];
+        if (plugin.bundled and plugin.enabled and plugin.work!=null and command_index<plugin.action_count and
+            std.mem.eql(u8,idAt(index),"moon.devtools")) {
+            const tab = snapshot.?;
+            plugin.pending_command = .{ .action=command_index,.tab=tab.id,.navigation=tab.navigation };
+            return;
+        }
+    }
     if (!launch(index, command_index, .command, snapshot))
         native.moon_shell_info("Plugin", "This plugin is disabled, busy, or could not start.");
 }
@@ -1264,8 +1273,8 @@ pub fn tick(snapshot: ?Snapshot, smoking: bool) void {
             native.moon_tab_drop_run(&drop);
             if (plugin.work!=null) continue;
         }
-        if (plugin.pending_shortcut) |pending| {
-            plugin.pending_shortcut = null;
+        if (plugin.pending_command) |pending| {
+            plugin.pending_command = null;
             if (snapshot) |tab| {
                 if (tab.id==pending.tab and tab.navigation==pending.navigation and launch(index,pending.action,.command,snapshot)) continue;
             }

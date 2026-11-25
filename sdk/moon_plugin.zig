@@ -197,7 +197,7 @@ pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
 pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
 pub const InspectorPanel = enum(c_int) { inspector, console, resources, elements };
 pub const HardReloadResult = enum(c_int) { started, unavailable, edited, resubmission };
-pub const InspectorPlacement = enum { docked, window };
+pub const InspectorPlacement = enum(c_int) { docked, window, preferred };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
 pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
 pub const HistorySearch = struct { query: []const u8 = "", before: ?u32 = null, from: ?u64 = null, until: ?u64 = null };

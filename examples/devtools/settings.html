@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>开发者工具设置</title>
+<style>
+  :root { color-scheme: light; font: 14px/1.55 "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif; --page:#f6f7fa; --surface:#fff; --text:#171b26; --muted:#535e74; --line:#dbe0ed; --accent:#4158bf; --hover:#eef1fa; background:var(--page); color:var(--text); }
+  :root[data-moon-theme="dark"] { color-scheme: dark; --page:#171a22; --surface:#222635; --text:#edf0f7; --muted:#b6c0d5; --line:#3a435b; --accent:#acbbff; --hover:#2c344b; }
+  * { box-sizing:border-box; }
+  body { margin:0; }
+  main { width:min(100%,720px); padding:42px clamp(20px,5vw,48px); margin:auto; }
+  h1 { margin:0 0 18px; font-size:29px; }
+  fieldset { padding:0; margin:0; min-width:0; border:0; }
+  legend { font-size:16px; font-weight:600; padding:0; margin:0 0 8px; }
+  .options { border:1px solid var(--line); border-radius:11px; background:var(--surface); overflow:hidden; }
+  label { display:flex; align-items:center; gap:10px; padding:12px 15px; cursor:pointer; }
+  label + label { border-top:1px solid var(--line); }
+  label:hover { background:var(--hover); }
+  input { width:16px; height:16px; margin:0; accent-color:var(--accent); }
+  input:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+  p { color:var(--muted); }
+  #status:empty { display:none; }
+</style>
+<main>
+  <h1>开发者工具设置</h1>
+  <fieldset id="placement" disabled aria-describedby="details">
+    <legend>默认打开方式</legend>
+    <div class="options">
+      <label><input type="radio" name="placement" value="docked" checked>停靠在网页旁</label>
+      <label><input type="radio" name="placement" value="window">独立窗口</label>
+    </div>
+  </fieldset>
+  <p id="details">下次打开开发者工具时生效。停靠空间不足时会打开独立窗口。</p>
+  <p id="status" role="status"></p>
+</main>
+<script>
+  const field = document.getElementById('placement');
+  const status = document.getElementById('status');
+  let settings;
+
+  async function request(message) {
+    const response = JSON.parse(await window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify(message)));
+    if (!response.ok) throw new Error('SETTINGS_UNAVAILABLE');
+    return response.value;
+  }
+
+  function show() {
+    const input = field.querySelector(settings?.placement === 'window' ? '[value=window]' : '[value=docked]');
+    input.checked = true;
+  }
+
+  field.onchange = async event => {
+    if (!settings || !['docked','window'].includes(event.target.value)) return;
+    field.disabled = true;
+    try {
+      const value = { ...settings, placement:event.target.value };
+      await request({ op:'write', value });
+      settings = value;
+      status.textContent = '已保存。';
+    } catch {
+      status.textContent = '无法保存设置。';
+    } finally {
+      show();
+      field.disabled = false;
+      if (event.isTrusted) event.target.focus();
+    }
+  };
+
+  (async () => {
+    try {
+      settings = await request({ op:'read' });
+      show();
+      field.disabled = false;
+    } catch { status.textContent = '无法读取设置。'; }
+  })();
+</script>
+</html>

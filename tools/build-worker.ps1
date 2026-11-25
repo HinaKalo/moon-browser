@@ -127,6 +127,7 @@ $docs = @(
     (Join-Path $repo 'examples\lua-manager\plugin.json')
     (Join-Path $repo 'examples\lua-manager\settings.html')
     (Join-Path $repo 'examples\devtools\plugin.json')
+    (Join-Path $repo 'examples\devtools\settings.html')
     (Join-Path $repo 'examples\page-source\plugin.json')
     (Join-Path $repo 'examples\page-source\source.html')
     (Join-Path $repo 'examples\popups\plugin.json')
@@ -194,7 +195,7 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     Copy-Item -LiteralPath (Join-Path $repo 'examples\lua-manager\plugin.json'),(Join-Path $repo 'examples\lua-manager\settings.html') -Destination $manager
     $inspector = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\devtools')).FullName
     Copy-Item -LiteralPath $devTools -Destination $inspector
-    Copy-Item -LiteralPath (Join-Path $repo 'examples\devtools\plugin.json') -Destination $inspector
+    Copy-Item -LiteralPath (Join-Path $repo 'examples\devtools\plugin.json'),(Join-Path $repo 'examples\devtools\settings.html') -Destination $inspector
     $sourcePackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\page-source')).FullName
     Copy-Item -LiteralPath $pageSource,(Join-Path $repo 'examples\page-source\plugin.json'),(Join-Path $repo 'examples\page-source\source.html') -Destination $sourcePackage
     $popupPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\popups')).FullName

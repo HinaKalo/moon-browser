@@ -12,6 +12,12 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params != .object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
+    if (std.mem.eql(u8,action,"settings")) {
+        const reply = try client.call(.@"ui.openPage",.{});
+        const value = reply.get("result");
+        const opened = if (value) |result| result==.bool and result.bool else false;
+        return client.reply(id,.{ .message=if (opened) null else "无法打开开发者工具设置。",.toast=true });
+    }
     if (std.mem.eql(u8,action,"hardReload")) {
         const reply = try client.call(.@"devtools.hardReload",.{});
         const status = sdk.string(reply.get("result")) orelse "";
@@ -26,9 +32,9 @@ pub fn main() !void {
     }
     const toggle = std.mem.eql(u8,action,"inspector");
     const reply = if (toggle) try client.call(.@"devtools.toggle",.{}) else open: {
-        const independent = std.mem.eql(u8,action,"window");
-        const panel = if (independent) .inspector else std.meta.stringToEnum(sdk.InspectorPanel,action) orelse return error.InvalidCommand;
-        const placement: sdk.InspectorPlacement = if (independent) .window else .docked;
+        const placement: sdk.InspectorPlacement = if (std.mem.eql(u8,action,"window")) .window
+            else if (std.mem.eql(u8,action,"dock")) .docked else .preferred;
+        const panel = if (placement!=.preferred) .inspector else std.meta.stringToEnum(sdk.InspectorPanel,action) orelse return error.InvalidCommand;
         break :open try client.call(.@"devtools.open",.{ .panel=panel, .placement=placement });
     };
     const value = reply.get("result");

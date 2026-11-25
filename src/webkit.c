@@ -1082,7 +1082,9 @@ static void update_inspector(MoonView *view, uint64_t now) {
     view->inspector_visible=visible;
     if (opening) {
         const bool attached=wk.WKInspectorIsAttached(view->inspector);
-        const bool dock=view->inspector_placement!=INSPECTOR_WINDOW && can_dock(view);
+        const bool window=view->inspector_placement==INSPECTOR_WINDOW ||
+            (view->inspector_placement==INSPECTOR_KEEP && moon_devtools_prefer_window());
+        const bool dock=!window && can_dock(view);
         if (dock && !attached) wk.WKInspectorAttach(view->inspector);
         if (!dock && attached) wk.WKInspectorDetach(view->inspector);
     }
@@ -1134,13 +1136,17 @@ bool moon_engine_close_inspector(MoonView *view) {
     return true;
 }
 
-bool moon_engine_inspect(MoonView *view, int panel, bool independent) {
+bool moon_engine_inspect(MoonView *view, int panel, int placement) {
     if (view->extension_address || panel<0 || panel>3) return false;
     wk.WKPreferencesSetDeveloperExtrasEnabled(view->view_preferences,true);
     WKInspectorRef inspector = wk.WKPageGetInspector(view->page);
     if (!inspector) return false;
     const uint64_t now=moon_clock();
     view->inspector=inspector;
+    bool independent=placement==MOON_INSPECT_WINDOW;
+    if (placement==MOON_INSPECT_PREFERRED) {
+        independent=wk.WKInspectorIsVisible(inspector) ? !wk.WKInspectorIsAttached(inspector) : moon_devtools_prefer_window();
+    }
     view->inspector_placement=independent ? INSPECTOR_WINDOW : INSPECTOR_DOCK;
     view->inspector_deadline=now+5000;
     if (panel!=3) moon_engine_cancel_pick(view);

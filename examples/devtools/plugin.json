@@ -1,10 +1,11 @@
 {
   "id": "moon.devtools",
   "name": "网页开发者工具",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonDevTools.exe",
+  "settingsPage": "settings.html",
   "contributes": {
     "commands": [
       {"id": "inspector", "label": "切换网页开发者工具", "menu": "developer", "shortcut": "F12"},
@@ -12,7 +13,9 @@
       {"id": "console", "label": "打开网页控制台", "menu": "developer", "siteMenu": true, "shortcut": "Ctrl+Shift+J"},
       {"id": "resources", "label": "查看网页资源和站点数据", "menu": "developer"},
       {"id": "hardReload", "label": "强制刷新网页", "menu": "developer", "shortcut": "Ctrl+Shift+R"},
-      {"id": "window", "label": "在独立窗口打开开发者工具", "menu": "developer"}
+      {"id": "window", "label": "在独立窗口打开开发者工具", "menu": "developer"},
+      {"id": "dock", "label": "停靠开发者工具", "menu": "developer"},
+      {"id": "settings", "label": "开发者工具设置", "menu": "developer"}
     ]
   },
   "permissions": ["page.inspect"]
