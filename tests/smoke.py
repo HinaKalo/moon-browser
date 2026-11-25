@@ -1519,7 +1519,10 @@ def run_win32(exe, base, root):
             'await api.moonSettings.postMessage(JSON.stringify({op:"write",value:{soundResult:change.result??false,muted:state.result?.muted}}));return;}'
             'if(options?.notification){const reply=await call("siteSettings.notifications.set",options.notification);'
             'const rules=(await call("siteSettings.notifications.get")).result?.rules;'
-            'await api.moonSettings.postMessage(JSON.stringify({op:"write",value:{notificationResult:reply.result||reply.error?.data?.reason,rules}}));return;}'
+            'const report=JSON.stringify({op:"write",value:{notificationResult:reply.result||reply.error?.data?.reason,rules}});'
+            'for(let i=0;i<24;i++){if(JSON.parse(await api.moonSettings.postMessage(report)).ok)return;'
+            'await new Promise(resolve=>setTimeout(resolve,37));}'
+            'throw new Error("Notification fixture could not save its report");}'
             'if(options?.autoplayMode){const reply=await call("siteSettings.autoplay.set",{origin:options.origin,mode:options.autoplayMode});'
             'const autoplayResult=reply.result===true?"saved":reply.error?.data?.reason||"unexpected";'
             'const rules=(await call("siteSettings.autoplay.get")).result?.rules;'
@@ -4227,12 +4230,25 @@ def run_win32(exe, base, root):
                     config=profile/f'extension-{sha256(b"moon.history-fixture").hexdigest()}.json'
                     pending=config.with_suffix(".notification-signal")
                     pending.write_text(json.dumps({"notification":{"origin":base+"/ignored","mode":mode}}),encoding="utf-8")
+                    before=pending.stat()
                     pending.replace(config)
                     set_control(edit,"extension://moon.history-fixture/history.html")
                     user.PostMessageW(edit,0x0100,0x0D,1)
-                    result=wait_for(lambda: (value:=read_settings(config)).get("notificationResult") and value,
-                                    f"Setting notification mode {mode} did not complete")
-                    if result["notificationResult"]!={"origin":base,"mode":mode} or result["rules"]!=expected:
+                    def notification_report():
+                        try:
+                            current=config.stat()
+                        except (FileNotFoundError,PermissionError):
+                            return None
+                        # Poll metadata until the browser publishes a new file.
+                        if (current.st_mtime_ns,current.st_size)==(before.st_mtime_ns,before.st_size):
+                            return None
+                        value=read_settings(config)
+                        return value if value.get("notificationResult") or value.get("error") else None
+                    try:
+                        result=wait_for(notification_report,f"Setting notification mode {mode} did not complete")
+                    except RuntimeError as error:
+                        raise RuntimeError(f"{error}: address={read_address()}, fixture={read_settings(config)}") from error
+                    if result.get("notificationResult")!={"origin":base,"mode":mode} or result.get("rules")!=expected:
                         raise RuntimeError(f"Unexpected notification rule: {result}")
 
                 notification_setting("block",[{"origin":base,"mode":"block"}])
