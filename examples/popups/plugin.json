@@ -1,13 +1,13 @@
 {
   "id": "moon.popups",
   "name": "站点设置",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonPopups.exe",
   "settingsPage": "popups.html",
   "contributes": {
-    "settings": {"section": "privacy", "title": "站点设置", "description": "管理网站通知、弹窗、自动播放、静音和页面缩放。"},
+    "settings": {"section": "privacy", "title": "站点设置", "description": "管理网站过滤、通知、弹窗、自动播放、静音和页面缩放。"},
     "commands": [
       { "id": "open", "label": "站点设置", "menu": "privacy", "siteMenu": true },
       { "id": "sound", "label": "切换网站静音", "siteMenu": true }

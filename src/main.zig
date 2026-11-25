@@ -2478,6 +2478,37 @@ export fn moon_site_settings_open_tool(panel: u64, owner: [*c]const u8, revision
     return true;
 }
 
+export fn moon_site_settings_set_filtering(panel: u64, owner: [*c]const u8, revision: u64, enabled: bool) c_int {
+    return @intFromEnum(setBoundSiteFiltering(panel,slice(owner),revision,enabled));
+}
+
+fn setBoundSiteFiltering(panel: u64, owner: []const u8, revision: u64, enabled: bool) sdk.SiteFilteringResult {
+    const bound = boundSitePage(panel,owner) orelse return .unavailable;
+    if (bound.revision!=revision) return .unavailable;
+    const origin = popups.origin(slice(&tabs[bound.index].url)) orelse return .unavailable;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const before = (network.boundSite(allocator,slice(&origin)) catch return .failed) orelse return .unavailable;
+    if (before.info.state==.inherited) return .inherited;
+    if ((before.info.state==.filtering)==enabled) return .applied;
+    if (!enabled) {
+        var prompt: [620]u8 = undefined;
+        const message = std.fmt.bufPrintSentinel(&prompt,"暂停 {s} 及其子域的网页过滤？这些网站将可以加载原先被拦截的广告和跟踪资源。",.{before.info.host},0) catch return .failed;
+        if (!native.moon_shell_confirm("暂停网站过滤？",message.ptr)) return .cancelled;
+        const confirmed = boundSitePage(panel,owner) orelse return .unavailable;
+        if (confirmed.revision!=revision) return .unavailable;
+        const after = (network.boundSite(allocator,slice(&origin)) catch return .failed) orelse return .unavailable;
+        if (!equals(after.owner,before.owner) or after.info.state!=before.info.state) return .unavailable;
+    }
+    network.setSite(allocator,before.owner,.{ .host=before.info.host,.enabled=enabled }) catch |err| return switch (err) {
+        error.NotSelected => .unavailable,
+        error.LimitExceeded => .limitReached,
+        else => .failed,
+    };
+    return .applied;
+}
+
 export fn moon_autoplay_rules_active() bool {
     return !stopped and autoplay.hasRules() and plugins.systemEnabled(.@"siteSettings.autoplay");
 }

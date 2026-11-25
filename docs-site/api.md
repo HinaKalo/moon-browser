@@ -66,6 +66,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteSettings.sound.toggle` | `siteSettings.sound` | 用户在网页触发命令时传入 `{}`。目标由浏览器绑定到触发命令的活动网页。返回 `muted`、`unmuted`、`limitReached` 或 `unavailable`。 |
 | `siteSettings.zoom.get` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ query?, offset? }`。返回 `{ currentOrigin, currentPercent, levels, rules, previous, next }`。分页偏移为空时表示该方向没有更多页面。 |
 | `siteSettings.current` / `siteSettings.openTool` | `popups.manage` | 活动插件页读取绑定站点的规则和可用工具，或传入 `{ revision, tool }` 打开原网页、站点数据或控制台。参见[站点设置](./popups)。 |
+| `siteSettings.setFiltering` | `popups.manage` | 活动设置页传入 `{ revision, enabled }`。操作只影响绑定网页所在域名的例外，暂停需要用户确认。返回 `applied`、`cancelled`、`unavailable`、`inherited`、`limitReached` 或 `failed`。 |
 | `siteSettings.zoom.set` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ origin, percent }`，比例取自 `levels`。返回规范化后的规则。设为 100 会删除该来源的例外。 |
 | `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
 | `ui.settings.list` | `ui.settings` | 普通窗口的活动插件页传入 `{ offset? }`，默认从 0 开始。返回 `{ entries, next }`，每页最多 12 条。入口包含 `id`、`section`、`title` 和 `description`。有后续条目时，把 `next` 传作下一次的 `offset`。 |

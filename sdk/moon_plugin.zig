@@ -151,6 +151,12 @@ pub const NotificationSettings = struct { currentOrigin: ?[]const u8, rules: []c
 pub const SiteSoundRule = struct { origin: []const u8, muted: bool };
 pub const SiteSoundSettings = struct { currentOrigin: ?[]const u8, muted: []const []const u8 };
 pub const SiteTool = enum(c_uint) { page, data, console };
+pub const SiteFiltering = struct {
+    host: []const u8,
+    state: enum { filtering, paused, inherited },
+    pausedBy: ?[]const u8 = null,
+};
+pub const SiteFilteringResult = enum(c_int) { applied, cancelled, unavailable, inherited, limitReached, failed };
 pub const SiteOverview = struct {
     origin: ?[]const u8 = null,
     revision: u64 = 0,
@@ -160,6 +166,7 @@ pub const SiteOverview = struct {
     muted: ?bool = null,
     zoom: ?u16 = null,
     notifications: ?NotificationMode = null,
+    filtering: ?SiteFiltering = null,
 };
 pub const SiteSoundResult = enum(c_uint) { unavailable, muted, unmuted, limitReached };
 pub const PopupNotice = struct { id: u64, count: u32, targetOrigin: []const u8 };
@@ -413,6 +420,7 @@ pub const Method = enum {
     @"popups.openBlocked",
     @"siteSettings.current",
     @"siteSettings.openTool",
+    @"siteSettings.setFiltering",
     @"siteSettings.autoplay.get",
     @"siteSettings.autoplay.set",
     @"siteSettings.notifications.get",

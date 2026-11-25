@@ -131,6 +131,36 @@ pub fn status(alloc: std.mem.Allocator, id: []const u8) !sdk.NetworkFilterStatus
     };
 }
 
+pub fn boundSite(alloc: std.mem.Allocator, origin: []const u8) !?struct { owner: []const u8, info: sdk.SiteFiltering } {
+    const source = selected orelse return null;
+    if (!active) return null;
+    const uri = std.Uri.parse(origin) catch return null;
+    const component = uri.host orelse return null;
+    const raw = try component.toRawMaybeAlloc(alloc);
+    const hostname = if (std.mem.endsWith(u8,raw,".")) raw[0..raw.len-1] else raw;
+    const host = try alloc.dupe(u8,hostname);
+    _ = std.ascii.lowerString(host,host);
+    if (!validHost(host)) return null;
+    const value = try settings.read(alloc,source.id);
+    const paused = try exceptions(alloc,value);
+    var exact = false;
+    var ancestor: ?[]const u8 = null;
+    for (paused) |candidate| {
+        if (std.mem.eql(u8,host,candidate)) exact=true;
+        if (host.len<=candidate.len or !std.mem.endsWith(u8,host,candidate)) continue;
+        if (host[host.len-candidate.len-1]!='.') continue;
+        if (ancestor==null or candidate.len>ancestor.?.len) ancestor=candidate;
+    }
+    return .{
+        .owner=try alloc.dupe(u8,source.id),
+        .info=.{
+            .host=host,
+            .state=if (ancestor!=null) .inherited else if (exact) .paused else .filtering,
+            .pausedBy=ancestor,
+        },
+    };
+}
+
 pub fn setSite(alloc: std.mem.Allocator, id: []const u8, site: sdk.NetworkFilterSite) !void {
     if (!isOwner(id)) return error.NotSelected;
     const host = try alloc.dupe(u8,std.mem.trim(u8,site.host," \t"));

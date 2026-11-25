@@ -54,6 +54,7 @@ class Fixture(BaseHTTPRequestHandler):
     seen_blocked_request = Event()
     seen_filter_proof = Event()
     seen_allowed_request = Event()
+    filter_control_reports = {}
     filter_probe = False
     slow_download_release = Event()
     change_site_data_source = Event()
@@ -177,8 +178,12 @@ class Fixture(BaseHTTPRequestHandler):
             self.seen_extension_network.set()
             data, content_type = b"unexpected", "text/plain"
         elif path.startswith("/moon-filter-probe/blocked"):
-            (self.seen_allowed_request if "?allow=1" in self.path else self.seen_blocked_request).set()
+            if not urlsplit(self.path).query.startswith("control="):
+                (self.seen_allowed_request if "?allow=1" in self.path else self.seen_blocked_request).set()
             data, content_type = b"", "application/javascript"
+        elif path.startswith("/filter-control-result/"):
+            type(self).filter_control_reports[path.rsplit("/",1)[-1]]=urlsplit(self.path).query
+            data, content_type = b"ok", "text/plain"
         elif path == "/moon-filter-probe/passed":
             self.seen_filter_proof.set()
             data, content_type = b"ok", "text/plain"
@@ -406,6 +411,13 @@ class Fixture(BaseHTTPRequestHandler):
                 )
             if name == "filter-allowed":
                 demo = '<script>fetch("/moon-filter-probe/blocked-fetch?allow=1");</script>'
+            if name.startswith("filter-control-"):
+                token=json.dumps(name.removeprefix("filter-control-"))
+                demo=('<script>(async()=>{'
+                      f'const token={token};let allowed=false;'
+                      'try{allowed=(await fetch("/moon-filter-probe/blocked?control="+token,{cache:"no-store"})).ok;}catch{}'
+                      'await fetch("/filter-control-result/"+token+"?"+(allowed?"allowed":"blocked"),{cache:"no-store"});'
+                      '})();</script>')
             if name == "site-data-contract":
                 demo = (
                     '<script>localStorage.setItem("moon-local","local-value");'
@@ -903,6 +915,8 @@ def run_win32(exe, base, root):
     sound_settings = "siteSettings.sound" in popup_manifest.get("permissions",[])
     zoom_settings = "siteSettings.zoom" in popup_manifest.get("permissions",[])
     site_overview = popups.exists() and 'siteSettings.current' in popups.with_name("popups.html").read_text(encoding="utf-8")
+    site_filter_controls = blocker.exists() and site_overview and 'siteSettings.setFiltering' in (
+        popups.with_name("popups.html").read_text(encoding="utf-8"))
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     reading_manifest = json.loads(reading.with_name("plugin.json").read_text(encoding="utf-8")) if reading.exists() else {}
     reader_page = reading.with_name("reader.html")
@@ -942,6 +956,7 @@ def run_win32(exe, base, root):
              "popups_manage": popups.exists(), "site_settings_autoplay": autoplay_settings, "site_settings_sound": sound_settings,
              "site_settings_notifications": notification_settings},
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
+            *([{"id":"moon.filter-control-fixture","enabled":True,"tabs_read":False,"popups_manage":True}] if site_filter_controls else []),
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True,
              "downloads_open": download_open},
@@ -1122,6 +1137,57 @@ def run_win32(exe, base, root):
 })();</script>
 """
         (fixture/"popups.html").write_text(page.replace("</html>",contract.replace("SITE_ORIGIN",json.dumps(base))+"</html>"),encoding="utf-8")
+    if site_filter_controls:
+        fixture=profile/"plugins"/"filter-control-fixture"
+        fixture.mkdir(parents=True)
+        shutil.copy2(popups,fixture/popups.name)
+        (fixture/"plugin.json").write_text(json.dumps({
+            "id":"moon.filter-control-fixture","name":"Site filtering fixture","version":"1.0.0",
+            "apiVersion":2,"runtime":"native","entry":popups.name,"settingsPage":"popups.html",
+            "permissions":["popups.manage"],
+            "contributes":{"commands":[{"id":"open","label":"验收网站过滤"}]},
+        }),encoding="utf-8")
+        contract = r"""
+<script>
+(() => {
+    const channel = window.webkit.messageHandlers.moonSettings;
+    const emit = value => channel.postMessage(JSON.stringify({op:"write",value}));
+    let running = false;
+    setInterval(async () => {
+        if (running || document.hidden) return;
+        running = true;
+        try {
+            const {value} = JSON.parse(await channel.postMessage(JSON.stringify({op:"read"})));
+            if (!value?.action) return;
+            await refreshOverview();
+            if (!overview?.revision || overview.filtering?.host !== value.host)
+                throw Error("site filter controls were not bound to the current website");
+            if (await host("siteSettings.setFiltering",{revision:overview.revision+1,enabled:true}) !== "unavailable")
+                throw Error("site filtering accepted a stale revision");
+            const initial = overview.filtering.state;
+            let feedback = "";
+            if (value.action === "toggle") {
+                if (filterToggle.hidden ||
+                    filterToggle.textContent !== (initial === "filtering" ? "暂停此网站过滤" : "恢复此网站过滤"))
+                    throw Error("filter button disagreed with site state");
+                await filterToggle.onclick();
+                feedback = filterStatus.textContent;
+            } else if (value.action === "inherited") {
+                if (initial !== "inherited" || overview.filtering.pausedBy !== "localhost" || !filterToggle.hidden ||
+                    !get("site-filter-detail").textContent.includes("localhost") ||
+                    await host("siteSettings.setFiltering",{revision:overview.revision,enabled:true}) !== "inherited")
+                    throw Error("the child site overrode or did not show its inherited exception");
+            }
+            await emit({done:true,initial,state:overview?.filtering?.state,feedback});
+        } catch (error) {
+            await emit({error:String(error)});
+        } finally { running = false; }
+    },100);
+})();
+</script>
+"""
+        page=popups.with_name("popups.html").read_text(encoding="utf-8")
+        (fixture/"popups.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
     if history.exists():
         fixture = profile / "plugins" / "history-contract"
         fixture.mkdir(parents=True)
@@ -1306,7 +1372,8 @@ def run_win32(exe, base, root):
         manifest = json.loads((blocker.parent / "plugin.json").read_text(encoding="utf-8"))
         manifest["id"] = "moon.filter-settings-fixture"
         (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
-        (fixture / "strict.rules").write_text("@127.0.0.1\t/moon-filter-probe/blocked\n", encoding="utf-8")
+        hosts=("127.0.0.1","localhost","moon-child.localhost") if site_filter_controls else ("127.0.0.1",)
+        (fixture / "strict.rules").write_text("".join(f"@{host}\t/moon-filter-probe/blocked\n" for host in hosts), encoding="utf-8")
         html = (blocker.parent / "filter.html").read_text(encoding="utf-8")
         contract = (
             '<script>(async()=>{const siteInput=document.getElementById("site");'
@@ -3082,6 +3149,60 @@ def run_win32(exe, base, root):
             if not Fixture.seen_allowed_request.wait(12):
                 raise RuntimeError("The new site exception did not resume requests")
             print("filter_site_exception=ok", flush=True)
+            if site_filter_controls:
+                control_config=profile/f'extension-{sha256(b"moon.filter-control-fixture").hexdigest()}.json'
+
+                def run_site_filter(host, action, answer=None):
+                    invoke("验收网站过滤")
+                    wait_for(lambda: read_address()=="extension://moon.filter-control-fixture/popups.html",
+                             "Site filter controls did not open")
+                    pending=control_config.with_suffix(".filter-signal")
+                    pending.write_text(json.dumps({"action":action,"host":host}),encoding="utf-8")
+                    pending.replace(control_config)
+                    if answer is not None:
+                        question=wait_for(lambda: owned_window("#32770","暂停网站过滤？"),
+                                          "Pausing site filtering did not ask for confirmation")
+                        user.SendMessageW(question,0x0111,answer,0)
+                    return wait_for(lambda: (value:=read_settings(control_config)) and
+                                    (value.get("done") or value.get("error")) and value,
+                                    "Site filtering controls did not finish")
+
+                def toggle_site_filter(expected_before, expected_after, answer=None, host="127.0.0.1"):
+                    result=run_site_filter(host,"toggle",answer)
+                    confirmation="已取消。" if answer==7 else "已保存。"
+                    if (result.get("initial")!=expected_before or result.get("state")!=expected_after or
+                        not result.get("feedback","").startswith(confirmation)):
+                        raise RuntimeError(f"Site filter controls reported unexpected result: {result}")
+
+                def verify_site_filter(stage, expected, host="127.0.0.1"):
+                    address=base.replace("127.0.0.1",host)+"/page/filter-control-"+stage
+                    set_control(edit,address)
+                    user.PostMessageW(edit,0x0100,0x0D,1)
+                    observed=wait_for(lambda: Fixture.filter_control_reports.get(stage),
+                                      f"WebKit did not report the {stage} request")
+                    if observed!=expected:
+                        raise RuntimeError(f"The {stage} WebKit request was {observed}, expected {expected}")
+                    wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(address,)),
+                             "The source web page did not finish loading")
+
+                toggle_site_filter("paused","filtering")
+                verify_site_filter("resumed","blocked")
+                toggle_site_filter("filtering","filtering",answer=7)
+                verify_site_filter("cancelled","blocked")
+                toggle_site_filter("filtering","paused",answer=6)
+                verify_site_filter("paused","allowed")
+                verify_site_filter("parent-start","blocked","localhost")
+                toggle_site_filter("filtering","paused",answer=6,host="localhost")
+                verify_site_filter("child-paused","allowed","moon-child.localhost")
+                inherited=run_site_filter("moon-child.localhost","inherited")
+                if inherited.get("state")!="inherited" or read_settings(config).get("pausedSites")!=["127.0.0.1","localhost"]:
+                    raise RuntimeError(f"The child site changed its parent rule: {inherited}")
+                verify_site_filter("parent-paused","allowed","localhost")
+                toggle_site_filter("paused","filtering",host="localhost")
+                verify_site_filter("child-resumed","blocked","moon-child.localhost")
+                if read_settings(config).get("pausedSites")!=["127.0.0.1"]:
+                    raise RuntimeError("Site settings updated a different filter provider or domain")
+                print("site_filter_controls=ok native_consent=ok stale_revision=ok net_block_and_pause=ok selected_plugin=ok parent_rule=ok",flush=True)
         if bookmarks.exists():
             if blocker.exists():
                 wait_for(lambda: history_rows("SELECT title FROM visits WHERE url=?",(base + "/page/filter-allowed",)),

@@ -42,6 +42,9 @@
   #zoom-pages { justify-content:flex-end; margin-top:12px; }
   #site-tools,#site-summary { justify-content:flex-start; margin-top:12px; }
   #site-summary button { background:var(--soft); border-color:transparent; }
+  #site-filter { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+  #site-filter-title { font-weight:600; }
+  #site-filter-status:not(:empty) { margin-top:6px; color:var(--accent); }
   #site-tool-status:not(:empty) { margin-top:10px; color:var(--muted); }
   #notification-results { margin-top:14px; }
   #notification-results:empty+.empty { display:block; }
@@ -61,6 +64,13 @@
       <button type="button" id="current-sound" hidden></button>
       <button type="button" id="current-zoom" hidden></button>
       <button type="button" id="current-notifications" hidden></button>
+    </div>
+    <div id="site-filter" hidden>
+      <div class="row">
+        <div><p id="site-filter-title">网页过滤</p><p class="policy" id="site-filter-detail"></p></div>
+        <button type="button" id="site-filter-toggle" hidden></button>
+      </div>
+      <p id="site-filter-status" role="status"></p>
     </div>
     <div class="row" id="site-tools" role="group" aria-label="当前网页工具" hidden>
       <button type="button" data-tool="page">返回网页</button>
@@ -154,6 +164,8 @@
 <script>
   const get = id => document.getElementById(id);
   const tools = [...document.querySelectorAll('[data-tool]')];
+  const filterToggle = get('site-filter-toggle'), filterStatus = get('site-filter-status');
+  let filterBusy = false;
   let overview, overviewRevision=0;
   const input = get('origin'), mode = get('mode'), rows = get('results'), status = get('status');
   const labels = {allow:'允许自动弹窗', block:'阻止新窗口'};
@@ -202,7 +214,35 @@
     if (!playback.hidden) playback.textContent='自动播放 · '+(autoplayLabels[site.autoplay] || '默认规则');
     if (!sound.hidden) sound.textContent=site.muted ? '取消网站静音' : '静音此网站';
     if (!zoom.hidden) zoom.textContent='缩放 · '+site.zoom+'%';
+    const filtering=site?.filtering;
+    get('site-filter').hidden=!filtering;
+    if (filtering) {
+      const filtered=filtering.state==='filtering';
+      const inherited=filtering.state==='inherited';
+      get('site-filter-detail').textContent=inherited ? '继承 '+filtering.pausedBy+' 的暂停规则' :
+        filtered ? '正在过滤 '+filtering.host+' 的广告和跟踪资源' : '已暂停 '+filtering.host+' 及其子域的过滤';
+      filterToggle.hidden=inherited;
+      filterToggle.textContent=filtered ? '暂停此网站过滤' : '恢复此网站过滤';
+    }
   }
+  filterToggle.onclick=async ()=>{
+    const site=overview, state=site?.filtering?.state;
+    if (!site?.revision || !state || state==='inherited' || filterBusy) return;
+    filterBusy=filterToggle.disabled=true;
+    filterStatus.textContent='';
+    try {
+      const outcome=await host('siteSettings.setFiltering',{revision:site.revision,enabled:state==='paused'});
+      if (outcome==='applied') filterStatus.textContent='已保存。返回并刷新网页以应用完整规则。';
+      else if (outcome==='cancelled') filterStatus.textContent='已取消。';
+      else if (outcome==='limitReached') filterStatus.textContent='暂停列表已满，可在「管理网页过滤」移除规则。';
+      else filterStatus.textContent='无法修改此网站的过滤。请重新打开站点设置。';
+    } catch {
+      filterStatus.textContent='无法保存网站过滤规则。';
+    } finally {
+      await refreshOverview();
+      filterBusy=filterToggle.disabled=false;
+    }
+  };
   for (const button of tools) button.onclick=async () => {
     if (!overview?.revision) return;
     const result=get('site-tool-status');
@@ -496,6 +536,7 @@
   zoomPrev.onclick=()=>{ if (zoomBack!==null) refreshZoom(zoomBack); };
   zoomNext.onclick=()=>{ if (zoomMore!==null) refreshZoom(zoomMore); };
   function load() {
+    filterStatus.textContent='';
     refresh().catch(error => { status.textContent = messages[error.message] || '暂时无法读取网站设置。'; });
     refreshAutoplay().catch(() => { get('autoplay').hidden = true; });
     refreshSound().catch(() => { get('sound').hidden = true; });

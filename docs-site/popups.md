@@ -6,6 +6,12 @@
 
 具备 `popups.manage` 权限的活动插件页可调用 `siteSettings.current({})` 获取绑定站点的 `origin`、`revision` 和可用的 `tools`。通知、自动播放、声音和缩放分别按对应权限返回。通过 `siteSettings.openTool({ revision, tool })` 可请求 `page`、`data` 或 `console`，返回请求是否已受理。数据和控制台需要目标系统插件保持启用并获授权。
 
+## 网页过滤
+
+从 0.1.0-preview.78 起，启用网页过滤插件后，可从地址栏左侧的「站点设置」查看当前网站的过滤状态。点「暂停此网站过滤」并确认，可暂停该域名及其子域的过滤。点「恢复此网站过滤」可移除该域名的例外。刷新网页后应用完整规则。继承的父域规则会显示来源，可在「管理网页过滤」修改。
+
+`siteSettings.current` 的 `filtering` 字段返回 `{ host, state, pausedBy }`，状态为 `filtering`、`paused` 或 `inherited`。未选中可用的规则插件时返回 `null`。活动设置页传入 `{ revision, enabled }` 调用 `siteSettings.setFiltering`。宿主从原网页获取网站并更新当前规则插件的例外。请求需要 `popups.manage`，暂停时还需要原生确认。
+
 ## 网站通知
 
 从 0.1.0-preview.77 起，在支持 Web Notifications 的网页上点击订阅后，Moon Browser 会询问是否允许网站通知。授权按协议、主机和端口保存。「网站通知」可改为阻止或重置为询问。隐私窗口禁用网站通知。不同来源的嵌入页面无法借用顶层网页的授权。

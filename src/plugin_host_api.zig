@@ -67,7 +67,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
         .@"page.saveHtml" => .@"page.save",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
-        .@"siteSettings.current", .@"siteSettings.openTool" => .@"popups.manage",
+        .@"siteSettings.current", .@"siteSettings.openTool", .@"siteSettings.setFiltering" => .@"popups.manage",
         .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => .@"siteSettings.autoplay",
         .@"siteSettings.notifications.get", .@"siteSettings.notifications.set" => .@"siteSettings.notifications",
         .@"siteSettings.sound.get", .@"siteSettings.sound.set", .@"siteSettings.sound.toggle" => .@"siteSettings.sound",
@@ -224,7 +224,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
-        .@"siteSettings.current", .@"siteSettings.openTool" => {},
+        .@"siteSettings.current", .@"siteSettings.openTool", .@"siteSettings.setFiltering" => {},
         .@"siteSettings.notifications.get", .@"siteSettings.notifications.set" => {},
         .@"siteSettings.sound.get", .@"siteSettings.sound.set" => {},
         .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => {},
@@ -436,6 +436,9 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                     native.moon_engine_notifications_available() and native.moon_notification_rules_enabled()) notifications.mode(origin) else null,
             };
             const tool_mask = native.moon_site_settings_tools(context.target_tab_id,owner.ptr,&current.revision);
+            if (current.revision!=0) {
+                if (network.boundSite(allocator,origin) catch null) |filter| current.filtering=filter.info;
+            }
             var tools: [std.enums.values(sdk.SiteTool).len]sdk.SiteTool = undefined;
             var count: usize = 0;
             for (std.enums.values(sdk.SiteTool),0..) |tool,index| {
@@ -452,6 +455,14 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                 return sdk.failure(output,id,.InvalidParams);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             return sdk.result(output,id,native.moon_site_settings_open_tool(context.target_tab_id,owner.ptr,value.revision,@intFromEnum(value.tool)));
+        },
+        .@"siteSettings.setFiltering" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const value = decode(struct { revision: u64, enabled: bool },allocator,params) catch
+                return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const applied = native.moon_site_settings_set_filtering(context.target_tab_id,owner.ptr,value.revision,value.enabled);
+            return sdk.result(output,id,std.enums.fromInt(sdk.SiteFilteringResult,applied) orelse .failed);
         },
         .@"popups.setRule" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
