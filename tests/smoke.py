@@ -25,8 +25,10 @@ from zipfile import ZipFile
 PAYLOAD = b"Moon Browser download fixture\n"
 # Generated AAC-LC 440 Hz track for WebKit's MP4 decoder, with no video.
 AUTOPLAY_AUDIO_MP4 = Path(__file__).with_name("autoplay-audible.m4a")
-# Generated black 32x32 H.264 baseline video, one second at 10 fps, without audio.
+# Generated 320x180 H.264 baseline video at 15 fps, without audio.
 AUTOPLAY_VIDEO = Path(__file__).with_name("autoplay-silent.mp4")
+# Generated H.264 video with a quiet AAC audio track, for background playback.
+MEDIA_VIDEO = Path(__file__).with_name("media-control.mp4")
 _media_cycle = struct.pack("<200h",*(round(160*sin(tau*440*i/8000)) for i in range(200)))
 _media_pcm = _media_cycle * 480
 MEDIA_AUDIO = struct.pack("<4sI4s4sIHHIIHH4sI",b"RIFF",36+len(_media_pcm),b"WAVE",b"fmt ",16,
@@ -260,13 +262,14 @@ class Fixture(BaseHTTPRequestHandler):
                     'notice.onshow=()=>report("show","yes");notice.onclose=()=>report("close","yes");}};'
                     '</script>').encode()
             content_type = "text/html"
-        elif path in ("/autoplay.wav", "/autoplay.mp4", "/autoplay.m4a", "/media-control.wav"):
+        elif path in ("/autoplay.wav", "/autoplay.mp4", "/autoplay.m4a", "/media-control.wav", "/media-control.mp4"):
             if path.endswith(".wav"):
                 data, content_type = MEDIA_AUDIO, "audio/wav"
             elif path.endswith(".m4a"):
                 data, content_type = AUTOPLAY_AUDIO_MP4.read_bytes(), "audio/mp4"
             else:
-                data, content_type = AUTOPLAY_VIDEO.read_bytes(), "video/mp4"
+                clip=MEDIA_VIDEO if path=="/media-control.mp4" else AUTOPLAY_VIDEO
+                data, content_type = clip.read_bytes(), "video/mp4"
             first, last = 0, len(data)-1
             requested = re.fullmatch(r"bytes=(\d+)-(\d*)",self.headers.get("Range",""))
             if requested:
@@ -419,15 +422,17 @@ class Fixture(BaseHTTPRequestHandler):
                 demo = '<script>fetch("/moon-filter-probe/blocked-fetch?allow=1");</script>'
             if name.startswith("media-control-"):
                 stage=name.removeprefix("media-control-")
-                source="/media-control.wav" if stage=="wav" else "/autoplay.m4a"
-                demo=(f'<button style="position:fixed;top:0;left:0;padding:10px">Play fixture</button>'
-                      f'<audio loop src="{source}"></audio><script>'
-                      f'const stage={json.dumps(stage)}, media=document.querySelector("audio");'
+                tag="video" if stage=="video" else "audio"
+                source={"wav":"/media-control.wav","aac":"/autoplay.m4a","video":"/media-control.mp4"}[stage]
+                demo=(f'<button style="position:fixed;z-index:1;top:0;left:0;padding:10px">Play fixture</button>'
+                      f'<{tag} loop playsinline preload="none" src="{source}"></{tag}><script>'
+                      f'const stage={json.dumps(stage)}, media=document.querySelector("{tag}");'
                       'let count=0;'
                       'const report=(event,detail)=>fetch("/media-control-report/"+stage+"-"+event+"?"+detail,{cache:"no-store"});'
                       'media.onplaying=()=>report("playing",++count);'
                       'media.onpause=()=>report("pause","yes");'
                       'document.querySelector("button").onclick=()=>media.play().catch(error=>report("error",error.name));'
+                      'report("ready","yes");'
                       '</script>')
             if name.startswith("filter-control-"):
                 token=json.dumps(name.removeprefix("filter-control-"))
@@ -1222,7 +1227,7 @@ def run_win32(exe, base, root):
             "contributes":{"commands":[{"id":"open","label":"验收媒体控件"}]},
         }),encoding="utf-8")
         contract=r"""
-<script>(async()=>{
+<script>(()=>{
     const channel=window.webkit.messageHandlers.moonSettings;
     const emit=value=>channel.postMessage(JSON.stringify({op:"write",value}));
     const read=async()=>JSON.parse(await channel.postMessage('{"op":"read"}')).value;
@@ -1234,12 +1239,18 @@ def run_win32(exe, base, root):
         }
         throw Error(name);
     };
-    try {
+    let running=false;
+    async function verify() {
+      if (running || document.hidden) return;
+      running=true;
+      try {
         const options=await read();
+        if(!options?.title)return;
         const row=await wait(()=>[...rendered.values()].find(row=>row.tab.title.includes(options.title) && row.tab.origin===options.origin),
                              "playing tab");
         const {id,navigation}=row.tab;
-        if(!row.tab.audio || row.tab.video || row.tab.paused || row.play.hidden)throw Error("engine media state");
+        const correctKind=()=>row.tab.audio && row.tab.video===Boolean(options.video);
+        if(!correctKind() || row.tab.paused || row.play.hidden)throw Error("engine media state");
         if(await host("media.control",{id,navigation:navigation+1,action:"mute"})!=="unavailable")
             throw Error("stale media target");
         row.mute.focus();row.mute.click();
@@ -1250,12 +1261,16 @@ def run_win32(exe, base, root):
         row.play.click();
         await wait(()=>row.tab.paused && !row.tab.pending && row.play.textContent==="继续播放","pause");
         row.play.click();
-        await wait(()=>!row.tab.paused && !row.tab.pending && row.tab.audio && row.tab.playbackResult==="resumed",
+        await wait(()=>!row.tab.paused && !row.tab.pending && correctKind() && row.tab.playbackResult==="resumed",
                    "resume");
         await emit({passed:true,id,navigation});
         await wait(async()=> (await read())?.focus,"await focus signal");
         row.focus.click();
-    } catch(error){await emit({error:String(error),tabs:[...rendered.values()].map(row=>row.tab)});}
+      } catch(error){await emit({error:String(error),tabs:[...rendered.values()].map(row=>row.tab)});}
+      finally { running=false; }
+    }
+    setInterval(verify,100);
+    verify();
 })();</script>
 """
         page=media_plugin.with_name("media.html").read_text(encoding="utf-8")
@@ -3015,9 +3030,53 @@ def run_win32(exe, base, root):
                     wait_for(lambda: not viewport_bar(),"Responsive preview leaked to another tab")
                     invoke("Moon fixture chrome-window")
                     wait_for(lambda: viewport_bar()==bar and dimensions()==(420,360),"Responsive preview did not follow its tab")
+                    preset=user.GetDlgItem(bar,1317)
+                    if preset:
+                        fit=user.GetDlgItem(bar,1318)
+                        if user.SendMessageW(preset,0x0146,0,0)!=5:  # CB_GETCOUNT
+                            raise RuntimeError("The viewport preset selector is incomplete")
+                        user.SetWindowPos(frame,None,window_rect.left,window_rect.top,px(700),px(375),0x0014)
+                        user.SendMessageW(preset,0x014E,3,0)  # CB_SETCURSEL, tablet
+                        user.SendMessageW(bar,0x0111,(1<<16)|1317,preset)  # CBN_SELCHANGE
+                        wait_for(lambda: read_control(width)=="768" and read_control(height)=="1024",
+                                 "Selecting the tablet preset did not update the dimensions")
+                        user.PostMessageW(bar,0x0111,1318,0)
+
+                        def fitted(expected):
+                            actual=dimensions()
+                            return len(actual)==2 and all(abs(a-b)<=3 for a,b in zip(actual,expected))
+
+                        try:
+                            wait_for(lambda: fitted((768,1024)) and Fixture.chrome_layout[4]==0,
+                                     "Fitting the tablet preview changed the CSS dimensions")
+                        except RuntimeError as error:
+                            raise RuntimeError(f"{error}: viewport {dimensions()}, {read_control(user.GetDlgItem(bar,1316))}") from error
+                        if "缩放" not in read_control(user.GetDlgItem(bar,1316)) or not read_control(fit).startswith("✓"):
+                            raise RuntimeError("The toolbar did not surface the preview scale")
+                        user.PostMessageW(bar,0x0111,1314,0)
+                        wait_for(lambda: fitted((1024,768)) and user.SendMessageW(preset,0x0147,0,0)==3,
+                                 "Rotating the tablet preview lost its preset or fitted dimensions")
+                        invoke("以手机尺寸预览")
+                        wait_for(lambda: viewport_bar()==bar and fitted((360,800)) and Fixture.chrome_layout[4]==1,
+                                 "The SDK phone preset did not apply to the existing responsive preview")
+                        set_control(width,"374")
+                        set_control(height,"510")
+                        user.PostMessageW(bar,0x0111,1313,0)
+                        wait_for(lambda: fitted((374,510)) and user.SendMessageW(preset,0x0147,0,0)==0,
+                                 "Manual dimensions did not return the preset selector to Custom")
+                        if Fixture.chrome_layout[0]!=baseline[0]:
+                            raise RuntimeError("Switching fitted sizes caused a webpage reload")
+                        user.SetWindowPos(frame,None,window_rect.left,window_rect.top,*large,0x0014)
                     user.PostMessageW(bar,0x0111,1315,0)
                     wait_for(lambda: not viewport_bar() and Fixture.chrome_layout[4]==0 and dimensions()[0]>480,
                              "Closing responsive preview did not restore the desktop viewport")
+                    if preset:
+                        rect=wt.RECT()
+                        user.GetClientRect(surface,ctypes.byref(rect))
+                        expected=round(rect.right*96/user.GetDpiForWindow(surface))
+                        wait_for(lambda: abs(dimensions()[0]-expected)<=2,
+                                 "The preview-only zoom leaked into the normal webpage")
+                        print("viewport_presets=ok native_preset=ok sdk_preset=ok fitted_css_dimensions=ok rotate=ok original_zoom=ok",flush=True)
                     print("responsive_viewport=ok css_breakpoint=ok native_edit=ok invalid_size=ok rotate=ok clamp=ok tab_isolation=ok inspector_window=ok",flush=True)
                 user.SetWindowPos(frame,None,window_rect.left,window_rect.top,
                     window_rect.right-window_rect.left,window_rect.bottom-window_rect.top,0x0014)
@@ -3276,41 +3335,49 @@ def run_win32(exe, base, root):
                     raise RuntimeError("Site settings updated a different filter provider or domain")
                 print("site_filter_controls=ok native_consent=ok stale_revision=ok net_block_and_pause=ok selected_plugin=ok parent_rule=ok",flush=True)
         if media_plugin.exists():
-            for stage in ("wav","aac"):
-                target=base+"/page/media-control-"+stage
-                set_control(edit,target)
+            def verify_media(stages):
+                for stage in stages:
+                    target=base+"/page/media-control-"+stage
+                    set_control(edit,target)
+                    user.PostMessageW(edit,0x0100,0x0D,1)
+                    wait_for(lambda: Fixture.media_reports.get(stage+"-ready")=="yes",
+                             f"Media fixture {stage} did not initialize")
+                    page_click(px(30),px(20))
+                    try:
+                        sample=wait_for(lambda: Fixture.media_reports.get(stage+"-playing") or Fixture.media_reports.get(stage+"-error"),
+                                        f"Media source {stage} did not report")
+                    except RuntimeError:
+                        if stage==stages[-1]: raise
+                        continue
+                    if sample=="1":
+                        break
+                else:
+                    raise RuntimeError(f"No test media source played: {Fixture.media_reports}")
+                invoke("打开媒体控件")
+                wait_for(lambda: read_address()=="extension://moon.media/media.html","The bundled media system plugin did not open")
+                config=profile/f'extension-{sha256(b"moon.media-fixture").hexdigest()}.json'
+                signal=config.with_suffix(".media-signal")
+                signal.write_text(json.dumps({"title":"media-control-"+stage,"origin":base,"video":stage=="video"}),encoding="utf-8")
+                signal.replace(config)
+                invoke("验收媒体控件")
+                wait_for(lambda: read_address()=="extension://moon.media-fixture/media.html","The media fixture panel did not open")
+                result=wait_for(lambda: (value:=read_settings(config)) and (value.get("passed") or value.get("error")) and value,
+                                f"The {stage} media controls did not report",20)
+                if not result.get("passed"):
+                    raise RuntimeError(f"Media controls failed: {result}")
+                wait_for(lambda: Fixture.media_reports.get(stage+"-pause")=="yes" and Fixture.media_reports.get(stage+"-playing")=="2",
+                         "Pause and resume did not affect the real HTML media element")
+                signal.write_text('{"focus":true}',encoding="utf-8")
+                signal.replace(config)
+                wait_for(lambda: read_address()==target,"The media focus action did not return to the original tab")
+                after=base+"/page/media-finished-"+stage
+                set_control(edit,after)
                 user.PostMessageW(edit,0x0100,0x0D,1)
-                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
-                         "Media fixture did not finish navigating")
-                page_click(px(30),px(20))
-                sample=wait_for(lambda: Fixture.media_reports.get(stage+"-playing") or Fixture.media_reports.get(stage+"-error"),
-                                f"Media source {stage} did not report")
-                if sample=="1":
-                    break
-            else:
-                raise RuntimeError(f"No test media source played: {Fixture.media_reports}")
-            invoke("打开媒体控件")
-            wait_for(lambda: read_address()=="extension://moon.media/media.html","The bundled media system plugin did not open")
-            config=profile/f'extension-{sha256(b"moon.media-fixture").hexdigest()}.json'
-            config.write_text(json.dumps({"title":"media-control-"+stage,"origin":base}),encoding="utf-8")
-            invoke("验收媒体控件")
-            wait_for(lambda: read_address()=="extension://moon.media-fixture/media.html","The media fixture panel did not open")
-            result=wait_for(lambda: (value:=read_settings(config)) and (value.get("passed") or value.get("error")) and value,
-                            "The media controls did not report",20)
-            if not result.get("passed"):
-                raise RuntimeError(f"Media controls failed: {result}")
-            wait_for(lambda: Fixture.media_reports.get(stage+"-pause")=="yes" and Fixture.media_reports.get(stage+"-playing")=="2",
-                     "Pause and resume did not affect the real HTML media element")
-            signal=config.with_suffix(".media-signal")
-            signal.write_text('{"focus":true}',encoding="utf-8")
-            signal.replace(config)
-            wait_for(lambda: read_address()==target,"The media focus action did not return to the original tab")
-            after=base+"/page/media-finished"
-            set_control(edit,after)
-            user.PostMessageW(edit,0x0100,0x0D,1)
-            wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(after,)),
-                     "Could not leave the test media page")
-            print(f"media_plugin=ok engine_media_state=ok source={stage} mute=ok pause=ok resume=ok source_focus=ok stale_navigation=ok",flush=True)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(after,)),
+                         "Could not leave the test media page")
+                print(f"media_plugin=ok engine_media_state=ok source={stage} mute=ok pause=ok resume=ok source_focus=ok stale_navigation=ok",flush=True)
+            verify_media(("wav","aac"))
+            verify_media(("video",))
         if bookmarks.exists():
             if blocker.exists():
                 wait_for(lambda: history_rows("SELECT title FROM visits WHERE url=?",(base + "/page/filter-allowed",)),

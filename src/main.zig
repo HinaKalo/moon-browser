@@ -1190,12 +1190,12 @@ export fn moon_devtools_open(panel: c_int, placement: c_int, tab_id: u64, naviga
     const view = devtoolsTarget(tab_id,navigation) orelse return false;
     return native.moon_engine_inspect(view,panel,placement);
 }
-export fn moon_devtools_viewport(owner: [*c]const u8, tab_id: u64, navigation: u64, width: c_uint, height: c_uint) c_int {
+export fn moon_devtools_viewport(owner: [*c]const u8, tab_id: u64, navigation: u64, width: c_uint, height: c_uint, fit: c_int) c_int {
     const view = devtoolsTarget(tab_id,navigation) orelse return @intFromEnum(sdk.ViewportResult.unavailable);
     const tab = &tabs[active];
     if (!moon_devtools_viewport_granted(owner) or (!native.moon_engine_viewport_active(view) and (tab.loading or !tab.loaded)))
         return @intFromEnum(sdk.ViewportResult.unavailable);
-    return native.moon_engine_viewport(view,owner,width,height);
+    return native.moon_engine_viewport(view,owner,width,height,fit);
 }
 
 export fn moon_devtools_viewport_granted(owner: [*c]const u8) bool {

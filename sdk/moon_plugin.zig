@@ -258,6 +258,8 @@ pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
 pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
 pub const InspectorPanel = enum(c_int) { inspector, console, resources, elements };
 pub const ViewportSize = struct { width: u16, height: u16 };
+pub const ViewportPreset = enum(c_uint) { compactPhone = 1, widePhone, tablet, desktop };
+pub const ViewportOptions = struct { size: ?ViewportSize = null, preset: ?ViewportPreset = null, fit: ?bool = null };
 pub const ViewportResult = enum(c_int) { enabled, disabled, unavailable };
 pub const HardReloadResult = enum(c_int) { started, unavailable, edited, resubmission };
 pub const InspectorPlacement = enum(c_int) { docked, window, preferred };

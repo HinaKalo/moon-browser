@@ -1264,14 +1264,21 @@ void moon_engine_find(MoonView *view, const char *query, bool backwards) {
 }
 void moon_engine_hide_find(MoonView *view) { wk.WKPageHideFindUI(view->page); }
 static void resize_view(MoonView *view, bool dpi_changed);
+static void set_page_zoom(MoonView *view,double factor) {
+    if (factor!=wk.WKPageGetPageZoomFactor(view->page)) wk.WKPageSetPageZoomFactor(view->page,factor);
+}
+
 void moon_engine_set_zoom(MoonView *view, unsigned percent) {
-    const double factor = percent / 100.0;
-    if (factor != wk.WKPageGetPageZoomFactor(view->page)) {
-        wk.WKPageSetPageZoomFactor(view->page,factor);
-        if (view->viewport.bar) resize_view(view,false);
+    if (view->viewport.bar) {
+        if (view->viewport.page_zoom==percent) return;
+        view->viewport.page_zoom=percent;
+        resize_view(view,false);
+    } else {
+        set_page_zoom(view,percent/100.0);
     }
 }
 unsigned moon_engine_zoom(MoonView *view) {
+    if (view->viewport.bar) return view->viewport.page_zoom;
     const double factor = wk.WKPageGetPageZoomFactor(view->page);
     return factor >= 0.1 && factor <= 10.0 ? (unsigned)(factor * 100.0 + 0.5) : 100;
 }
@@ -1293,14 +1300,26 @@ static void resize_view(MoonView *view, bool dpi_changed) {
     if (view->viewport.bar) {
         const int toolbar=moon_viewport_layout(&view->viewport,area.right);
         const int dpi=(int)GetDpiForWindow(view->surface);
-        const int scale=max(1,dpi*(int)moon_engine_zoom(view));
         const int pad=MulDiv(12,dpi,96);
-        const int width=max(1,min(MulDiv(view->viewport.width,scale,9600),area.right-2*pad));
-        const int height=max(1,min(MulDiv(view->viewport.height,scale,9600),area.bottom-toolbar-2*pad));
+        const int available_width=max(1,area.right-2*pad);
+        const int available_height=max(1,area.bottom-toolbar-2*pad);
+        const double dpr=max(1,dpi)/96.0;
+        const double preferred=view->viewport.page_zoom/100.0;
+        double factor=preferred;
+        if (view->viewport.fit) {
+            const double horizontal=available_width/(dpr*view->viewport.width);
+            const double vertical=available_height/(dpr*view->viewport.height);
+            factor=max(0.1,min(preferred,min(horizontal,vertical)));
+        }
+        set_page_zoom(view,factor);
+        const double scale=factor*dpr;
+        const int width=max(1,min((int)(view->viewport.width*scale+0.5),available_width));
+        const int height=max(1,min((int)(view->viewport.height*scale+0.5),available_height));
         const int x=(area.right-width)/2, y=max(toolbar,toolbar+(area.bottom-toolbar-height)/2);
         view->viewport.bounds=(RECT){x,y,x+width,y+height};
         MoveWindow(view->hwnd,x,y,width,height,TRUE);
-        moon_viewport_update(&view->viewport,MulDiv(width,9600,scale),MulDiv(height,9600,scale));
+        moon_viewport_update(&view->viewport,(unsigned)(width/scale+0.5),(unsigned)(height/scale+0.5),
+            (unsigned)(factor/preferred*100+0.5));
         InvalidateRect(view->surface,NULL,TRUE);
     } else {
         // WebKit reserves space for its attached sibling on WM_WINDOWPOSCHANGING.
@@ -1320,22 +1339,32 @@ void moon_engine_viewport_apply(MoonView *view, unsigned width, unsigned height)
     moon_viewport_set_size(&view->viewport,width,height);
     resize_view(view,false);
 }
+void moon_engine_viewport_fit(MoonView *view,bool fit) {
+    if (!view->viewport.bar || view->viewport.fit==fit) return;
+    view->viewport.fit=fit;
+    resize_view(view,false);
+}
 
 void moon_engine_viewport_close(MoonView *view, bool focus) {
     if (!view->viewport.bar) return;
     moon_viewport_close(&view->viewport);
+    set_page_zoom(view,view->viewport.page_zoom/100.0);
     view->viewport_owner[0]=0;
     resize_view(view,false);
     if (focus && IsWindowVisible(view->surface)) SetFocus(view->hwnd);
 }
 
-int moon_engine_viewport(MoonView *view, const char *owner, unsigned width, unsigned height) {
+int moon_engine_viewport(MoonView *view, const char *owner, unsigned width, unsigned height, int fit) {
     if (view->extension_address || strlen(owner)>=sizeof(view->viewport_owner)) return 2;
-    if (!width && view->viewport.bar) {
+    if (!width && fit<0 && view->viewport.bar) {
         moon_engine_viewport_close(view,true);
         return 1;
     }
-    if (!view->viewport.bar && !moon_viewport_open(&view->viewport,view,view->surface,view->hwnd)) return 2;
+    if (!view->viewport.bar) {
+        view->viewport.page_zoom=moon_engine_zoom(view);
+        if (!moon_viewport_open(&view->viewport,view,view->surface,view->hwnd)) return 2;
+    }
+    if (fit>=0) view->viewport.fit=fit!=0;
     strcpy(view->viewport_owner,owner);
     if (view->inspector && wk.WKInspectorIsAttached(view->inspector)) {
         wk.WKInspectorDetach(view->inspector);

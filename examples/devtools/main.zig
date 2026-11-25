@@ -12,8 +12,10 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params != .object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
-    if (std.mem.eql(u8,action,"viewport")) {
-        const reply = try client.call(.@"devtools.viewport",.{});
+    const phone = std.mem.eql(u8,action,"viewportPhone");
+    if (phone or std.mem.eql(u8,action,"viewport")) {
+        const options: sdk.ViewportOptions = if (phone) .{ .preset=.compactPhone,.fit=true } else .{};
+        const reply = try client.call(.@"devtools.viewport",options);
         const state = sdk.string(reply.get("result")) orelse "";
         return client.reply(id,.{ .message=if (std.mem.eql(u8,state,"enabled") or std.mem.eql(u8,state,"disabled")) null
             else "请在已加载的网页上打开响应式预览，并检查开发者工具权限。",.toast=true });

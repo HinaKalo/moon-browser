@@ -1,7 +1,7 @@
 {
   "id": "moon.devtools",
   "name": "网页开发者工具",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonDevTools.exe",
@@ -14,6 +14,7 @@
       {"id": "console", "label": "打开网页控制台", "menu": "developer", "siteMenu": true, "shortcut": "Ctrl+Shift+J"},
       {"id": "resources", "label": "查看网页资源和站点数据", "menu": "developer"},
       {"id": "viewport", "label": "切换响应式预览", "menu": "developer", "shortcut": "Ctrl+Shift+E"},
+      {"id": "viewportPhone", "label": "以手机尺寸预览"},
       {"id": "hardReload", "label": "强制刷新网页", "menu": "developer", "shortcut": "Ctrl+Shift+R"},
       {"id": "window", "label": "在独立窗口打开开发者工具", "menu": "developer"},
       {"id": "dock", "label": "停靠开发者工具", "menu": "developer"},
