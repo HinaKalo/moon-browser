@@ -310,6 +310,7 @@ addEventListener('load',()=>{
             data = (b'<!doctype html><title>Network capture fixture</title><script>'
                     b'for(let i=0;i<18;i++)fetch("/network-capture/item-"+i+"?secret=drop-this");'
                     b'fetch("/network-capture/not-found?secret=drop-this");'
+                    b'fetch("/network-capture/item-long-"+"x".repeat(300));'
                     b'fetch("/network-capture/interrupted").catch(()=>{});'
                     b'fetch("/network-capture/redirect?secret=drop-this");</script>')
             content_type = "text/html"
@@ -1353,7 +1354,7 @@ def run_win32(exe, base, root):
         const row=await wait(()=>[...rendered.values()].find(row=>row.tab.title.includes(options.title) && row.tab.origin===options.origin),
                              "playing tab");
         const {id,navigation}=row.tab;
-        const correctKind=()=>row.tab.audio && row.tab.video===Boolean(options.video);
+        const correctKind=()=>options.video ? row.tab.video : row.tab.audio && !row.tab.video;
         await wait(()=>correctKind() && !row.tab.paused && !row.play.hidden,"engine media state");
         if(await host("media.control",{id,navigation:navigation+1,action:"mute"})!=="unavailable")
             throw Error("stale media target");
@@ -1870,7 +1871,7 @@ def run_win32(exe, base, root):
         const all = await wait(async()=>{
             const list=await host("list",{search:"/network-capture/"});
             const older=list.next===null?null:await host("list",{search:"/network-capture/",before:list.next});
-            return older&&list.events.length+older.events.length>=22&&[list,older];
+            return older&&list.events.length+older.events.length>=23&&[list,older];
         },"resource callback did not report the reloaded page resources");
         if(all[0].next===null||all[0].events.length!==16)throw Error("capture pagination");
         const entries=all.flatMap(page=>page.events);
@@ -1887,10 +1888,41 @@ def run_win32(exe, base, root):
         get("failures").click();
         await wait(()=>get("events").childElementCount===2&&get("events").textContent.includes("404")&&
             get("events").textContent.includes("加载失败"),"HTTP error filter");
+        if(get("detail")){
+            const truncated=entries.find(row=>row.url.includes("/item-long-")&&row.truncated);
+            if(!truncated||await host("control",{action:"copyAddress",id:truncated.id})!=="unavailable")
+                throw Error("truncated network address can be copied");
+            const notFound=entries.find(row=>row.status===404);
+            const button=await wait(()=>get("events").querySelector('[data-id="'+notFound.id+'"] button'),"HTTP error details button");
+            button.click();
+            if(get("detail").hidden||button.getAttribute("aria-expanded")!=="true"||
+               get("detail-url").textContent!==notFound.url||get("detail-status").textContent!=="404"||
+               get("detail-kind").textContent!=="完成"||get("copy-address").disabled)
+                throw Error("HTTP error details");
+            get("close-detail").click();
+            if(!get("detail").hidden||button.getAttribute("aria-expanded")!=="false"||document.activeElement!==button)
+                throw Error("closing request details lost row focus");
+            button.click();
+            get("kind").value="failed";
+            get("kind").dispatchEvent(new Event("change"));
+            await wait(()=>get("detail").hidden&&!get("detail-url").textContent&&get("events").rows.length===1&&
+                           get("events").textContent.includes("加载失败"),"combined error and kind filters");
+            get("failures").click();
+            get("kind").value="redirect";
+            get("kind").dispatchEvent(new Event("change"));
+            await wait(()=>get("events").rows.length===1&&get("events").textContent.includes("302"),"redirect filter");
+            get("events").querySelector("button").click();
+            if(get("detail").hidden||get("detail-kind").textContent!=="重定向")throw Error("redirect details");
+            if(await host("control",{action:"copyAddress",id:9999999})!=="unavailable")
+                throw Error("unknown network entry can be copied");
+        }
         get("record").click();
         await wait(()=>get("record").textContent==="继续记录","pause control");
         get("clear").click();
         await wait(async()=>!get("record").disabled&&(await host("list",{})).retained===0,"clear control");
+        if(get("detail")&&await host("control",{action:"copyAddress",id:entries[0].id})!=="unavailable")
+            throw Error("cleared network entry can be copied");
+        if(get("detail"))await wait(()=>get("detail").hidden&&!get("detail-url").textContent,"clearing retained request details");
         get("record").click();
         await wait(()=>get("record").textContent==="暂停记录","resume control");
         await emit({phase:"isolation"});

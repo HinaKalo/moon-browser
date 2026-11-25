@@ -270,9 +270,12 @@ pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
 pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
 pub const InspectorPanel = enum(c_int) { inspector, console, resources, elements };
 pub const NetworkEventKind = enum(c_int) { complete, redirect, failed };
-pub const NetworkCaptureAction = enum(c_int) { pause, @"resume", clear, reload, focus };
-pub const NetworkCaptureResult = enum(c_int) { ok, unavailable, edited, resubmission };
-pub const NetworkCaptureQuery = struct { before: ?u64 = null, search: []const u8 = "", failures: bool = false };
+pub const NetworkCaptureAction = enum(c_int) { pause, @"resume", clear, reload, focus, copyAddress };
+pub const NetworkCaptureControl = struct { action: NetworkCaptureAction, id: ?u64 = null };
+pub const NetworkCaptureResult = enum(c_int) { ok, unavailable, edited, resubmission, clipboardBusy };
+pub const NetworkCaptureQuery = struct {
+    before: ?u64 = null, search: []const u8 = "", failures: bool = false, kind: ?NetworkEventKind = null,
+};
 pub const NetworkCaptureEvent = struct {
     id: u64,
     url: []const u8,

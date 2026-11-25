@@ -13,7 +13,7 @@
   header,.toolbar,footer { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
   header { justify-content:space-between; }
   p { color:var(--muted); margin:8px 0 18px; }
-  button,input[type=search] { background:var(--surface); color:inherit; border:1px solid var(--line); border-radius:8px; font:inherit; padding:7px 12px; }
+  button,select,input[type=search] { background:var(--surface); color:inherit; border:1px solid var(--line); border-radius:8px; font:inherit; padding:7px 12px; }
   button { cursor:pointer; }
   button:disabled { cursor:default; opacity:.55; }
   button:not(:disabled):hover { background:var(--soft); }
@@ -23,13 +23,25 @@
   .toolbar,footer { padding:10px 14px; }
   input[type=search] { flex:1; min-width:145px; }
   label { display:inline-flex; gap:5px; align-items:center; }
-  .scroll { overflow:auto; border-block:1px solid var(--line); }
+  .request-body { border-block:1px solid var(--line); }
+  .scroll { min-width:0; overflow:auto; }
+  @media (min-width:850px) {
+    .request-body:has(#detail:not([hidden])) { display:grid; grid-template-columns:minmax(0,1fr) minmax(238px,31%); }
+  }
+  #detail { min-width:0; padding:12px 14px; border-inline-start:1px solid var(--line); background:var(--page); }
+  #detail header { gap:5px; }
+  #detail h2 { margin:0; font-size:15px; }
+  #detail dl { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:6px 12px; }
+  #detail dd { margin:0; overflow-wrap:anywhere; }
+  #detail-note { margin:8px 0; }
   table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
   th,td { padding:8px 12px; text-align:left; vertical-align:top; }
   th { background:var(--page); font-weight:600; }
   tr+tr td { border-top:1px solid var(--line); }
   .col { width:1%; white-space:nowrap; }
   .url { overflow-wrap:anywhere; font:13px/1.55 Consolas,monospace; }
+  .url button { border:0; border-radius:4px; padding:0 2px; color:inherit; background:transparent; text-align:start; overflow-wrap:anywhere; }
+  tr[data-selected] { background:var(--soft); }
   [data-error] { color:var(--error); }
   #empty { margin:0; padding:24px 14px; }
   #count { color:var(--muted); flex:1; }
@@ -44,15 +56,31 @@
   <section class="surface" aria-label="请求日志">
     <div class="toolbar">
       <input id="search" type="search" maxlength="40" aria-label="筛选请求地址" placeholder="筛选请求地址">
+      <label>结果
+        <select id="kind"><option value="">全部</option><option value="complete">完成</option><option value="redirect">重定向</option><option value="failed">加载失败</option></select>
+      </label>
       <label><input id="failures" type="checkbox"> 仅显示错误</label>
       <button id="clear" disabled>清空日志</button>
     </div>
-    <div class="scroll">
-      <table aria-label="网络事件">
-        <thead><tr><th scope="col">请求地址</th><th scope="col" class="col">HTTP</th><th scope="col" class="col">结果</th><th scope="col" class="col">记录时刻</th></tr></thead>
-        <tbody id="events"></tbody>
-      </table>
-      <p id="empty">暂无记录。</p>
+    <div class="request-body">
+      <div class="scroll">
+        <table aria-label="网络事件">
+          <thead><tr><th scope="col">请求地址</th><th scope="col" class="col">HTTP</th><th scope="col" class="col">结果</th><th scope="col" class="col">记录时刻</th></tr></thead>
+          <tbody id="events"></tbody>
+        </table>
+        <p id="empty">暂无记录。</p>
+      </div>
+      <aside id="detail" aria-labelledby="detail-title" hidden>
+        <header><h2 id="detail-title">请求详情</h2><button id="close-detail">关闭</button></header>
+        <dl>
+          <dt>地址</dt><dd id="detail-url" class="url"></dd>
+          <dt>HTTP</dt><dd id="detail-status"></dd>
+          <dt>结果</dt><dd id="detail-kind"></dd>
+          <dt>记录时刻</dt><dd id="detail-time"></dd>
+        </dl>
+        <button id="copy-address">复制地址</button>
+        <p id="detail-note" role="status"></p>
+      </aside>
     </div>
     <footer>
       <span id="count"></span>
@@ -65,7 +93,10 @@
   const controls = ['focus', 'reload', 'record', 'clear'].map(get);
   const labels = { complete:'完成', redirect:'重定向', failed:'加载失败' };
   let request = 0, state = 'idle', next = null, cursors = [null], shown = '', epoch = 0, reading = false, acting = false;
-  let feedback = '';
+  let feedback = '', selected = null;
+  const detail = get('detail'), copyAddress = get('copy-address'), detailNote = get('detail-note');
+  const eventTime = event => '+' + (event.elapsedMs / 1000).toFixed(3) + ' 秒';
+  const displayUrl = event => event.url + (event.truncated ? '…' : '');
   async function host(method, params = {}) {
     const id = 'network:' + ++request;
     const raw = await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0', id, method:'network.capture.' + method, params}));
@@ -73,6 +104,44 @@
     if (response.id !== id || response.error) throw Error('NETWORK_CAPTURE_UNAVAILABLE');
     return response.result;
   }
+  function select(event) {
+    selected = event;
+    detail.hidden = !event;
+    for (const row of get('events').rows) {
+      const active = row.dataset.id === String(event?.id);
+      row.toggleAttribute('data-selected', active);
+      row.querySelector('button').setAttribute('aria-expanded', String(active));
+    }
+    detailNote.textContent = '';
+    if (!event) {
+      for (const item of detail.querySelectorAll('dd')) item.textContent = '';
+      return;
+    }
+    get('detail-url').textContent = displayUrl(event);
+    get('detail-status').textContent = event.status ?? '—';
+    get('detail-kind').textContent = labels[event.kind];
+    get('detail-time').textContent = eventTime(event);
+    copyAddress.disabled = event.truncated;
+    if (event.truncated) detailNote.textContent = '记录的地址已截断。';
+  }
+  get('close-detail').onclick = () => {
+    get('events').querySelector('[data-selected] button')?.focus();
+    select(null);
+  };
+  copyAddress.onclick = async () => {
+    const event = selected;
+    if (!event || event.truncated || copyAddress.disabled) return;
+    copyAddress.disabled = true;
+    try {
+      const result = await host('control', {action:'copyAddress', id:event.id});
+      if (selected === event) detailNote.textContent = result === 'ok' ? '已复制。'
+        : result === 'clipboardBusy' ? '剪贴板暂不可用，请重试。' : '该记录已不可用。';
+    } catch {
+      if (selected === event) detailNote.textContent = '无法复制该地址。';
+    } finally {
+      if (selected === event) copyAddress.disabled = false;
+    }
+  };
   function render(page, unavailable = false) {
     state = page.state;
     next = page.next;
@@ -87,7 +156,7 @@
     get('older').disabled = next === null;
     get('count').textContent = state === 'idle' ? '' : '保留 ' + page.retained + ' 条' + (page.dropped ? ' · 覆盖 ' + page.dropped + ' 条较早记录' : '');
     get('empty').hidden = page.events.length > 0;
-    get('empty').textContent = (get('failures').checked || get('search').value) && page.retained
+    get('empty').textContent = (get('failures').checked || get('search').value || get('kind').value) && page.retained
       ? '没有匹配的记录。' : '暂无记录。';
     const key = page.events.map(event => event.id).join(',');
     if (shown === key) return;
@@ -95,23 +164,36 @@
     const rows = document.createDocumentFragment();
     for (const event of page.events) {
       const row = document.createElement('tr');
-      const values = [event.url + (event.truncated ? '…' : ''), event.status ?? '—', labels[event.kind], '+' + (event.elapsedMs / 1000).toFixed(3) + ' 秒'];
-      for (const [index, value] of values.entries()) {
+      row.dataset.id = event.id;
+      const url = row.insertCell();
+      url.className = 'url';
+      const button = document.createElement('button');
+      button.textContent = displayUrl(event);
+      button.setAttribute('aria-controls', 'detail');
+      button.setAttribute('aria-expanded', String(selected?.id === event.id));
+      row.toggleAttribute('data-selected', selected?.id === event.id);
+      button.onclick = () => select(selected?.id === event.id ? null : event);
+      url.append(button);
+      for (const value of [event.status ?? '—', labels[event.kind], eventTime(event)]) {
         const cell = row.insertCell();
-        cell.className = index ? 'col' : 'url';
+        cell.className = 'col';
         cell.textContent = value;
       }
       if (event.kind === 'failed' || event.status >= 400) row.setAttribute('data-error', '');
       rows.append(row);
     }
+    const focused = get('events').contains(document.activeElement) ? document.activeElement.closest('tr')?.dataset.id : null;
     get('events').replaceChildren(rows);
+    if (focused) get('events').querySelector('[data-id="' + focused + '"] button')?.focus({preventScroll:true});
+    if (selected && !page.events.some(event => event.id === selected.id)) select(null);
   }
   async function refresh() {
     if (reading || document.hidden) return;
     reading = true;
     const revision = epoch;
     try {
-      const page = await host('list', {before:cursors.at(-1), search:get('search').value.trim(), failures:get('failures').checked});
+      const page = await host('list', {before:cursors.at(-1), search:get('search').value.trim(),
+        failures:get('failures').checked, kind:get('kind').value || null});
       if (revision === epoch) render(page);
     } catch {
       if (revision === epoch) {
@@ -144,6 +226,7 @@
   }
   get('search').addEventListener('input', firstPage);
   get('failures').addEventListener('change', firstPage);
+  get('kind').addEventListener('change', firstPage);
   get('older').onclick = () => { if (next !== null) { cursors.push(next); next = null; epoch++; refresh(); } };
   get('newer').onclick = () => { if (cursors.length > 1) { cursors.pop(); epoch++; refresh(); } };
   ['focus', 'reload', 'clear'].forEach(name => get(name).onclick = () => control(name));

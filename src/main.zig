@@ -2645,7 +2645,7 @@ export fn moon_network_capture_event(view: *native.MoonView, tab: u64, url: [*c]
     network_capture.add(view, tab, slice(url), status, std.enums.fromInt(sdk.NetworkEventKind, kind) orelse return);
 }
 
-export fn moon_network_capture_control(id: [*c]const u8, panel: u64, command: c_int) c_int {
+export fn moon_network_capture_control(id: [*c]const u8, panel: u64, command: c_int, entry: u64) c_int {
     const result: sdk.NetworkCaptureResult = control: {
         if (!moon_extension_panel_active(panel)) break :control .unavailable;
         const source = network_capture.sourceFor(panel, slice(id)) orelse break :control .unavailable;
@@ -2656,6 +2656,12 @@ export fn moon_network_capture_control(id: [*c]const u8, panel: u64, command: c_
             .pause, .@"resume" => if (!network_capture.setRecording(action == .@"resume")) break :control .unavailable,
             .clear => network_capture.clear(),
             .focus => chooseTab(index, true),
+            .copyAddress => {
+                const url = network_capture.address(entry) orelse break :control .unavailable;
+                var text: [1024]u8 = undefined;
+                if (!copy(&text,url)) break :control .unavailable;
+                if (!native.moon_shell_copy_text(&text)) break :control .clipboardBusy;
+            },
             .reload => {
                 if (!hasSite(tab)) break :control .unavailable;
                 switch (hardReloadGuard(tab)) {

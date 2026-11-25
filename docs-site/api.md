@@ -81,8 +81,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `network.filter.status` | `network.filter` | 返回 `{ preferred, active, exceptions }`，分别表示该插件是否被选中、规则是否已加载、已暂停的域名。 |
 | `network.filter.setSite` | `network.filter` | 当前规则插件可传入 `{ host, enabled }`。`false` 暂停该域名及其子域名，`true` 恢复，成功返回 `null`。 |
 | `network.capture.open` | `network.capture` | 从用户命令传入 `{}`。为触发命令的普通 HTTP(S) 标签开始记录，并打开插件的专属页面。返回是否已绑定并开始记录。 |
-| `network.capture.list` | `network.capture` | 绑定的插件页可传入 `{ before?, search?, failures? }`，返回 `{ state, events, retained, dropped, next }`。按事件 ID 从新到旧读取，每页最多 16 条。将 `next` 用作下一页的 `before`。 |
-| `network.capture.control` | `network.capture` | 当前活动且已绑定的插件页可传入 `{ action }`。动作包括 `pause`、`resume`、`clear`、`reload` 和 `focus`。返回 `ok`、`unavailable`、`edited` 或 `resubmission`。 |
+| `network.capture.list` | `network.capture` | 绑定的插件页可传入 `{ before?, search?, failures?, kind? }`，返回 `{ state, events, retained, dropped, next }`。按事件 ID 从新到旧读取，每页最多 16 条。将 `next` 用作下一页的 `before`。`kind` 可为 `complete`、`redirect` 或 `failed`，与其他筛选条件同时生效。 |
+| `network.capture.control` | `network.capture` | 当前活动且已绑定的插件页可传入 `{ action, id? }`。支持 `pause`、`resume`、`clear`、`reload`、`focus` 和 `copyAddress`。复制时须传入保留中的未截断事件 ID，写入剪贴板的地址已脱敏。返回 `ok`、`unavailable`、`edited`、`resubmission` 或 `clipboardBusy`。 |
 | `bookmarks.list` | `bookmarks.manage` | 传入 `{ query?, before?, folder? }`。指定 `folder` 时只列出该文件夹直接包含的书签，空字符串指根目录。返回 `{ bookmarks, next }`，每项包含 `id`、`title`、`url` 和 `folder`。 |
 | `bookmarks.folders` | `bookmarks.manage` | 传入 `{ parent?, after? }`。返回 `{ folders, next }`，每页最多 32 个直接子文件夹名称。省略 `parent` 时从根目录开始，使用 `next` 作为下一页的 `after`，用 ` / ` 拼接路径。 |
 | `bookmarks.move` | `bookmarks.manage` | 传入 `{ ids, folder }`，一次移动 1 至 100 个书签 ID。空字符串表示根目录。返回 `{ moved }`，计入实际更改位置的书签。 |

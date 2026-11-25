@@ -442,9 +442,10 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         },
         .@"network.capture.control" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
-            const args = decode(struct { action: sdk.NetworkCaptureAction }, allocator, params) catch return sdk.failure(output,id,.InvalidParams);
+            const args = decode(sdk.NetworkCaptureControl, allocator, params) catch return sdk.failure(output,id,.InvalidParams);
+            if (args.action == .copyAddress and (args.id orelse 0) == 0) return sdk.failure(output,id,.InvalidParams);
             const owner = try allocator.dupeSentinel(u8, context.plugin_id, 0);
-            const result = native.moon_network_capture_control(owner.ptr, context.target_tab_id, @intFromEnum(args.action));
+            const result = native.moon_network_capture_control(owner.ptr, context.target_tab_id, @intFromEnum(args.action),args.id orelse 0);
             return sdk.result(output, id, std.enums.fromInt(sdk.NetworkCaptureResult, result) orelse .unavailable);
         },
         .@"popups.open" => {

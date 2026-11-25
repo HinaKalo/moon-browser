@@ -100,6 +100,14 @@ pub fn add(view: *native.MoonView, token: u64, raw: []const u8, code: u16, kind:
     if (used < capacity) used += 1 else dropped += 1;
 }
 
+pub fn address(id: u64) ?[]const u8 {
+    for (0..used) |offset| {
+        const row = &rows[(head + capacity - offset - 1) % capacity];
+        if (row.id == id and !row.truncated) return row.url[0..row.len];
+    }
+    return null;
+}
+
 pub fn list(panel: u64, id: []const u8, query: sdk.NetworkCaptureQuery, output: *[page_size]sdk.NetworkCaptureEvent) sdk.NetworkCapturePage {
     if (sourceFor(panel, id) == null) return .{};
     var len: usize = 0;
@@ -109,6 +117,7 @@ pub fn list(panel: u64, id: []const u8, query: sdk.NetworkCaptureQuery, output: 
         if (query.before) |before| if (row.id >= before) continue;
         const url = row.url[0..row.len];
         if (query.search.len != 0 and std.ascii.findIgnoreCase(url, query.search) == null) continue;
+        if (query.kind) |kind| if (row.kind != kind) continue;
         if (query.failures and row.kind != .failed and row.status < 400) continue;
         if (len == page_size) {
             next = output[len - 1].id;

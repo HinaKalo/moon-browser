@@ -141,7 +141,7 @@ bool moon_engine_network_capture(MoonView *view, bool enabled);
 enum { MOON_NETWORK_COMPLETE, MOON_NETWORK_REDIRECT, MOON_NETWORK_FAILED };
 void moon_network_capture_event(MoonView *view, uint64_t tab, const char *url, uint16_t status, int kind);
 bool moon_network_capture_open(const char *id, uint64_t tab, uint64_t navigation);
-int moon_network_capture_control(const char *id, uint64_t panel, int action);
+int moon_network_capture_control(const char *owner, uint64_t panel, int action, uint64_t entry);
 void moon_engine_show(MoonView *view, bool visible);
 bool moon_engine_load(MoonView *view, const char *url);
 MoonView *moon_engine_open_extension(uint64_t token, const char *plugin_id, const char *address);
