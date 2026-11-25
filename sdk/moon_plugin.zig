@@ -49,6 +49,7 @@ pub const Permission = enum {
     @"siteData.cookieClear",
     @"ui.settings",
     @"siteSettings.notifications",
+    @"media.control",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -157,6 +158,23 @@ pub const SiteFiltering = struct {
     pausedBy: ?[]const u8 = null,
 };
 pub const SiteFilteringResult = enum(c_int) { applied, cancelled, unavailable, inherited, limitReached, failed };
+pub const MediaAction = enum(c_uint) { focus, mute, unmute, pause, @"resume" };
+pub const MediaResult = enum(c_int) { applied, pending, unavailable, busy };
+pub const MediaPlayback = enum(c_uint) { idle, paused, resumed, partial, unavailable, failed };
+pub const MediaTab = struct {
+    id: u64,
+    navigation: u64,
+    title: []const u8,
+    origin: []const u8,
+    audio: bool,
+    video: bool,
+    muted: bool,
+    siteMuted: bool,
+    paused: bool,
+    pending: bool,
+    canPlayback: bool,
+    playbackResult: MediaPlayback,
+};
 pub const SiteOverview = struct {
     origin: ?[]const u8 = null,
     revision: u64 = 0,
@@ -421,6 +439,8 @@ pub const Method = enum {
     @"siteSettings.current",
     @"siteSettings.openTool",
     @"siteSettings.setFiltering",
+    @"media.list",
+    @"media.control",
     @"siteSettings.autoplay.get",
     @"siteSettings.autoplay.set",
     @"siteSettings.notifications.get",

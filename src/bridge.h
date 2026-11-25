@@ -39,6 +39,19 @@ void moon_tasks_overview(MoonTaskOverview *overview);
 size_t moon_tasks_tabs(uint32_t offset, MoonTaskTab *rows, size_t cap);
 size_t moon_tasks_processes(uint32_t offset, MoonTaskProcess *rows, size_t cap);
 unsigned moon_tasks_action(uint64_t source, uint64_t id, bool discard);
+enum { MOON_MEDIA_AUDIO=1, MOON_MEDIA_VIDEO=2 };
+typedef struct MoonMediaTab {
+    uint64_t id, navigation;
+    unsigned playing, playback_result;
+    bool muted, site_muted, paused, pending, can_playback;
+    char title[193], origin[320];
+} MoonMediaTab;
+size_t moon_media_tabs(uint32_t offset, MoonMediaTab *rows, size_t cap);
+int moon_media_control(uint64_t panel, const char *owner, uint64_t id, uint64_t navigation, unsigned action);
+unsigned moon_engine_playing(const MoonView *view);
+bool moon_engine_media_action(MoonView *view, uint64_t request, bool resume);
+bool moon_engine_media_actions_available(void);
+void moon_media_action_result(uint64_t tab, uint64_t request, const char *result);
 enum { MOON_DOM_SET_TEXT = 1, MOON_DOM_HIDE, MOON_DOM_ADD_CLASS, MOON_DOM_MAX_OPS = 32 };
 enum { MOON_RELOAD_NO_MATCH = 0, MOON_RELOAD_OK, MOON_RELOAD_PROTECTED };
 typedef struct MoonDomOp { unsigned kind; char selector[257]; char value[1025]; } MoonDomOp;
@@ -311,7 +324,7 @@ typedef struct { uint64_t tab_id, navigation; bool site_muted, tab_muted; char o
 bool moon_site_context(MoonSiteContext *site);
 void moon_site_menu_run(const MoonSiteContext *site, size_t index, size_t command);
 enum MoonLinkMenu { MOON_LINK_OPEN = 1, MOON_LINK_COPY, MOON_LINK_BOOKMARK, MOON_LINK_MENU_STRIDE = 13 };
-enum { MOON_PLUGIN_LIMIT = 64, MOON_PLUGIN_MENU_PERMISSION_LIMIT = 40 };
+enum { MOON_PLUGIN_LIMIT = 64, MOON_PLUGIN_MENU_PERMISSION_LIMIT = 41 };
 typedef struct { uint64_t tab_id, navigation; char url[4096], label[512]; } MoonLinkContext;
 bool moon_link_capture(MoonLinkContext *link, uint64_t tab);
 bool moon_link_current(const MoonLinkContext *link);

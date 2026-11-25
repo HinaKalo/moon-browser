@@ -30,6 +30,7 @@ export default defineConfig({
         { text: '最近关闭的标签', link: '/recent-tabs' },
         { text: '上次会话', link: '/session' },
         { text: '标签管理', link: '/tab-tools' },
+        { text: '媒体控件', link: '/media' },
         { text: '隐私浏览', link: '/private-window' },
         { text: '搜索引擎', link: '/search' },
         { text: '浏览历史', link: '/history' },

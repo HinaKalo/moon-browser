@@ -56,8 +56,16 @@ const Tab = struct {
     pinned: bool = false,
     group: u32 = 0,
     muted: bool = false,
+    media: MediaControls = .{},
     opening: Opening = .none,
     requested_at: u64 = 0,
+};
+const MediaControls = struct {
+    paused: bool = false,
+    result: sdk.MediaPlayback = .idle,
+    kind: c_uint = 0,
+    visible_until: u64 = 0,
+    pending: ?struct { request: u64, deadline: u64, resuming: bool } = null,
 };
 const Retiring = struct { handle: *anyopaque, pid: u32 };
 
@@ -73,6 +81,7 @@ const PageSaveJob = struct {
 };
 var page_save_job: ?PageSaveJob = null;
 var page_save_serial: u64 = 0;
+var media_serial: u64 = 0;
 var site_clear_confirming = false;
 const GroupPanel = struct { tab: u64, source: u64 };
 var group_panel: ?GroupPanel = null;
@@ -343,6 +352,7 @@ fn detach(tab: *Tab) void {
     page_source.invalidate(tab.id);
     reader.invalidate(tab.id);
     popups.clear(tab.id);
+    tab.media = .{};
     tab.document_committed = false;
     tab.navigation +%= 1;
     if (find_tab == tab.id) moon_find_dismiss(false);
@@ -1288,6 +1298,14 @@ fn maintenance() void {
     }
     native.moon_engine_update_inspectors();
     native.moon_engine_retry_poll(now);
+    for (tabs[0..count]) |*tab| {
+        if (tab.media.pending) |pending| {
+            if (now>=pending.deadline) {
+                tab.media.pending=null;
+                tab.media.result=.failed;
+            }
+        }
+    }
     downloads.flush();
     site_data.tick(now);
     page_source.tick(now);
@@ -1357,12 +1375,103 @@ export fn moon_tasks_tabs(offset: u32, rows: [*]native.MoonTaskTab, cap: usize) 
             .id=tab.id,.phase=@intFromEnum(tab.phase),.pid=if (tab.view) |view| native.moon_engine_pid(view) else 0,
             .protection=if (protection) |reason| @intCast(@intFromEnum(reason)) else -1,.title=@splat(0),
         };
-        const title = slice(&tab.title);
-        var end = @min(title.len,row.title.len-1);
-        while (end != 0 and end < title.len and title[end] & 0xc0 == 0x80) end -= 1;
-        if (end != 0 and std.unicode.utf8ValidateSlice(title[0..end])) @memcpy(row.title[0..end],title[0..end]);
+        copyShortTitle(&row.title,slice(&tab.title));
     }
     return width;
+}
+fn copyShortTitle(output: []u8, title: []const u8) void {
+    var end = @min(title.len,output.len-1);
+    while (end!=0 and end<title.len and title[end]&0xc0==0x80) end-=1;
+    if (end!=0 and std.unicode.utf8ValidateSlice(title[0..end])) @memcpy(output[0..end],title[0..end]);
+}
+
+fn mediaView(tab: *const Tab) ?*native.MoonView {
+    if (tab.extension or !tab.document_committed or tab.phase!=.live) return null;
+    return tab.view;
+}
+
+export fn moon_media_tabs(offset: u32, rows: [*]native.MoonMediaTab, cap: usize) usize {
+    if (stopped or native.moon_shell_private()) return 0;
+    var skipped: usize = 0;
+    var used: usize = 0;
+    const can_playback = native.moon_engine_media_actions_available();
+    const now = native.moon_clock();
+    for (tabs[0..count]) |*tab| {
+        const view = mediaView(tab) orelse continue;
+        const origin = popups.origin(slice(&tab.url)) orelse continue;
+        const playing = native.moon_engine_playing(view);
+        if (playing==0 and !tab.media.paused and tab.media.pending==null and now>=tab.media.visible_until) continue;
+        if (skipped<offset) {
+            skipped+=1;
+            continue;
+        }
+        if (used==cap) break;
+        const row = &rows[used];
+        row.* = .{
+            .id=tab.id,.navigation=tab.navigation,.playing=if (playing!=0) playing else tab.media.kind,
+            .playback_result=@intFromEnum(tab.media.result),
+            .muted=tab.muted,.site_muted=native.moon_engine_site_muted(view),.paused=tab.media.paused,
+            .pending=tab.media.pending!=null,.can_playback=can_playback,.title=@splat(0),.origin=origin[0..320].*,
+        };
+        copyShortTitle(&row.title,slice(&tab.title));
+        used+=1;
+    }
+    return used;
+}
+
+export fn moon_media_control(panel: u64, owner: [*c]const u8, id: u64, navigation: u64, raw: c_uint) c_int {
+    return @intFromEnum(controlMedia(panel,slice(owner),id,navigation,raw));
+}
+
+fn controlMedia(panel: u64, owner: []const u8, id: u64, navigation: u64, raw: c_uint) sdk.MediaResult {
+    if (stopped or count==0 or native.moon_shell_private() or tabs[active].id!=panel or !tabs[active].extension or
+        !plugins.hasGrant(owner,.@"media.control")) return .unavailable;
+    const action = std.enums.fromInt(sdk.MediaAction,raw) orelse return .unavailable;
+    const index = tabIndex(id) orelse return .unavailable;
+    const tab = &tabs[index];
+    if (tab.navigation!=navigation or popups.origin(slice(&tab.url))==null) return .unavailable;
+    const view = mediaView(tab) orelse return .unavailable;
+    const playing = native.moon_engine_playing(view);
+    const now = native.moon_clock();
+    if (playing==0 and !tab.media.paused and tab.media.pending==null and now>=tab.media.visible_until) return .unavailable;
+    switch (action) {
+        .focus => chooseTab(index,true),
+        .mute, .unmute => {
+            tab.muted=action==.mute;
+            native.moon_engine_mute(view,tab.muted);
+            native.moon_shell_refresh();
+        },
+        .pause, .@"resume" => {
+            if (tab.media.pending!=null) return .busy;
+            if ((action==.pause and playing==0 and now>=tab.media.visible_until) or
+                (action==.@"resume" and !tab.media.paused)) return .unavailable;
+            media_serial+%=1;
+            if (!native.moon_engine_media_action(view,media_serial,action==.@"resume")) return .unavailable;
+            tab.last_used=now;
+            if (playing!=0) tab.media.kind=playing;
+            tab.media.pending=.{ .request=media_serial,.deadline=now+4500,.resuming=action==.@"resume" };
+            tab.media.result=.idle;
+            return .pending;
+        },
+    }
+    return .applied;
+}
+
+export fn moon_media_action_result(id: u64, request: u64, result: [*c]const u8) void {
+    if (stopped) return;
+    const index = tabIndex(id) orelse return;
+    const tab = &tabs[index];
+    const pending = tab.media.pending orelse return;
+    if (pending.request!=request) return;
+    tab.media.pending=null;
+    const raw = slice(result);
+    tab.media.result = if (equals(raw,"{\"status\":\"paused\"}")) .paused
+        else if (equals(raw,"{\"status\":\"resumed\"}")) .resumed
+        else if (equals(raw,"{\"status\":\"partial\"}")) .partial
+        else if (equals(raw,"{\"status\":\"unavailable\"}")) .unavailable else .failed;
+    if (tab.media.result==.paused) tab.media.paused=true;
+    if (tab.media.result==.resumed) tab.media.visible_until=native.moon_clock()+2500;
+    if (tab.media.result==.resumed or (pending.resuming and tab.media.result==.unavailable)) tab.media.paused=false;
 }
 export fn moon_tasks_processes(offset: u32, rows: [*]native.MoonTaskProcess, cap: usize) usize {
     const width = @min(cap,process_count -| offset);
@@ -1623,6 +1732,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             page_source.invalidate(id);
             reader.invalidate(id);
             popups.invalidate(id);
+            tab.media = .{};
             tab.document_committed = false;
             tab.navigation +%= 1;
             if (find_tab == id) moon_find_dismiss(true);
@@ -1691,6 +1801,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             page_source.closed(id);
             reader.closed(id);
             popups.clear(id);
+            tab.media = .{};
             tab.document_committed = false;
             tab.navigation +%= 1;
             if (find_tab == id) {
@@ -2007,6 +2118,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"tabs.closed.manage" => "允许管理最近关闭的标签",
         .@"privacy.clear" => "允许在确认后清除浏览数据",
         .@"taskManager.manage" => "允许查看和管理标签与进程",
+        .@"media.control" => "允许控制媒体标签",
         .@"ui.commands" => "允许添加菜单入口和注册快捷键",
         .@"ui.settings" => "允许查看和打开插件设置入口",
         .@"tabs.organize" => "允许固定、静音和排序标签",

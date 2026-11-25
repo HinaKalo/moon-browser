@@ -29,6 +29,7 @@ const Grant = struct {
     tabs_closed_manage: bool = false,
     privacy_clear: bool = false,
     task_manager_manage: bool = false,
+    media_control: ?bool = null,
     ui_commands: bool = false,
     tabs_organize: bool = false,
     private_window: bool = false,
@@ -243,6 +244,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             else if (std.mem.eql(u8,id,"moon.recent-tabs")) .@"tabs.closed.manage"
             else if (std.mem.eql(u8,id,"moon.privacy")) .@"privacy.clear"
             else if (std.mem.eql(u8,id,"moon.task-manager")) .@"taskManager.manage"
+            else if (std.mem.eql(u8,id,"moon.media")) .@"media.control"
             else if (std.mem.eql(u8,id,"moon.tab-tools")) .@"tabs.organize"
             else if (std.mem.eql(u8,id,"moon.private-window")) .@"privacy.privateWindow"
             else if (std.mem.eql(u8,id,"moon.search")) .@"search.manage"
@@ -419,6 +421,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.tabs_closed_manage and plugin.requests.contains(.@"tabs.closed.manage")) plugin.grants.insert(.@"tabs.closed.manage");
         if (grant.enabled and grant.privacy_clear and plugin.requests.contains(.@"privacy.clear")) plugin.grants.insert(.@"privacy.clear");
         if (grant.enabled and grant.task_manager_manage and plugin.requests.contains(.@"taskManager.manage")) plugin.grants.insert(.@"taskManager.manage");
+        if (grant.enabled and (grant.media_control orelse plugin.default_grants.contains(.@"media.control")) and
+            plugin.requests.contains(.@"media.control")) plugin.grants.insert(.@"media.control");
         if (grant.enabled and grant.ui_commands and plugin.requests.contains(.@"ui.commands")) plugin.grants.insert(.@"ui.commands");
         if (grant.enabled and grant.tabs_organize and plugin.requests.contains(.@"tabs.organize")) plugin.grants.insert(.@"tabs.organize");
         if (grant.enabled and grant.private_window and plugin.requests.contains(.@"privacy.privateWindow")) plugin.grants.insert(.@"privacy.privateWindow");
@@ -527,6 +531,7 @@ fn persist() bool {
         .tabs_closed_manage = plugin.grants.contains(.@"tabs.closed.manage"),
         .privacy_clear = plugin.grants.contains(.@"privacy.clear"),
         .task_manager_manage = plugin.grants.contains(.@"taskManager.manage"),
+        .media_control = plugin.grants.contains(.@"media.control"),
         .ui_commands = plugin.grants.contains(.@"ui.commands"),
         .tabs_organize = plugin.grants.contains(.@"tabs.organize"),
         .private_window = plugin.grants.contains(.@"privacy.privateWindow"),
@@ -620,6 +625,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"tabs.closed.manage" => "此插件可查看最近关闭标签的标题和站点，并恢复或清空这些标签。",
                 .@"privacy.clear" => "此插件可以请求清除所选浏览数据。浏览器会在删除前单独确认。",
                 .@"taskManager.manage" => "此插件可查看标签标题和浏览器进程内存，以及切换标签和卸载可回收的后台标签。",
+                .@"media.control" => "此插件可查看媒体标签的标题和来源，并切换标签、静音或控制网页内的音视频播放。",
                 .@"ui.commands" => "此插件可为已声明的命令添加菜单入口，并设置一个快捷键。链接操作由右键菜单发起，全局快捷键仍需单独确认。",
                 .@"tabs.organize" => "此插件可固定或取消固定触发命令的标签，也可切换标签静音或响应用户的标签排序操作。",
                 .@"tabs.manage" => "此插件可复制触发命令的标签或将网址写入剪贴板，也可关闭未固定且未受保护的其他标签。",

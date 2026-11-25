@@ -67,6 +67,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteSettings.zoom.get` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ query?, offset? }`。返回 `{ currentOrigin, currentPercent, levels, rules, previous, next }`。分页偏移为空时表示该方向没有更多页面。 |
 | `siteSettings.current` / `siteSettings.openTool` | `popups.manage` | 活动插件页读取绑定站点的规则和可用工具，或传入 `{ revision, tool }` 打开原网页、站点数据或控制台。参见[站点设置](./popups)。 |
 | `siteSettings.setFiltering` | `popups.manage` | 活动设置页传入 `{ revision, enabled }`。操作只影响绑定网页所在域名的例外，暂停需要用户确认。返回 `applied`、`cancelled`、`unavailable`、`inherited`、`limitReached` 或 `failed`。 |
+| `media.list` | `media.control` | 普通窗口的活动插件页传入 `{ offset? }`，返回 `{ tabs, next }`，每页最多 12 项。条目包含标签 ID、导航版本、标题、来源、媒体类型和播放状态。`next` 为空时结束。 |
+| `media.control` | `media.control` | 活动插件页传入 `{ id, navigation, action }`，动作可为 `focus`、`mute`、`unmute`、`pause` 或 `resume`。返回 `applied`、`pending`、`unavailable` 或 `busy`。`pending` 时可从 `media.list` 读取后续状态。 |
 | `siteSettings.zoom.set` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ origin, percent }`，比例取自 `levels`。返回规范化后的规则。设为 100 会删除该来源的例外。 |
 | `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
 | `ui.settings.list` | `ui.settings` | 普通窗口的活动插件页传入 `{ offset? }`，默认从 0 开始。返回 `{ entries, next }`，每页最多 12 条。入口包含 `id`、`section`、`title` 和 `description`。有后续条目时，把 `next` 传作下一次的 `offset`。 |

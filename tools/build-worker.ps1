@@ -118,6 +118,7 @@ $privateWindow = Join-Path $prefix 'bin\MoonPrivateWindow.exe'
 $search = Join-Path $prefix 'bin\MoonSearch.exe'
 $privacy = Join-Path $prefix 'bin\MoonPrivacy.exe'
 $taskManager = Join-Path $prefix 'bin\MoonTaskManager.exe'
+$media = Join-Path $prefix 'bin\MoonMedia.exe'
 $commandExample = Join-Path $prefix 'bin\MoonCommandExample.exe'
 $docs = @(
     $EngineLock
@@ -163,6 +164,8 @@ $docs = @(
     (Join-Path $repo 'examples\privacy\privacy.html')
     (Join-Path $repo 'examples\task-manager\plugin.json')
     (Join-Path $repo 'examples\task-manager\tasks.html')
+    (Join-Path $repo 'examples\media\plugin.json')
+    (Join-Path $repo 'examples\media\media.html')
     (Join-Path $repo 'examples\ui-commands\plugin.json')
     (Join-Path $repo 'examples\ui-commands\commands.html')
     (Join-Path $repo 'assets\app-icon.ico')
@@ -173,7 +176,7 @@ if ($Action -eq 'release') {
 $notices = @(Get-ChildItem -LiteralPath (Join-Path $repo 'third_party') -Filter '*.txt' -File | Sort-Object Name)
 $pageSource = Join-Path $prefix 'bin\MoonPageSource.exe'
 $popups = Join-Path $prefix 'bin\MoonPopups.exe'
-$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $legacyFixture + $luaManager + $devTools + $pageSource + $popups + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $appearance + $settings + $recentTabs + $session + $tabTools + $privateWindow + $search + $privacy + $taskManager + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
+$inputHashes = @(($docs + $exe + $requestFilter + $sample + $contractClient + $legacyFixture + $luaManager + $devTools + $pageSource + $popups + $history + $blocker + $bookmarks + $downloads + $siteData + $reading + $appearance + $settings + $recentTabs + $session + $tabTools + $privateWindow + $search + $privacy + $taskManager + $media + $commandExample + $notices.FullName) | Get-FileHash -Algorithm SHA256 | Select-Object -ExpandProperty Hash)
 $key = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes((($inputHashes + $engine.sha256) -join ':')))).Substring(0,32).ToLowerInvariant()
 $artifact = Join-Path $Root "artifacts\$key"
 $stage = Join-Path $work 'artifact'
@@ -235,6 +238,8 @@ if (![IO.File]::Exists((Join-Path $artifact 'MoonBrowser.exe'))) {
     Copy-Item -LiteralPath $privacy,(Join-Path $repo 'examples\privacy\plugin.json'),(Join-Path $repo 'examples\privacy\privacy.html') -Destination $privacyPackage
     $taskManagerPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\task-manager')).FullName
     Copy-Item -LiteralPath $taskManager,(Join-Path $repo 'examples\task-manager\plugin.json'),(Join-Path $repo 'examples\task-manager\tasks.html') -Destination $taskManagerPackage
+    $mediaPackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\media')).FullName
+    Copy-Item -LiteralPath $media,(Join-Path $repo 'examples\media\plugin.json'),(Join-Path $repo 'examples\media\media.html') -Destination $mediaPackage
     $commandExamplePackage = [IO.Directory]::CreateDirectory((Join-Path $stage 'plugins\ui-commands')).FullName
     Copy-Item -LiteralPath $commandExample,(Join-Path $repo 'examples\ui-commands\plugin.json'),(Join-Path $repo 'examples\ui-commands\commands.html') -Destination $commandExamplePackage
     $fixtures = [IO.Directory]::CreateDirectory((Join-Path $stage 'tests')).FullName

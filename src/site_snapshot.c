@@ -177,6 +177,39 @@ static JSValueRef database_finished(JSContextRef context,JSObjectRef function,JS
                                     const JSValueRef argv[],JSValueRef *exception) {
     return send_async_reply(context,argc,argv,exception,"MoonSiteDatabase");
 }
+static JSValueRef media_finished(JSContextRef context,JSObjectRef function,JSObjectRef self,size_t argc,
+                                const JSValueRef argv[],JSValueRef *exception) {
+    return send_async_reply(context,argc,argv,exception,"MoonMediaResult");
+}
+
+static const char media_script[] =
+    "((request,url,action,reply) => {"
+    "const finish=status=>{if(location.href===url)reply(request+'\\n'+JSON.stringify({status}));};"
+    "if(location.href!==url)return;"
+    "const saved=(globalThis.__moonPausedMedia||[]).filter(el=>el.isConnected&&el.paused&&!el.ended);"
+    "if(action==='resume'){"
+        "if(!saved.length){globalThis.__moonPausedMedia=[];finish('unavailable');return;}"
+        "Promise.all(saved.map(async el=>{try{await el.play();return null;}catch{return el;}})).then(results=>{"
+            "const remaining=results.filter(Boolean);globalThis.__moonPausedMedia=remaining;"
+            "finish(remaining.length===saved.length?'failed':remaining.length?'partial':'resumed');"
+        "});return;"
+    "}"
+    "const docs=[document],paused=new Set(saved);let changed=false,visited=0;"
+    "for(let i=0;i<docs.length&&paused.size<32&&visited<256;i++){"
+        "const doc=docs[i];"
+        "for(const el of doc.querySelectorAll('audio,video')){"
+            "if(++visited>256||paused.size===32)break;"
+            "if(el.paused||el.ended)continue;"
+            "el.pause();if(el.paused){paused.add(el);changed=true;}"
+        "}"
+        "if(docs.length<16)for(const frame of doc.querySelectorAll('iframe,frame')){"
+            "if(++visited>256||docs.length===16)break;"
+            "try{if(frame.contentDocument)docs.push(frame.contentDocument);}catch{}"
+        "}"
+    "}"
+    "globalThis.__moonPausedMedia=[...paused];"
+    "finish(changed?'paused':'unavailable');"
+    "})";
 
 static const char lua_dom_script[] =
     "((url,json) => {"
@@ -194,7 +227,7 @@ static const char lua_dom_script[] =
       "}"
     "})";
 
-typedef enum { SITE_SNAPSHOT, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE, SITE_DATABASE, SITE_LUA_DOM } SiteRequest;
+typedef enum { SITE_SNAPSHOT, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE, SITE_DATABASE, SITE_LUA_DOM, SITE_MEDIA } SiteRequest;
 
 static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char *expected,char *change,
                            SiteRequest kind,bool *scheduled,const char **failure) {
@@ -221,6 +254,7 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
         *failure="\"evaluationFailed\"";
         const char *source = kind==SITE_ARTICLE ? change : kind==SITE_CATALOG ? catalog_script :
                              kind==SITE_CACHE_REMOVE ? cache_remove_script :
+                             kind==SITE_MEDIA ? media_script :
                              kind==SITE_LUA_DOM ? lua_dom_script : snapshot_script;
         if (kind==SITE_DATABASE) {
             char *separator=strchr(change,'\n');
@@ -251,7 +285,7 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
                     arguments[1]=api.make_string(context,url);
                     if (kind!=SITE_CATALOG) arguments[count++]=api.make_string(context,payload);
                     const JSFunctionCallback handler=kind==SITE_CATALOG ? catalog_finished :
-                        kind==SITE_DATABASE ? database_finished : cache_remove_finished;
+                        kind==SITE_DATABASE ? database_finished : kind==SITE_MEDIA ? media_finished : cache_remove_finished;
                     arguments[count++]=api.make_callback(context,NULL,handler);
                 }
                 JSValueRef value=api.call(context,callback,NULL,count,arguments,&exception);
@@ -280,6 +314,7 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
     else if (api.text_equals(name,"MoonRemoveSiteCache")) { kind=SITE_CACHE_REMOVE; channel="MoonSiteCacheRemoval"; }
     else if (api.text_equals(name,"MoonInspectDatabase")) { kind=SITE_DATABASE; channel="MoonSiteDatabase"; }
     else if (api.text_equals(name,"MoonApplyLuaDOM")) { kind=SITE_LUA_DOM; channel=NULL; }
+    else if (api.text_equals(name,"MoonControlMedia")) { kind=SITE_MEDIA; channel="MoonMediaResult"; }
     else return;
     // Lua emits at most 32 operations with 1280 argument bytes each, before JSON escaping.
     size_t request_cap=(kind==SITE_LUA_DOM ? 256 : kind==SITE_ARTICLE ? 144 : 32)*1024;

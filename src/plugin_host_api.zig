@@ -68,6 +68,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"page.saveHtml" => .@"page.save",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
         .@"siteSettings.current", .@"siteSettings.openTool", .@"siteSettings.setFiltering" => .@"popups.manage",
+        .@"media.list", .@"media.control" => .@"media.control",
         .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => .@"siteSettings.autoplay",
         .@"siteSettings.notifications.get", .@"siteSettings.notifications.set" => .@"siteSettings.notifications",
         .@"siteSettings.sound.get", .@"siteSettings.sound.set", .@"siteSettings.sound.toggle" => .@"siteSettings.sound",
@@ -225,6 +226,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
         .@"siteSettings.current", .@"siteSettings.openTool", .@"siteSettings.setFiltering" => {},
+        .@"media.list", .@"media.control" => {},
         .@"siteSettings.notifications.get", .@"siteSettings.notifications.set" => {},
         .@"siteSettings.sound.get", .@"siteSettings.sound.set" => {},
         .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => {},
@@ -1153,6 +1155,33 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"taskManager.snapshot" => {
             const query = decode(sdk.TaskQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             return taskSnapshot(output,id,query);
+        },
+        .@"media.list", .@"media.control" => {
+            if (!context.from_page or native.moon_shell_private() or !native.moon_extension_panel_active(context.target_tab_id))
+                return sdk.failure(output,id,.PermissionDenied);
+            if (method==.@"media.control") {
+                const value = decode(struct { id: u64, navigation: u64, action: sdk.MediaAction },allocator,params) catch
+                    return sdk.failure(output,id,.InvalidParams);
+                const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+                const result = native.moon_media_control(context.target_tab_id,owner.ptr,value.id,value.navigation,@intFromEnum(value.action));
+                return sdk.result(output,id,std.enums.fromInt(sdk.MediaResult,result) orelse .unavailable);
+            }
+            const value = decode(struct { offset: u32 = 0 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            var rows: [13]native.MoonMediaTab = undefined;
+            var items: [12]sdk.MediaTab = undefined;
+            const total = native.moon_media_tabs(value.offset,&rows,rows.len);
+            const size = @min(items.len,total);
+            for (items[0..size],rows[0..size]) |*item,*row| {
+                item.* = .{
+                    .id=row.id,.navigation=row.navigation,
+                    .title=std.mem.sliceTo(&row.title,0),.origin=std.mem.sliceTo(&row.origin,0),
+                    .audio=row.playing&native.MOON_MEDIA_AUDIO!=0,.video=row.playing&native.MOON_MEDIA_VIDEO!=0,
+                    .muted=row.muted,.siteMuted=row.site_muted,.paused=row.paused,.pending=row.pending,.canPlayback=row.can_playback,
+                    .playbackResult=std.enums.fromInt(sdk.MediaPlayback,row.playback_result) orelse .failed,
+                };
+            }
+            return sdk.result(output,id,.{ .tabs=items[0..size],
+                .next=if (total>size) @as(?usize,value.offset+size) else null });
         },
         .@"taskManager.focus", .@"taskManager.discard" => {
             if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);

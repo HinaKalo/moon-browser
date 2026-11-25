@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>媒体控件</title>
+<style>
+  :root { color-scheme:light; font:14px/1.5 "Segoe UI","Microsoft YaHei UI",sans-serif;
+    --page:#f6f7fa; --panel:#fff; --text:#181c27; --quiet:#555e70; --line:#dce0eb; --soft:#eef1ff; --accent:#3b51af;
+    background:var(--page); color:var(--text); }
+  :root[data-moon-theme=dark] { color-scheme:dark;
+    --page:#171a22; --panel:#202430; --text:#eef0f8; --quiet:#b9c1d3; --line:#404960; --soft:#30385b; --accent:#bac5ff; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; }
+  main { width:min(100%,840px); margin:auto; padding:38px clamp(16px,5vw,46px); }
+  h1 { font-size:29px; margin:0 0 16px; }
+  p { margin:0; }
+  #items { margin:0; padding:0; list-style:none; background:var(--panel); border:1px solid var(--line); border-radius:12px; }
+  li { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px 18px; align-items:center; padding:15px 16px; }
+  li+li { border-top:1px solid var(--line); }
+  .title, .origin { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .title { font-size:15px; font-weight:600; }
+  .origin, .state, #empty { color:var(--quiet); }
+  .origin, .state { font-size:13px; }
+  .state { grid-column:1/-1; }
+  .actions, nav { display:flex; flex-wrap:wrap; gap:7px; }
+  nav { justify-content:flex-end; margin-top:12px; }
+  button { border:1px solid var(--line); border-radius:8px; background:var(--panel); color:var(--text);
+    font:inherit; padding:6px 10px; cursor:pointer; }
+  button:hover:not(:disabled):not([aria-disabled=true]), button.play:not([aria-disabled=true]) {
+    color:var(--accent); background:var(--soft);
+  }
+  button:disabled, button[aria-disabled=true] { opacity:.6; cursor:default; }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  #feedback:not(:empty) { margin-top:12px; color:var(--accent); }
+  @media(max-width:550px) {
+    li { grid-template-columns:minmax(0,1fr); }
+    .state { grid-row:2; }
+  }
+</style>
+<main>
+  <h1>媒体控件</h1>
+  <p id="empty">正在读取播放状态…</p>
+  <ul id="items" aria-label="媒体标签" hidden></ul>
+  <nav id="pages" aria-label="媒体列表分页" hidden>
+    <button id="prev" type="button">上一页</button>
+    <button id="next" type="button">下一页</button>
+  </nav>
+  <p id="feedback" role="status"></p>
+</main>
+<script>
+  const items=document.getElementById('items'), empty=document.getElementById('empty');
+  const pages=document.getElementById('pages'), prev=document.getElementById('prev'), next=document.getElementById('next');
+  const feedback=document.getElementById('feedback');
+  const rendered=new Map();
+  const playbackMessages={
+    partial:'已恢复部分媒体。其余内容仍可重试。',
+    failed:'无法控制此媒体。可转到原标签操作。',
+    unavailable:'此标签没有可控制的媒体元素。'
+  };
+  let sequence=0, offset=0, nextOffset=null, loading=false, controlling=false;
+  async function host(method,params={}) {
+    const id='media:'+ ++sequence;
+    const raw=await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0',id,method,params}));
+    const reply=JSON.parse(raw);
+    if (reply.id!==id || reply.error) throw Error(reply.error?.data?.reason || 'UNAVAILABLE');
+    return reply.result;
+  }
+  function element(tag,className,text) {
+    const item=document.createElement(tag);
+    if (className) item.className=className;
+    if (text) item.textContent=text;
+    return item;
+  }
+  function setText(item,text) { if (item.textContent!==text) item.textContent=text; }
+  function updateRow(row,tab) {
+    row.tab=tab;
+    setText(row.title,tab.title || tab.origin);
+    setText(row.origin,tab.origin);
+    row.title.title=row.title.textContent;
+    const kind=tab.video ? '视频' : '音频';
+    const activity=tab.paused ? '已暂停' : kind+'播放中';
+    const muted=tab.siteMuted ? ' · 网站已静音' : tab.muted ? ' · 标签已静音' : '';
+    const status=tab.pending ? '正在应用…' : playbackMessages[tab.playbackResult];
+    setText(row.state,status || activity+muted);
+    row.play.hidden=!tab.canPlayback;
+    row.play.setAttribute('aria-disabled',String(controlling || tab.pending));
+    row.mute.setAttribute('aria-disabled',String(controlling));
+    row.focus.setAttribute('aria-disabled',String(controlling));
+    setText(row.play,tab.paused ? '继续播放' : '暂停');
+    setText(row.mute,tab.muted ? '取消标签静音' : '标签静音');
+  }
+  function buildRow(tab) {
+    const item=element('li',''), identity=element('div',''), actions=element('div','actions');
+    const title=element('p','title'), origin=element('p','origin'), state=element('p','state');
+    const play=element('button','play'), mute=element('button',''), focus=element('button','','转到标签');
+    play.type=mute.type=focus.type='button';
+    identity.append(title,origin);
+    actions.append(play,mute,focus);
+    item.append(identity,actions,state);
+    const row={item,title,origin,state,play,mute,focus,tab};
+    play.onclick=()=>control(row,row.tab.paused ? 'resume' : 'pause');
+    mute.onclick=()=>control(row,row.tab.muted ? 'unmute' : 'mute');
+    focus.onclick=()=>control(row,'focus');
+    return row;
+  }
+  function render(tabs) {
+    const visible=new Set(tabs.map(tab=>tab.id));
+    for (const [id,row] of rendered) {
+      if (visible.has(id)) continue;
+      row.item.remove();
+      rendered.delete(id);
+    }
+    for (const [index,tab] of tabs.entries()) {
+      let row=rendered.get(tab.id);
+      if (!row) {
+        row=buildRow(tab);
+        rendered.set(tab.id,row);
+      }
+      updateRow(row,tab);
+      const position=items.children[index] || null;
+      if (position!==row.item) items.insertBefore(row.item,position);
+    }
+    items.hidden=!tabs.length;
+    empty.hidden=Boolean(tabs.length);
+    if (!tabs.length) setText(empty,'当前没有可管理的播放标签。');
+    pages.hidden=offset===0 && nextOffset===null;
+    prev.disabled=offset===0;
+    next.disabled=nextOffset===null;
+  }
+  async function refresh() {
+    if (document.hidden || loading || controlling) return;
+    loading=true;
+    try {
+      let result=await host('media.list',{offset});
+      if (!result.tabs.length && offset>0) {
+        offset=0;
+        result=await host('media.list',{offset});
+      }
+      nextOffset=result.next;
+      render(result.tabs);
+    } catch(error) {
+      offset=0;
+      nextOffset=null;
+      render([]);
+      setText(empty,error.message==='PERMISSION_DENIED' ? '请在插件管理中允许控制媒体标签。' : '暂时无法读取播放状态。');
+    } finally { loading=false; }
+  }
+  async function control(row,action) {
+    if (controlling || (row.tab.pending && (action==='pause' || action==='resume'))) return;
+    const {id,navigation}=row.tab;
+    controlling=true;
+    setText(feedback,'');
+    for (const visible of rendered.values()) updateRow(visible,visible.tab);
+    try {
+      const result=await host('media.control',{id,navigation,action});
+      if (result==='busy') setText(feedback,'此标签正在应用播放操作。');
+      else if (result==='unavailable') setText(feedback,'此标签已切换或媒体已结束。');
+    } catch { setText(feedback,'暂时无法控制该标签。'); }
+    finally { controlling=false; await refresh(); }
+  }
+  next.onclick=()=>{ if (nextOffset!==null && !loading) {offset=nextOffset;refresh();} };
+  prev.onclick=()=>{ if (!loading) {offset=Math.max(0,offset-12);refresh();} };
+  document.addEventListener('visibilitychange',refresh);
+  setInterval(refresh,850);
+  refresh();
+</script>
+</html>

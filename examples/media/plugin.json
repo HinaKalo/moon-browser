@@ -1,0 +1,14 @@
+{
+  "id": "moon.media",
+  "name": "媒体控件",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonMedia.exe",
+  "settingsPage": "media.html",
+  "contributes": {
+    "settings": {"section": "general", "title": "媒体控件", "description": "查看和控制播放音频或视频的标签页。"},
+    "commands": [{ "id": "open", "label": "打开媒体控件", "menu": "page" }]
+  },
+  "permissions": ["media.control"]
+}

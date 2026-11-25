@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from hashlib import sha256
 import json
+from math import sin, tau
 import os
 from pathlib import Path
 import re
@@ -29,6 +30,10 @@ AUTOPLAY_AUDIO = struct.pack("<4sI4s4sIHHIIHH4sI",b"RIFF",36+len(_pcm),b"WAVE",b
 AUTOPLAY_AUDIO_MP4 = Path(__file__).with_name("autoplay-audible.m4a")
 # Generated black 32x32 H.264 baseline video, one second at 10 fps, without audio.
 AUTOPLAY_VIDEO = Path(__file__).with_name("autoplay-silent.mp4")
+_media_cycle = struct.pack("<200h",*(round(160*sin(tau*440*i/8000)) for i in range(200)))
+_media_pcm = _media_cycle * 480
+MEDIA_AUDIO = struct.pack("<4sI4s4sIHHIIHH4sI",b"RIFF",36+len(_media_pcm),b"WAVE",b"fmt ",16,
+                          1,1,8000,16000,2,16,b"data",len(_media_pcm))+_media_pcm
 CHECKS = (
     "dpi_reflow=ok",
     "first_page_paint_ms=",
@@ -79,6 +84,7 @@ class Fixture(BaseHTTPRequestHandler):
     popup_attempts = set()
     popup_destinations = set()
     autoplay_reports = {}
+    media_reports = {}
     notification_reports = {}
     reading_layout = {}
     closed_loaded = {}
@@ -240,6 +246,9 @@ class Fixture(BaseHTTPRequestHandler):
         elif path.startswith("/autoplay-report/"):
             type(self).autoplay_reports[path.removeprefix("/autoplay-report/")] = urlsplit(self.path).query
             data, content_type = b"ok", "text/plain"
+        elif path.startswith("/media-control-report/"):
+            type(self).media_reports[path.rsplit("/",1)[-1]]=urlsplit(self.path).query
+            data, content_type = b"ok", "text/plain"
         elif path.startswith("/notification-report/"):
             type(self).notification_reports[path.removeprefix("/notification-report/")] = urlsplit(self.path).query
             data, content_type = b"ok", "text/plain"
@@ -254,8 +263,10 @@ class Fixture(BaseHTTPRequestHandler):
                     'notice.onshow=()=>report("show","yes");notice.onclose=()=>report("close","yes");}};'
                     '</script>').encode()
             content_type = "text/html"
-        elif path in ("/autoplay.wav", "/autoplay.mp4", "/autoplay.m4a"):
-            if path.endswith(".wav"):
+        elif path in ("/autoplay.wav", "/autoplay.mp4", "/autoplay.m4a", "/media-control.wav"):
+            if path=="/media-control.wav":
+                data, content_type = MEDIA_AUDIO, "audio/wav"
+            elif path.endswith(".wav"):
                 data, content_type = AUTOPLAY_AUDIO, "audio/wav"
             elif path.endswith(".m4a"):
                 data, content_type = AUTOPLAY_AUDIO_MP4.read_bytes(), "audio/mp4"
@@ -411,6 +422,18 @@ class Fixture(BaseHTTPRequestHandler):
                 )
             if name == "filter-allowed":
                 demo = '<script>fetch("/moon-filter-probe/blocked-fetch?allow=1");</script>'
+            if name.startswith("media-control-"):
+                stage=name.removeprefix("media-control-")
+                source="/media-control.wav" if stage=="wav" else "/autoplay.m4a"
+                demo=(f'<button style="position:fixed;top:0;left:0;padding:10px">Play fixture</button>'
+                      f'<audio loop src="{source}"></audio><script>'
+                      f'const stage={json.dumps(stage)}, media=document.querySelector("audio");'
+                      'let count=0;'
+                      'const report=(event,detail)=>fetch("/media-control-report/"+stage+"-"+event+"?"+detail,{cache:"no-store"});'
+                      'media.onplaying=()=>report("playing",++count);'
+                      'media.onpause=()=>report("pause","yes");'
+                      'document.querySelector("button").onclick=()=>media.play().catch(error=>report("error",error.name));'
+                      '</script>')
             if name.startswith("filter-control-"):
                 token=json.dumps(name.removeprefix("filter-control-"))
                 demo=('<script>(async()=>{'
@@ -885,6 +908,7 @@ def run_win32(exe, base, root):
     history_page = (history.parent / "history.html").read_text(encoding="utf-8") if history.exists() else ""
     history_selection = 'id="remove-selected"' in history_page
     history_sites = 'id="by-site"' in history_page
+    media_plugin = exe.parent / "plugins" / "media" / "MoonMedia.exe"
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
     bookmark_transfer = bookmarks.exists() and '"bookmarks.transfer"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
@@ -969,6 +993,7 @@ def run_win32(exe, base, root):
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.privacy-data-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.task-fixture", "enabled": True, "tabs_read": False, "task_manager_manage": True},
+            *([{"id":"moon.media-fixture","enabled":True,"tabs_read":False,"media_control":True}] if media_plugin.exists() else []),
             {"id": "moon.command-fixture", "enabled": True, "tabs_read": False, "ui_commands": True},
             {"id": "moon.search-fixture", "enabled": True, "tabs_read": False, "search_manage": True},
             *([{"id":"moon.zoom-fixture","enabled":True,"tabs_read":False,"popups_manage":True,"site_settings_zoom":True}] if zoom_settings else []),
@@ -1061,6 +1086,9 @@ def run_win32(exe, base, root):
             ('const downloadRetryDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"download-retry-denied",method:"downloads.retry",params:{id:1}}));'
              'if(JSON.parse(downloadRetryDenied).error?.code!==-32001)return;' if download_retry else '') +
+            ('const mediaDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"media-denied",method:"media.list",params:{}}));'
+             'if(JSON.parse(mediaDenied).error?.code!==-32001)return;' if media_plugin.exists() else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -1188,6 +1216,55 @@ def run_win32(exe, base, root):
 """
         page=popups.with_name("popups.html").read_text(encoding="utf-8")
         (fixture/"popups.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
+    if media_plugin.exists():
+        fixture=profile/"plugins"/"media-fixture"
+        fixture.mkdir(parents=True)
+        shutil.copy2(media_plugin,fixture/media_plugin.name)
+        (fixture/"plugin.json").write_text(json.dumps({
+            "id":"moon.media-fixture","name":"Media fixture","version":"1.0.0",
+            "apiVersion":2,"runtime":"native","entry":media_plugin.name,"settingsPage":"media.html",
+            "permissions":["media.control"],
+            "contributes":{"commands":[{"id":"open","label":"验收媒体控件"}]},
+        }),encoding="utf-8")
+        contract=r"""
+<script>(async()=>{
+    const channel=window.webkit.messageHandlers.moonSettings;
+    const emit=value=>channel.postMessage(JSON.stringify({op:"write",value}));
+    const read=async()=>JSON.parse(await channel.postMessage('{"op":"read"}')).value;
+    const wait=async(probe,name)=>{
+        for(let i=0;i<100;i++){
+            const value=await probe();
+            if(value)return value;
+            await new Promise(resolve=>setTimeout(resolve,100));
+        }
+        throw Error(name);
+    };
+    try {
+        const options=await read();
+        const row=await wait(()=>[...rendered.values()].find(row=>row.tab.title.includes(options.title) && row.tab.origin===options.origin),
+                             "playing tab");
+        const {id,navigation}=row.tab;
+        if(!row.tab.audio || row.tab.video || row.tab.paused || row.play.hidden)throw Error("engine media state");
+        if(await host("media.control",{id,navigation:navigation+1,action:"mute"})!=="unavailable")
+            throw Error("stale media target");
+        row.mute.focus();row.mute.click();
+        await wait(()=>row.tab.muted && row.mute.textContent==="取消标签静音","mute");
+        if(document.activeElement!==row.mute)throw Error("muting dropped button focus");
+        row.mute.click();
+        await wait(()=>!row.tab.muted,"unmute");
+        row.play.click();
+        await wait(()=>row.tab.paused && !row.tab.pending && row.play.textContent==="继续播放","pause");
+        row.play.click();
+        await wait(()=>!row.tab.paused && !row.tab.pending && row.tab.audio && row.tab.playbackResult==="resumed",
+                   "resume");
+        await emit({passed:true,id,navigation});
+        await wait(async()=> (await read())?.focus,"await focus signal");
+        row.focus.click();
+    } catch(error){await emit({error:String(error),tabs:[...rendered.values()].map(row=>row.tab)});}
+})();</script>
+"""
+        page=media_plugin.with_name("media.html").read_text(encoding="utf-8")
+        (fixture/"media.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
     if history.exists():
         fixture = profile / "plugins" / "history-contract"
         fixture.mkdir(parents=True)
@@ -3203,6 +3280,42 @@ def run_win32(exe, base, root):
                 if read_settings(config).get("pausedSites")!=["127.0.0.1"]:
                     raise RuntimeError("Site settings updated a different filter provider or domain")
                 print("site_filter_controls=ok native_consent=ok stale_revision=ok net_block_and_pause=ok selected_plugin=ok parent_rule=ok",flush=True)
+        if media_plugin.exists():
+            for stage in ("wav","aac"):
+                target=base+"/page/media-control-"+stage
+                set_control(edit,target)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
+                         "Media fixture did not finish navigating")
+                page_click(px(30),px(20))
+                sample=wait_for(lambda: Fixture.media_reports.get(stage+"-playing") or Fixture.media_reports.get(stage+"-error"),
+                                f"Media source {stage} did not report")
+                if sample=="1":
+                    break
+            else:
+                raise RuntimeError(f"No test media source played: {Fixture.media_reports}")
+            invoke("打开媒体控件")
+            wait_for(lambda: read_address()=="extension://moon.media/media.html","The bundled media system plugin did not open")
+            config=profile/f'extension-{sha256(b"moon.media-fixture").hexdigest()}.json'
+            config.write_text(json.dumps({"title":"media-control-"+stage,"origin":base}),encoding="utf-8")
+            invoke("验收媒体控件")
+            wait_for(lambda: read_address()=="extension://moon.media-fixture/media.html","The media fixture panel did not open")
+            result=wait_for(lambda: (value:=read_settings(config)) and (value.get("passed") or value.get("error")) and value,
+                            "The media controls did not report",20)
+            if not result.get("passed"):
+                raise RuntimeError(f"Media controls failed: {result}")
+            wait_for(lambda: Fixture.media_reports.get(stage+"-pause")=="yes" and Fixture.media_reports.get(stage+"-playing")=="2",
+                     "Pause and resume did not affect the real HTML media element")
+            signal=config.with_suffix(".media-signal")
+            signal.write_text('{"focus":true}',encoding="utf-8")
+            signal.replace(config)
+            wait_for(lambda: read_address()==target,"The media focus action did not return to the original tab")
+            after=base+"/page/media-finished"
+            set_control(edit,after)
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(after,)),
+                     "Could not leave the test media page")
+            print(f"media_plugin=ok engine_media_state=ok source={stage} mute=ok pause=ok resume=ok source_focus=ok stale_navigation=ok",flush=True)
         if bookmarks.exists():
             if blocker.exists():
                 wait_for(lambda: history_rows("SELECT title FROM visits WHERE url=?",(base + "/page/filter-allowed",)),

@@ -993,9 +993,10 @@ static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef bod
     const bool reader=wk.WKStringIsEqualToUTF8CString(name,"MoonArticleSnapshot");
     const bool cache=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteCacheRemoval");
     const bool database=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteDatabase");
-    if ((!catalog && !reader && !cache && !database && !wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot")) || !body ||
+    const bool media=wk.WKStringIsEqualToUTF8CString(name,"MoonMediaResult");
+    if ((!catalog && !reader && !cache && !database && !media && !wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot")) || !body ||
         wk.WKGetTypeID(body)!=wk.WKStringGetTypeID()) return;
-    const size_t cap=(cache ? 1 : database ? 20 : reader ? 192 : catalog ? 64 : 512)*1024+32;
+    const size_t cap=(cache || media ? 1 : database ? 20 : reader ? 192 : catalog ? 64 : 512)*1024+32;
     char *response=malloc(cap);
     if (!response) return;
     const size_t n=wk.WKStringGetUTF8CString((WKStringRef)body,response,cap);
@@ -1006,6 +1007,7 @@ static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef bod
             if (reader) moon_reader_result(view->token,request,end+1);
             else if (cache) moon_site_cache_result(view,view->token,request,end+1);
             else if (database) moon_site_database_result(view,view->token,request,end+1);
+            else if (media) moon_media_action_result(view->token,request,end+1);
             else moon_site_data_result(view->token,request,end+1,catalog);
         }
     }
@@ -1050,6 +1052,10 @@ bool moon_engine_inspect_database(MoonView *view,uint64_t request,const char *qu
 }
 bool moon_engine_apply_lua_dom(MoonView *view,const char *operations) {
     return send_site_request(view,0,operations,"MoonApplyLuaDOM");
+}
+bool moon_engine_media_actions_available(void) { return filter_bundle_available; }
+bool moon_engine_media_action(MoonView *view,uint64_t request,bool resume) {
+    return send_site_request(view,request,resume ? "resume" : "pause","MoonControlMedia");
 }
 
 static MoonView *open_view(uint64_t token, const char *extension_id, const char *address) {
@@ -1587,6 +1593,11 @@ void moon_engine_site_mute(MoonView *view, bool muted) {
     apply_audio_mute(view);
 }
 bool moon_engine_site_muted(const MoonView *view) { return view->site_muted; }
+unsigned moon_engine_playing(const MoonView *view) {
+    const WKMediaState state=wk.WKPageGetMediaState(view->page);
+    return (state&kWKMediaIsPlayingAudio ? MOON_MEDIA_AUDIO : 0) |
+        (state&kWKMediaIsPlayingVideo ? MOON_MEDIA_VIDEO : 0);
+}
 bool moon_engine_media(MoonView *view) {
     WKMediaState state = wk.WKPageGetMediaState(view->page);
     return state & (kWKMediaIsPlayingAudio | kWKMediaIsPlayingVideo | kWKMediaHasActiveAudioCaptureDevice |
