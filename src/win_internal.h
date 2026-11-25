@@ -5,6 +5,8 @@
 #include "bridge.h"
 
 HWND moon_shell_window(void);
+bool moon_shell_website_notification(const char *origin, const char *body, void (*closed)(void));
+void moon_shell_dismiss_website_notification(void);
 HWND moon_shell_content(void);
 bool moon_utf16(const char *text, wchar_t *output, size_t capacity);
 bool moon_utf8(const wchar_t *text, char *output, size_t capacity);

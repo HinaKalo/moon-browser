@@ -48,6 +48,7 @@ pub const Permission = enum {
     @"downloads.open",
     @"siteData.cookieClear",
     @"ui.settings",
+    @"siteSettings.notifications",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -144,6 +145,9 @@ pub const PopupRule = struct { origin: []const u8, mode: PopupMode };
 pub const AutoplayMode = enum(c_uint) { automatic, allow, muted, block };
 pub const AutoplayRule = struct { origin: []const u8, mode: AutoplayMode };
 pub const AutoplaySettings = struct { currentOrigin: ?[]const u8, rules: []const AutoplayRule };
+pub const NotificationMode = enum(c_uint) { ask, allow, block };
+pub const NotificationRule = struct { origin: []const u8, mode: NotificationMode };
+pub const NotificationSettings = struct { currentOrigin: ?[]const u8, rules: []const NotificationRule };
 pub const SiteSoundRule = struct { origin: []const u8, muted: bool };
 pub const SiteSoundSettings = struct { currentOrigin: ?[]const u8, muted: []const []const u8 };
 pub const SiteTool = enum(c_uint) { page, data, console };
@@ -155,6 +159,7 @@ pub const SiteOverview = struct {
     autoplay: ?AutoplayMode = null,
     muted: ?bool = null,
     zoom: ?u16 = null,
+    notifications: ?NotificationMode = null,
 };
 pub const SiteSoundResult = enum(c_uint) { unavailable, muted, unmuted, limitReached };
 pub const PopupNotice = struct { id: u64, count: u32, targetOrigin: []const u8 };
@@ -394,6 +399,8 @@ pub const Method = enum {
     @"siteSettings.openTool",
     @"siteSettings.autoplay.get",
     @"siteSettings.autoplay.set",
+    @"siteSettings.notifications.get",
+    @"siteSettings.notifications.set",
     @"siteSettings.sound.get",
     @"siteSettings.sound.set",
     @"siteSettings.sound.toggle",
@@ -508,6 +515,7 @@ pub const Reason = enum(i32) {
     NotFound = -32004,
     AlreadyExists = -32005,
     InvalidScript = -32006,
+    NotSupported = -32007,
 
     pub fn code(self: Reason) []const u8 {
         return switch (self) {
@@ -522,6 +530,7 @@ pub const Reason = enum(i32) {
             .NotFound => "NOT_FOUND",
             .AlreadyExists => "ALREADY_EXISTS",
             .InvalidScript => "INVALID_SCRIPT",
+            .NotSupported => "NOT_SUPPORTED",
         };
     }
 };

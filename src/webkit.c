@@ -49,6 +49,46 @@ enum WKWebsiteAutoplayPolicy {
 extern WKWebsitePoliciesRef WKWebsitePoliciesCreate(void);
 extern void WKWebsitePoliciesSetAutoplayPolicy(WKWebsitePoliciesRef, enum WKWebsiteAutoplayPolicy);
 
+// Windows WebKit's C notification provider ABI, version 0.
+typedef struct { int version; const void *clientInfo; } MoonWKNotificationProviderBase;
+typedef struct {
+    MoonWKNotificationProviderBase base;
+    void (*show)(WKPageRef,WKNotificationRef,const void *);
+    void (*cancel)(WKNotificationRef,const void *);
+    void (*didDestroyNotification)(WKNotificationRef,const void *);
+    void (*addNotificationManager)(WKNotificationManagerRef,const void *);
+    void (*removeNotificationManager)(WKNotificationManagerRef,const void *);
+    WKDictionaryRef (*notificationPermissions)(const void *);
+    void (*clearNotifications)(WKArrayRef,const void *);
+} MoonWKNotificationProviderV0;
+extern WKNotificationManagerRef WKContextGetNotificationManager(WKContextRef);
+extern void WKNotificationManagerSetProvider(WKNotificationManagerRef,const MoonWKNotificationProviderBase *);
+extern void WKNotificationManagerProviderDidShowNotification(WKNotificationManagerRef,uint64_t);
+extern void WKNotificationManagerProviderDidCloseNotifications(WKNotificationManagerRef,WKArrayRef);
+extern void WKNotificationManagerProviderDidUpdateNotificationPolicy(WKNotificationManagerRef,WKSecurityOriginRef,bool);
+extern void WKNotificationManagerProviderDidRemoveNotificationPolicies(WKNotificationManagerRef,WKArrayRef);
+extern void WKNotificationPermissionRequestAllow(WKNotificationPermissionRequestRef);
+extern void WKNotificationPermissionRequestDeny(WKNotificationPermissionRequestRef);
+extern WKStringRef WKSecurityOriginCopyToString(WKSecurityOriginRef);
+extern WKSecurityOriginRef WKSecurityOriginCreateFromString(WKStringRef);
+extern WKStringRef WKNotificationCopyTitle(WKNotificationRef);
+extern WKStringRef WKNotificationCopyBody(WKNotificationRef);
+extern WKSecurityOriginRef WKNotificationGetSecurityOrigin(WKNotificationRef);
+extern uint64_t WKNotificationGetID(WKNotificationRef);
+extern bool WKNotificationGetIsPersistent(WKNotificationRef);
+extern WKBooleanRef WKBooleanCreate(bool);
+extern WKUInt64Ref WKUInt64Create(uint64_t);
+extern WKDictionaryRef WKDictionaryCreate(const WKStringRef *, const WKTypeRef *, size_t);
+
+#define WK_NOTIFICATION_FUNCTIONS(X) \
+    X(WKContextGetNotificationManager) X(WKNotificationManagerSetProvider) \
+    X(WKNotificationManagerProviderDidShowNotification) X(WKNotificationManagerProviderDidCloseNotifications) \
+    X(WKNotificationManagerProviderDidUpdateNotificationPolicy) X(WKNotificationManagerProviderDidRemoveNotificationPolicies) \
+    X(WKNotificationPermissionRequestAllow) X(WKNotificationPermissionRequestDeny) \
+    X(WKSecurityOriginCopyToString) X(WKSecurityOriginCreateFromString) \
+    X(WKNotificationCopyTitle) X(WKNotificationCopyBody) X(WKNotificationGetSecurityOrigin) \
+    X(WKNotificationGetID) X(WKNotificationGetIsPersistent) X(WKBooleanCreate) X(WKUInt64Create) X(WKDictionaryCreate)
+
 #define WK_FUNCTIONS(X) \
     X(WKRelease) X(WKGetTypeID) X(WKSessionStateGetTypeID) X(WKSessionStateCopyData) X(WKDataGetSize) \
     X(WKStringCreateWithUTF8CString) X(WKStringGetUTF8CString) X(WKStringIsEqualToUTF8CString) \
@@ -105,11 +145,15 @@ extern void WKWebsitePoliciesSetAutoplayPolicy(WKWebsitePoliciesRef, enum WKWebs
 static struct {
 #define FIELD(name) __typeof__(&name) name;
     WK_FUNCTIONS(FIELD)
+    WK_NOTIFICATION_FUNCTIONS(FIELD)
 #undef FIELD
 } wk;
 static HMODULE module;
 static WKContextRef context;
 static WKWebsiteDataStoreRef store;
+static WKNotificationManagerRef notification_manager;
+static uint64_t notification_visible, next_notification;
+static char notification_source[320];
 static void (*delete_site_cookies)(WKWebsiteDataStoreRef, WKStringRef, bool, void *, void (*)(void *));
 static WKUserContentControllerRef normal_page_content;
 static DLL_DIRECTORY_COOKIE dll_directory;
@@ -364,6 +408,127 @@ static WKPageRef popup_requested(WKPageRef page, WKPageConfigurationRef config, 
     release(request);
     return NULL;
 }
+
+static bool notification_origin(WKSecurityOriginRef origin, char buffer[320]) {
+    WKStringRef string = origin ? wk.WKSecurityOriginCopyToString(origin) : NULL;
+    if (!string) return false;
+    const size_t size=wk.WKStringGetUTF8CString(string,buffer,320);
+    release(string);
+    return size>1 && size<320 && strlen(buffer)+1==size;
+}
+
+static bool notification_view_visible(const MoonView *view) {
+    return view && !view->extension_address && IsWindowVisible(view->surface) && !IsIconic(moon_shell_window());
+}
+
+static void notification_requested(WKPageRef page, WKSecurityOriginRef origin,
+    WKNotificationPermissionRequestRef request, const void *client) {
+    const MoonView *view=client;
+    char address[320];
+    wk.WKRetain(request);
+    if (notification_view_visible(view) && GetAncestor(GetForegroundWindow(),GA_ROOTOWNER)==moon_shell_window() &&
+        notification_origin(origin,address) &&
+        moon_notification_request(view->token,address))
+        wk.WKNotificationPermissionRequestAllow(request);
+    else
+        wk.WKNotificationPermissionRequestDeny(request);
+    release(request);
+}
+
+static WKDictionaryRef notification_permissions(const void *client) {
+    WKStringRef keys[64];
+    WKTypeRef values[ARRAYSIZE(keys)];
+    size_t count=0;
+    for (;count<ARRAYSIZE(keys);++count) {
+        char origin[320];
+        bool allowed;
+        if (!moon_notification_rules(count,origin,sizeof(origin),&allowed)) break;
+        keys[count]=wk.WKStringCreateWithUTF8CString(origin);
+        values[count]=wk.WKBooleanCreate(allowed);
+    }
+    WKDictionaryRef result=wk.WKDictionaryCreate(keys,values,count);
+    for (size_t i=0;i<count;++i) {
+        release(keys[i]);
+        release(values[i]);
+    }
+    return result;
+}
+
+static void notification_closed(uint64_t id) {
+    WKTypeRef number=wk.WKUInt64Create(id);
+    WKArrayRef identifiers=wk.WKArrayCreate(&number,1);
+    wk.WKNotificationManagerProviderDidCloseNotifications(notification_manager,identifiers);
+    release(identifiers);
+    release(number);
+}
+
+static void notification_cancelled(WKNotificationRef notification, const void *client) {
+    if (notification_visible==wk.WKNotificationGetID(notification)) {
+        notification_visible=0;
+        moon_shell_dismiss_website_notification();
+    }
+}
+
+static void notification_toast_closed(void) {
+    if (!notification_visible) return;
+    const uint64_t id=notification_visible;
+    notification_visible=0;
+    if (notification_manager) notification_closed(id);
+}
+
+static void notification_line(WKStringRef source,char *text,size_t cap) {
+    copy_string(source,text,cap);
+    for (char *p=text;*p;++p) {
+        if ((unsigned char)*p<32 || *p==127) *p=' ';
+    }
+}
+
+static void notification_show(WKPageRef page, WKNotificationRef notification, const void *client) {
+    const uint64_t id=wk.WKNotificationGetID(notification);
+    const MoonView *view=views;
+    while (view && view->page!=page) view=view->next;
+    const uint64_t now=moon_clock();
+    char origin[320];
+    if (now<next_notification || wk.WKNotificationGetIsPersistent(notification) ||
+        !notification_view_visible(view) || !notification_origin(wk.WKNotificationGetSecurityOrigin(notification),origin) ||
+        !moon_notification_display_allowed(view->token,origin)) {
+        notification_closed(id);
+        return;
+    }
+    char title[170],body[360],description[560];
+    notification_line(wk.WKNotificationCopyTitle(notification),title,sizeof(title));
+    notification_line(wk.WKNotificationCopyBody(notification),body,sizeof(body));
+    snprintf(description,sizeof(description),"%s%s%s",title,body[0] && title[0] ? "\n" : "",body);
+    if (!moon_shell_website_notification(origin,description,notification_toast_closed)) {
+        notification_closed(id);
+        return;
+    }
+    strcpy(notification_source,origin);
+    notification_visible=id;
+    next_notification=now+4500;
+    wk.WKNotificationManagerProviderDidShowNotification(notification_manager,id);
+}
+
+bool moon_engine_notifications_available(void) { return notification_manager!=NULL; }
+
+void moon_engine_notification_policy(const char *origin, unsigned mode) {
+    if (!notification_manager) return;
+    if (mode!=MOON_NOTIFICATION_ALLOW && notification_visible && strcmp(origin,notification_source)==0)
+        moon_shell_dismiss_website_notification();
+    WKStringRef address=wk.WKStringCreateWithUTF8CString(origin);
+    WKSecurityOriginRef key=wk.WKSecurityOriginCreateFromString(address);
+    release(address);
+    if (!key) return;
+    if (mode==MOON_NOTIFICATION_ASK) {
+        WKTypeRef element=key;
+        WKArrayRef origins=wk.WKArrayCreate(&element,1);
+        wk.WKNotificationManagerProviderDidRemoveNotificationPolicies(notification_manager,origins);
+        release(origins);
+    } else {
+        wk.WKNotificationManagerProviderDidUpdateNotificationPolicy(notification_manager,key,mode==MOON_NOTIFICATION_ALLOW);
+    }
+    release(key);
+}
 static DownloadSlot *download_slot(WKDownloadRef download) {
     for (size_t i=0;i<ARRAYSIZE(downloads);++i) {
         if (downloads[i].download == download) return &downloads[i];
@@ -594,6 +759,11 @@ const char *moon_engine_init(void) {
     if (!wk.name) return "Packaged engine is missing " #name ".";
     WK_FUNCTIONS(RESOLVE)
 #undef RESOLVE
+    bool has_notifications=true;
+#define RESOLVE_OPTIONAL(name) wk.name=(__typeof__(wk.name))GetProcAddress(module,#name); \
+    if (!wk.name) has_notifications=false;
+    WK_NOTIFICATION_FUNCTIONS(RESOLVE_OPTIONAL)
+#undef RESOLVE_OPTIONAL
     delete_site_cookies = (__typeof__(delete_site_cookies))GetProcAddress(module,"WKWebsiteDataStoreStatisticsDeleteCookiesForTesting");
     WKContextConfigurationRef ctx = wk.WKContextConfigurationCreate();
     if (!ctx) return "Could not create process configuration.";
@@ -617,6 +787,16 @@ const char *moon_engine_init(void) {
     context = wk.WKContextCreateWithConfiguration(ctx);
     release(ctx);
     if (!context) return "Could not create WebKit context.";
+    if (has_notifications && !moon_shell_private()) {
+        notification_manager=wk.WKContextGetNotificationManager(context);
+        if (notification_manager) {
+            const MoonWKNotificationProviderV0 provider={
+                .base={0,NULL},.show=notification_show,.cancel=notification_cancelled,
+                .didDestroyNotification=notification_cancelled,.notificationPermissions=notification_permissions,
+            };
+            wk.WKNotificationManagerSetProvider(notification_manager,&provider.base);
+        }
+    }
     if (filter_bundle_available) {
         const WKContextInjectedBundleClientV1 client = {
             .base={1,NULL},.getInjectedBundleInitializationUserData=initial_request_policy,
@@ -651,6 +831,7 @@ const char *moon_engine_init(void) {
     return NULL;
 }
 void moon_engine_shutdown(void) {
+    notification_visible=0;
     if (context) {
         wk.WKContextSetDownloadClient(context,NULL);
         if (filter_bundle_available) wk.WKContextSetInjectedBundleClient(context,NULL);
@@ -661,7 +842,7 @@ void moon_engine_shutdown(void) {
     current_request_policy = NULL;
     if (store) release(store);
     if (context) release(context);
-    store = NULL; context = NULL;
+    store = NULL; context = NULL; notification_manager=NULL;
     for (size_t i=0;i<ARRAYSIZE(downloads);++i) {
         free(downloads[i].path);
         downloads[i].path=NULL;
@@ -936,6 +1117,7 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
     WKPageStateClientV0 state = { .base={0,view},.didChangeTitle=changed,.didChangeActiveURL=changed,
         .didChangeCanGoBack=changed,.didChangeCanGoForward=changed };
     WKPageUIClientV6 ui = { .base={6,view}, .createNewPage=popup_requested };
+    if (!address && notification_manager) ui.decidePolicyForNotificationPermissionRequest=notification_requested;
     const WKPageFindClientV0 find = { .base={0,view},
         .didFindString=find_succeeded, .didFailToFindString=find_failed };
     wk.WKPageSetPageNavigationClient(view->page,&navigation.base);

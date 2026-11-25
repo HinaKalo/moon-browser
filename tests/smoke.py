@@ -78,6 +78,7 @@ class Fixture(BaseHTTPRequestHandler):
     popup_attempts = set()
     popup_destinations = set()
     autoplay_reports = {}
+    notification_reports = {}
     reading_layout = {}
     closed_loaded = {}
     privacy_reports = {}
@@ -234,6 +235,20 @@ class Fixture(BaseHTTPRequestHandler):
         elif path.startswith("/autoplay-report/"):
             type(self).autoplay_reports[path.removeprefix("/autoplay-report/")] = urlsplit(self.path).query
             data, content_type = b"ok", "text/plain"
+        elif path.startswith("/notification-report/"):
+            type(self).notification_reports[path.removeprefix("/notification-report/")] = urlsplit(self.path).query
+            data, content_type = b"ok", "text/plain"
+        elif path.startswith("/notification-page/"):
+            stage = json.dumps(path.removeprefix("/notification-page/"))
+            data = ('<!doctype html><title>Website notification test</title><button id="request">Notify</button><script>'
+                    f'const stage={stage};'
+                    'const report=(kind,value)=>fetch("/notification-report/"+stage+"/"+kind+"?"+value);'
+                    'report("initial",Notification.permission);'
+                    'request.onclick=async()=>{const state=await Notification.requestPermission();report("request",state);'
+                    'if(state==="granted"){const notice=new Notification("Moon test",{body:"Native notification"});'
+                    'notice.onshow=()=>report("show","yes");notice.onclose=()=>report("close","yes");}};'
+                    '</script>').encode()
+            content_type = "text/html"
         elif path in ("/autoplay.wav", "/autoplay.mp4", "/autoplay.m4a"):
             if path.endswith(".wav"):
                 data, content_type = AUTOPLAY_AUDIO, "audio/wav"
@@ -883,6 +898,7 @@ def run_win32(exe, base, root):
     popup_manifest = json.loads(popups.with_name("plugin.json").read_text(encoding="utf-8")) if popups.exists() else {}
     popup_command = popup_manifest.get("contributes",{}).get("commands",[{}])[0].get("label","管理网站弹窗")
     autoplay_settings = "siteSettings.autoplay" in popup_manifest.get("permissions",[])
+    notification_settings = "siteSettings.notifications" in popup_manifest.get("permissions",[])
     sound_settings = "siteSettings.sound" in popup_manifest.get("permissions",[])
     zoom_settings = "siteSettings.zoom" in popup_manifest.get("permissions",[])
     site_overview = popups.exists() and 'siteSettings.current' in popups.with_name("popups.html").read_text(encoding="utf-8")
@@ -922,7 +938,8 @@ def run_win32(exe, base, root):
             {"id": "moon.settings-fixture", "enabled": True, "tabs_read": False},
             {"id": "moon.devtools", "enabled": True, "tabs_read": False, "page_inspect": True},
             {"id": "moon.history-fixture", "enabled": True, "tabs_read": False, "history_manage": True,
-             "popups_manage": popups.exists(), "site_settings_autoplay": autoplay_settings, "site_settings_sound": sound_settings},
+             "popups_manage": popups.exists(), "site_settings_autoplay": autoplay_settings, "site_settings_sound": sound_settings,
+             "site_settings_notifications": notification_settings},
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True,
@@ -1112,6 +1129,7 @@ def run_win32(exe, base, root):
             "apiVersion": 2, "runtime": "native", "entry": "Unused.exe", "settingsPage": "history.html",
             "permissions": ["history.manage"] + (["popups.manage"] if popups.exists() else []) +
                            (["siteSettings.autoplay"] if autoplay_settings else []) +
+                           (["siteSettings.notifications"] if notification_settings else []) +
                            (["siteSettings.sound"] if sound_settings else []),
             "contributes": {"commands": [{"id": "open", "label": "History fixture"}]},
         }), encoding="utf-8")
@@ -1193,6 +1211,9 @@ def run_win32(exe, base, root):
             'if(options?.sound){const change=await call("siteSettings.sound.set",options.sound);'
             'const state=await call("siteSettings.sound.get");'
             'await api.moonSettings.postMessage(JSON.stringify({op:"write",value:{soundResult:change.result??false,muted:state.result?.muted}}));return;}'
+            'if(options?.notification){const reply=await call("siteSettings.notifications.set",options.notification);'
+            'const rules=(await call("siteSettings.notifications.get")).result?.rules;'
+            'await api.moonSettings.postMessage(JSON.stringify({op:"write",value:{notificationResult:reply.result||reply.error?.data?.reason,rules}}));return;}'
             'if(options?.autoplayMode){const reply=await call("siteSettings.autoplay.set",{origin:options.origin,mode:options.autoplayMode});'
             'const autoplayResult=reply.result===true?"saved":reply.error?.data?.reason||"unexpected";'
             'const rules=(await call("siteSettings.autoplay.get")).result?.rules;'
@@ -3463,6 +3484,94 @@ def run_win32(exe, base, root):
             if rules != [{"origin":allow_origin,"mode":"allow"}]:
                 raise RuntimeError(f"Unexpected persisted popup rules: {rules}")
             print("popup_policy=ok default_block=ok open_once=ok user_clicked_link=ok saved_origin_exception=ok block_and_reset=ok allow_confirmation=ok",flush=True)
+            if notification_settings:
+                user.GetForegroundWindow.restype=wt.HWND
+                user.WindowFromPoint.argtypes=[wt.POINT]
+                user.WindowFromPoint.restype=wt.HWND
+                user.GetAncestor.argtypes=[wt.HWND,wt.UINT]
+                user.GetAncestor.restype=wt.HWND
+
+                def foreground_click(window,x,y):
+                    point=wt.POINT(x,y)
+                    original=wt.POINT()
+                    user.ClientToScreen(window,ctypes.byref(point))
+                    user.GetCursorPos(ctypes.byref(original))
+                    owner=user.GetAncestor(window,2)
+                    user.SetWindowPos(owner,wt.HWND(-1),0,0,0,0,0x13)
+                    try:
+                        if user.GetAncestor(user.WindowFromPoint(point),2)!=owner:
+                            raise RuntimeError("The notification test window is covered")
+                        if not user.SetCursorPos(point.x,point.y):
+                            raise RuntimeError("Could not point to the notification test control")
+                        user.mouse_event(2,0,0,0,0)
+                        user.mouse_event(4,0,0,0,0)
+                        sleep(0.15)
+                    finally:
+                        user.SetCursorPos(original.x,original.y)
+                        if user.IsWindow(owner): user.SetWindowPos(owner,wt.HWND(-2),0,0,0,0,0x13)
+
+                def notification_page(origin, stage, expected):
+                    address=origin+"/notification-page/"+stage
+                    set_control(edit,address)
+                    user.PostMessageW(edit,0x0100,0x0D,1)
+                    observed=wait_for(lambda: Fixture.notification_reports.get(stage+"/initial"),
+                                      f"{stage} did not report its notification permission")
+                    if observed not in expected:
+                        raise RuntimeError(f"{stage} notification permission was {observed}, expected {expected}")
+                    wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(address,)),
+                             f"{stage} notification document did not finish")
+
+                notification_page(base,"allow",("default",))
+                foreground_click(content,px(30),px(20))
+                question=wait_for(lambda: owned_window("#32770","允许网站通知？"),
+                                  "WebKit did not prompt for permission")
+                yes=user.GetDlgItem(question,6)
+                yes_rect=wt.RECT()
+                user.GetClientRect(yes,ctypes.byref(yes_rect))
+                foreground_click(yes,yes_rect.right//2,yes_rect.bottom//2)
+                wait_for(lambda: Fixture.notification_reports.get("allow/request")=="granted",
+                         "Allowing notifications did not resolve WebKit permission")
+                wait_for(lambda: owned_window("#32770","网站通知"),"Website notification did not display in the browser")
+                wait_for(lambda: Fixture.notification_reports.get("allow/show")=="yes",
+                         "The notification did not receive a display event")
+                wait_for(lambda: Fixture.notification_reports.get("allow/close")=="yes",
+                         "The notification did not expire")
+                rules_file=profile/"notification-rules.json"
+                if json.loads(rules_file.read_text(encoding="utf-8"))!=[{"origin":base,"mode":"allow"}]:
+                    raise RuntimeError("Notification grant did not persist by origin")
+                notification_page(base,"same-origin",("granted",))
+                notification_page(allow_origin,"other-origin",("default",))
+
+                def notification_setting(mode, expected):
+                    config=profile/f'extension-{sha256(b"moon.history-fixture").hexdigest()}.json'
+                    pending=config.with_suffix(".notification-signal")
+                    pending.write_text(json.dumps({"notification":{"origin":base+"/ignored","mode":mode}}),encoding="utf-8")
+                    pending.replace(config)
+                    set_control(edit,"extension://moon.history-fixture/history.html")
+                    user.PostMessageW(edit,0x0100,0x0D,1)
+                    result=wait_for(lambda: (value:=read_settings(config)).get("notificationResult") and value,
+                                    f"Setting notification mode {mode} did not complete")
+                    if result["notificationResult"]!={"origin":base,"mode":mode} or result["rules"]!=expected:
+                        raise RuntimeError(f"Unexpected notification rule: {result}")
+
+                notification_setting("block",[{"origin":base,"mode":"block"}])
+                notification_page(base,"blocked",("default","denied"))
+                foreground_click(content,px(30),px(20))
+                wait_for(lambda: Fixture.notification_reports.get("blocked/request")=="denied",
+                         "Explicit block rule did not reject permission")
+                if owned_window("#32770","允许网站通知？") or "blocked/show" in Fixture.notification_reports:
+                    raise RuntimeError("A blocked origin could prompt or display a notification")
+                notification_setting("ask",[])
+                notification_page(base,"reset",("default",))
+                foreground_click(content,px(30),px(20))
+                question=wait_for(lambda: owned_window("#32770","允许网站通知？"),
+                                  "Resetting notifications did not restore the permission prompt")
+                user.SendMessageW(question,0x0111,7,0)
+                wait_for(lambda: Fixture.notification_reports.get("reset/request")=="denied",
+                         "Cancelling the permission prompt did not deny the request")
+                if json.loads(rules_file.read_text(encoding="utf-8"))!=[]:
+                    raise RuntimeError("Resetting notifications left a persisted exception")
+                print("site_notifications=ok webkit_permission=ok native_toast=ok origin_isolation=ok block_and_reset=ok",flush=True)
             if autoplay_settings:
                 def playback(origin, stage, url=None):
                     # Retry inconclusive media results in a fresh document with another source.

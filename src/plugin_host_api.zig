@@ -14,6 +14,7 @@ const page_source = @import("page_source.zig");
 const popups = @import("popup_policy.zig");
 const autoplay = @import("autoplay_policy.zig");
 const site_sound = @import("site_sound.zig");
+const notifications = @import("site_notifications.zig");
 const reading = @import("reading.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const privacy = @import("privacy.zig");
@@ -68,6 +69,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
         .@"siteSettings.current", .@"siteSettings.openTool" => .@"popups.manage",
         .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => .@"siteSettings.autoplay",
+        .@"siteSettings.notifications.get", .@"siteSettings.notifications.set" => .@"siteSettings.notifications",
         .@"siteSettings.sound.get", .@"siteSettings.sound.set", .@"siteSettings.sound.toggle" => .@"siteSettings.sound",
         .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => .@"siteSettings.zoom",
         .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear" => .@"history.manage",
@@ -223,6 +225,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
         .@"siteSettings.current", .@"siteSettings.openTool" => {},
+        .@"siteSettings.notifications.get", .@"siteSettings.notifications.set" => {},
         .@"siteSettings.sound.get", .@"siteSettings.sound.set" => {},
         .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
@@ -429,6 +432,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                 .autoplay=if (context.grants.contains(.@"siteSettings.autoplay")) autoplay.mode(origin) else null,
                 .muted=if (context.grants.contains(.@"siteSettings.sound")) site_sound.muted(origin) else null,
                 .zoom=if (context.grants.contains(.@"siteSettings.zoom")) reading.load(origin) else null,
+                .notifications=if (context.grants.contains(.@"siteSettings.notifications") and
+                    native.moon_engine_notifications_available() and native.moon_notification_rules_enabled()) notifications.mode(origin) else null,
             };
             const tool_mask = native.moon_site_settings_tools(context.target_tab_id,owner.ptr,&current.revision);
             var tools: [std.enums.values(sdk.SiteTool).len]sdk.SiteTool = undefined;
@@ -492,6 +497,30 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!context.from_page or native.moon_shell_private()) return sdk.failure(output,id,.PermissionDenied);
             var buffer: site_sound.Buffer = undefined;
             return sdk.result(output,id,site_sound.status(context.target_tab_id,context.plugin_id,&buffer));
+        },
+        .@"siteSettings.notifications.get", .@"siteSettings.notifications.set" => {
+            if (!context.from_page or !native.moon_extension_panel_active(context.target_tab_id) or
+                !native.moon_notification_rules_enabled()) return sdk.failure(output,id,.PermissionDenied);
+            if (!native.moon_engine_notifications_available()) return sdk.failure(output,id,.NotSupported);
+            if (method==.@"siteSettings.notifications.get") {
+                if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+                var buffer: notifications.Buffer = undefined;
+                return sdk.result(output,id,sdk.NotificationSettings{
+                    .currentOrigin=popups.boundOrigin(context.target_tab_id,context.plugin_id),.rules=notifications.list(&buffer),
+                });
+            }
+            const rule = decode(sdk.NotificationRule,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const key = popups.origin(rule.origin) orelse return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (!native.moon_notification_change_allowed(owner.ptr,context.target_tab_id,&key,
+                rule.mode==.allow and notifications.mode(std.mem.sliceTo(&key,0))!=.allow))
+                return sdk.failure(output,id,.Cancelled);
+            notifications.save(allocator,key,rule.mode) catch |err| return sdk.failure(output,id,switch (err) {
+                error.LimitExceeded => .LimitExceeded,
+                else => .InternalError,
+            });
+            native.moon_engine_notification_policy(&key,@intFromEnum(rule.mode));
+            return sdk.result(output,id,sdk.NotificationRule{ .origin=std.mem.sliceTo(&key,0),.mode=rule.mode });
         },
         .@"siteSettings.sound.set" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);

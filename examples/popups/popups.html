@@ -43,6 +43,9 @@
   #site-tools,#site-summary { justify-content:flex-start; margin-top:12px; }
   #site-summary button { background:var(--soft); border-color:transparent; }
   #site-tool-status:not(:empty) { margin-top:10px; color:var(--muted); }
+  #notification-results { margin-top:14px; }
+  #notification-results:empty+.empty { display:block; }
+  #notification-status:not(:empty) { margin-top:10px; color:var(--accent); }
 </style>
 <main>
   <header><h1>站点设置</h1><p>按网站保存规则。HTTP、HTTPS 和不同端口各自设置。</p></header>
@@ -57,6 +60,7 @@
       <button type="button" id="current-autoplay" hidden></button>
       <button type="button" id="current-sound" hidden></button>
       <button type="button" id="current-zoom" hidden></button>
+      <button type="button" id="current-notifications" hidden></button>
     </div>
     <div class="row" id="site-tools" role="group" aria-label="当前网页工具" hidden>
       <button type="button" data-tool="page">返回网页</button>
@@ -64,6 +68,21 @@
       <button type="button" data-tool="console">打开控制台</button>
     </div>
     <p id="site-tool-status" role="status"></p>
+  </section>
+  <section id="notifications" hidden>
+    <h2>网站通知</h2>
+    <form id="notification-form">
+      <input id="notification-origin" required spellcheck="false" inputmode="url" aria-label="接收通知的网站 URL" placeholder="https://example.com">
+      <select id="notification-mode" aria-label="网站通知规则">
+        <option value="ask">询问</option>
+        <option value="allow">允许</option>
+        <option value="block">阻止</option>
+      </select>
+      <button id="notification-save" type="submit">保存</button>
+    </form>
+    <p id="notification-status" role="status"></p>
+    <ul id="notification-results" aria-label="网站通知例外"></ul>
+    <p class="empty">暂无通知例外。</p>
   </section>
   <section>
     <h2>弹窗例外</h2>
@@ -140,6 +159,9 @@
   const labels = {allow:'允许自动弹窗', block:'阻止新窗口'};
   const autoplayInput = get('autoplay-origin'), autoplayMode = get('autoplay-mode'), autoplayStatus = get('autoplay-status');
   const autoplayLabels = {allow:'允许自动播放',muted:'仅允许静音自动播放',block:'阻止自动播放'};
+  const notificationLabels = {ask:'询问',allow:'允许',block:'阻止'};
+  const notificationInput = get('notification-origin'), notificationMode = get('notification-mode');
+  let notificationOrigin, notificationBusy = false, notificationRevision = 0;
   const soundInput = get('sound-origin'), soundStatus = get('sound-status');
   let soundOrigin, soundBusy = false;
   const messages = {
@@ -166,7 +188,7 @@
     try { site=await host('siteSettings.current'); } catch {}
     if (revision!==overviewRevision) return;
     overview=site;
-    get('site-summary').hidden=!(site?.origin && (site.autoplay!==null || site.muted!==null || site.zoom!==null));
+    get('site-summary').hidden=!(site?.origin && [site.autoplay,site.muted,site.zoom,site.notifications].some(value=>value!=null));
     get('site-tools').hidden=!site?.tools.length;
     for (const button of tools) button.hidden=!site?.tools.includes(button.dataset.tool);
     get('use-current').textContent='弹窗 · '+(labels[site?.popups] || '默认规则');
@@ -174,6 +196,9 @@
     playback.hidden=site?.autoplay==null;
     sound.hidden=site?.muted==null;
     zoom.hidden=site?.zoom==null;
+    const notifications=get('current-notifications');
+    notifications.hidden=site?.notifications==null;
+    if (!notifications.hidden) notifications.textContent='通知 · '+notificationLabels[site.notifications];
     if (!playback.hidden) playback.textContent='自动播放 · '+(autoplayLabels[site.autoplay] || '默认规则');
     if (!sound.hidden) sound.textContent=site.muted ? '取消网站静音' : '静音此网站';
     if (!zoom.hidden) zoom.textContent='缩放 · '+site.zoom+'%';
@@ -202,6 +227,57 @@
     zoomInput.value=overview.origin;
     zoomPercent.value=overview.zoom;
     zoomPercent.focus();
+  };
+  function editNotification(origin, mode) {
+    if (notificationBusy) return;
+    notificationInput.value=origin;
+    notificationMode.value=mode;
+    notificationMode.focus();
+  }
+  get('current-notifications').onclick=()=>{
+    if (overview?.origin) editNotification(overview.origin,overview.notifications);
+  };
+  async function refreshNotifications() {
+    const revision=++notificationRevision;
+    try {
+      const data=await host('siteSettings.notifications.get');
+      if (revision!==notificationRevision) return;
+      if (notificationOrigin!==data.currentOrigin || !notificationInput.value) {
+        notificationOrigin=data.currentOrigin;
+        notificationInput.value=notificationOrigin || '';
+        notificationMode.value=data.rules.find(rule=>rule.origin===notificationOrigin)?.mode || 'ask';
+      }
+      renderRules(get('notification-results'),data.rules,notificationLabels,
+        rule=>editNotification(rule.origin,rule.mode),rule=>saveNotification(rule.origin,'ask'));
+      get('notifications').hidden=false;
+    } catch {
+      if (revision===notificationRevision) get('notifications').hidden=true;
+    }
+  }
+  async function saveNotification(origin,mode) {
+    if (notificationBusy) return;
+    notificationBusy=true;
+    const status=get('notification-status');
+    const controls=[notificationInput,notificationMode,get('notification-save')];
+    for (const control of controls) control.disabled=true;
+    try {
+      const rule=await host('siteSettings.notifications.set',{origin,mode});
+      if (notificationInput.value===origin) {
+        notificationInput.value=rule.origin;
+        notificationMode.value=rule.mode;
+      }
+      await Promise.all([refreshNotifications(),refreshOverview()]);
+      status.textContent='已保存网站通知规则。';
+    } catch (error) {
+      status.textContent=messages[error.message] || '暂时无法保存网站通知规则。';
+    } finally {
+      notificationBusy=false;
+      for (const control of controls) control.disabled=false;
+    }
+  }
+  get('notification-form').onsubmit=event=>{
+    event.preventDefault();
+    saveNotification(notificationInput.value.trim(),notificationMode.value);
   };
   async function refresh() {
     current = await host('popups.status');
@@ -423,6 +499,7 @@
     refresh().catch(error => { status.textContent = messages[error.message] || '暂时无法读取网站设置。'; });
     refreshAutoplay().catch(() => { get('autoplay').hidden = true; });
     refreshSound().catch(() => { get('sound').hidden = true; });
+    refreshNotifications();
     refreshZoom(0);
     refreshOverview();
   }

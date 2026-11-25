@@ -259,6 +259,14 @@ enum { MOON_AUTOPLAY_DEFAULT, MOON_AUTOPLAY_ALLOW, MOON_AUTOPLAY_MUTED, MOON_AUT
 bool moon_autoplay_rules_active(void);
 unsigned moon_autoplay_mode(const char *url);
 bool moon_autoplay_change_allowed(const char *owner, uint64_t panel, const char *origin, bool allow);
+enum { MOON_NOTIFICATION_ASK, MOON_NOTIFICATION_ALLOW, MOON_NOTIFICATION_BLOCK };
+bool moon_engine_notifications_available(void);
+void moon_engine_notification_policy(const char *origin, unsigned mode);
+bool moon_notification_request(uint64_t tab, const char *origin);
+bool moon_notification_display_allowed(uint64_t tab, const char *origin);
+bool moon_notification_change_allowed(const char *owner, uint64_t panel, const char *origin, bool allow);
+bool moon_notification_rules_enabled(void);
+size_t moon_notification_rules(size_t index, char *origin, size_t capacity, bool *allowed);
 bool moon_site_sound_rules_active(void);
 bool moon_site_sound_mutes(const char *url);
 bool moon_site_sound_panel_allowed(const char *owner, uint64_t panel);

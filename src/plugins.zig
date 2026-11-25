@@ -44,6 +44,7 @@ const Grant = struct {
     site_settings_autoplay: ?bool = null,
     site_settings_sound: ?bool = null,
     site_settings_zoom: ?bool = null,
+    site_settings_notifications: ?bool = null,
     popups_manage: bool = false,
     page_source: bool = false,
     tabs_session_manage: bool = false,
@@ -311,6 +312,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"siteSettings.zoom");
             plugin.grants.insert(.@"siteSettings.zoom");
         }
+        if (std.mem.eql(u8,id,"moon.popups") and plugin.enabled and requests.contains(.@"siteSettings.notifications")) {
+            plugin.default_grants.insert(.@"siteSettings.notifications");
+            plugin.grants.insert(.@"siteSettings.notifications");
+        }
         if (std.mem.eql(u8,id,"moon.bookmarks") and plugin.enabled and requests.contains(.@"bookmarks.transfer")) {
             plugin.default_grants.insert(.@"bookmarks.transfer");
             plugin.grants.insert(.@"bookmarks.transfer");
@@ -440,6 +445,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"siteSettings.sound")) plugin.grants.insert(.@"siteSettings.sound");
         if (grant.enabled and (grant.site_settings_zoom orelse plugin.default_grants.contains(.@"siteSettings.zoom")) and
             plugin.requests.contains(.@"siteSettings.zoom")) plugin.grants.insert(.@"siteSettings.zoom");
+        if (grant.enabled and (grant.site_settings_notifications orelse plugin.default_grants.contains(.@"siteSettings.notifications")) and
+            plugin.requests.contains(.@"siteSettings.notifications")) plugin.grants.insert(.@"siteSettings.notifications");
         if (grant.enabled and grant.tabs_session_manage and plugin.requests.contains(.@"tabs.session.manage")) plugin.grants.insert(.@"tabs.session.manage");
         if (grant.enabled and (grant.bookmarks_transfer orelse plugin.default_grants.contains(.@"bookmarks.transfer")) and
             plugin.requests.contains(.@"bookmarks.transfer")) plugin.grants.insert(.@"bookmarks.transfer");
@@ -535,6 +542,7 @@ fn persist() bool {
         .site_settings_autoplay = plugin.grants.contains(.@"siteSettings.autoplay"),
         .site_settings_sound = plugin.grants.contains(.@"siteSettings.sound"),
         .site_settings_zoom = plugin.grants.contains(.@"siteSettings.zoom"),
+        .site_settings_notifications = plugin.grants.contains(.@"siteSettings.notifications"),
         .page_source = plugin.grants.contains(.@"page.source"),
         .popups_manage = plugin.grants.contains(.@"popups.manage"),
         .tabs_session_manage = plugin.grants.contains(.@"tabs.session.manage"),
@@ -588,6 +596,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"popups.manage" => "此插件可管理网站弹窗权限，并为触发命令的网页打开最近拦截的链接。",
                 .@"siteSettings.autoplay" => "此插件可查看和修改网站的媒体自动播放规则。允许有声自动播放时需要单独确认。",
                 .@"siteSettings.sound" => "此插件可查看和修改网站静音规则。规则适用于同一来源的标签页。",
+                .@"siteSettings.notifications" => "此插件可查看和修改网站通知规则。允许通知需要用户确认。",
                 .@"siteSettings.zoom" => "此插件可查看保存过缩放比例的网站，并修改或删除例外。",
                 .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",

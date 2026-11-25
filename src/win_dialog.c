@@ -15,6 +15,8 @@ typedef struct Popup {
     bool details;
     wchar_t title[256];
     wchar_t body[16384];
+    wchar_t source[320];
+    void (*closed)(void);
 } Popup;
 
 static Popup notice;
@@ -71,7 +73,8 @@ static void layout_popup(Popup *popup, const RECT *suggested) {
     const int work_w = monitor.rcWork.right - monitor.rcWork.left;
     const int work_h = monitor.rcWork.bottom - monitor.rcWork.top;
     if (popup->kind==TOAST) {
-        const int width=minimum(scale(popup,330),work_w-2*gap), height=scale(popup,78), inset=scale(popup,20);
+        const int width=minimum(scale(popup,popup->source[0] ? 370 : 330),work_w-2*gap);
+        const int height=scale(popup,popup->source[0] ? 126 : 78), inset=scale(popup,20);
         const int left=clamp(owner.right-width-inset,monitor.rcWork.left+gap,monitor.rcWork.right-width-gap);
         const int top=clamp(owner.bottom-height-inset,monitor.rcWork.top+gap,monitor.rcWork.bottom-height-gap);
         SetWindowPos(window,NULL,left,top,width,height,SWP_NOZORDER | SWP_NOACTIVATE);
@@ -249,7 +252,15 @@ static INT_PTR CALLBACK popup_message(HWND window, UINT msg, WPARAM wp, LPARAM l
                 SelectObject(dc,popup->normal);
                 SetTextColor(dc,popup->colors.muted);
                 RECT text={scale(popup,22),scale(popup,39),rect.right-scale(popup,22),scale(popup,64)};
-                DrawTextW(dc,popup->body,-1,&text,DT_END_ELLIPSIS|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+                if (popup->source[0]) {
+                    DrawTextW(dc,popup->source,-1,&text,DT_END_ELLIPSIS|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+                    text.top=scale(popup,68);
+                    text.bottom=rect.bottom-scale(popup,14);
+                    SetTextColor(dc,popup->colors.text);
+                    DrawTextW(dc,popup->body,-1,&text,DT_END_ELLIPSIS|DT_WORDBREAK|DT_EDITCONTROL|DT_NOPREFIX);
+                } else {
+                    DrawTextW(dc,popup->body,-1,&text,DT_END_ELLIPSIS|DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+                }
             }
             SelectObject(dc,font);
             EndPaint(window,&paint);
@@ -296,6 +307,11 @@ static INT_PTR CALLBACK popup_message(HWND window, UINT msg, WPARAM wp, LPARAM l
             popup->normal = popup->heading = NULL;
             popup->surface = NULL;
             SetWindowLongPtrW(window,DWLP_USER,0);
+            if (popup->closed) {
+                void (*closed)(void)=popup->closed;
+                popup->closed=NULL;
+                closed();
+            }
             break;
     }
     return FALSE;
@@ -311,15 +327,38 @@ void moon_dialog_refresh(void) {
     if (toast.window) apply_colors(&toast);
 }
 
-void moon_shell_toast(const char *title,const char *body) {
+static bool show_toast(const char *title,const char *body,UINT duration) {
     HWND owner=moon_shell_window();
-    if (!owner || !set_text(&toast,title,body)) return;
+    if (!owner || !set_text(&toast,title,body)) return false;
     if (toast.window) SetWindowTextW(toast.window,toast.title);
     else CreateDialogIndirectParamW(GetModuleHandleW(NULL),&popup_template.dialog,owner,popup_message,(LPARAM)&toast);
-    if (!toast.window) return;
+    if (!toast.window) return false;
     layout_popup(&toast,NULL);
     ShowWindow(toast.window,SW_SHOWNOACTIVATE);
-    if (!SetTimer(toast.window,1,2500,NULL)) DestroyWindow(toast.window);
+    if (SetTimer(toast.window,1,duration,NULL)) return true;
+    DestroyWindow(toast.window);
+    return false;
+}
+
+void moon_shell_dismiss_website_notification(void) {
+    if (toast.window && toast.source[0]) DestroyWindow(toast.window);
+    toast.source[0]=0;
+}
+
+bool moon_shell_website_notification(const char *origin,const char *body,void (*closed)(void)) {
+    moon_shell_dismiss_website_notification();
+    if (!moon_utf16(origin,toast.source,ARRAYSIZE(toast.source))) return false;
+    if (show_toast("网站通知",body,4000)) {
+        toast.closed=closed;
+        return true;
+    }
+    toast.source[0]=0;
+    return false;
+}
+
+void moon_shell_toast(const char *title,const char *body) {
+    moon_shell_dismiss_website_notification();
+    show_toast(title,body,2500);
 }
 
 void moon_shell_info(const char *title, const char *body) {

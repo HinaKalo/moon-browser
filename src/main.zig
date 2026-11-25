@@ -16,6 +16,7 @@ const reader = @import("reader.zig");
 const popups = @import("popup_policy.zig");
 const autoplay = @import("autoplay_policy.zig");
 const site_sound = @import("site_sound.zig");
+const notifications = @import("site_notifications.zig");
 const reading = @import("reading.zig");
 const recent_tabs = @import("recent_tabs.zig");
 const market = @import("market.zig");
@@ -1406,6 +1407,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
         popups.init(profile);
         autoplay.init(profile);
         site_sound.init(profile);
+        notifications.init(profile);
         userscripts.init(profile);
         search.init();
     }
@@ -1998,6 +2000,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"popups.manage" => "允许管理网站弹窗",
         .@"siteSettings.autoplay" => "允许管理媒体自动播放",
         .@"siteSettings.sound" => "允许管理网站静音",
+        .@"siteSettings.notifications" => "允许管理网站通知",
         .@"tabs.session.manage" => "允许保存和恢复上次浏览会话",
         .@"page.reading" => "允许打开页内查找和调整缩放",
         .@"window.fullscreen" => "允许切换浏览器全屏",
@@ -2064,6 +2067,13 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     if (permission == null or permission == .@"tabs.organize") checkTabToolsGrant();
     if (permission == null or permission == .@"bookmarks.manage") native.moon_shell_bookmarks_changed();
     if (permission == null or permission == .@"siteSettings.sound") moon_site_sound_update();
+    if (permission == null or permission == .@"siteSettings.notifications") {
+        var rules: notifications.Buffer = undefined;
+        for (notifications.list(&rules)) |rule| {
+            const mode: sdk.NotificationMode = if (moon_notification_rules_enabled()) rule.mode else .block;
+            native.moon_engine_notification_policy(@ptrCast(rule.origin.ptr),@intFromEnum(mode));
+        }
+    }
     native.moon_shell_refresh();
     return result;
 }
@@ -2498,6 +2508,74 @@ export fn moon_autoplay_change_allowed(owner: [*c]const u8, panel: u64, origin: 
 
 export fn moon_site_sound_rules_active() bool {
     return !stopped and site_sound.hasRules() and !native.moon_shell_private() and plugins.systemEnabled(.@"siteSettings.sound");
+}
+
+export fn moon_notification_rules_enabled() bool {
+    return !stopped and !native.moon_shell_private() and plugins.hasGrant("moon.popups",.@"siteSettings.notifications");
+}
+
+export fn moon_notification_rules(index: usize, origin: [*c]u8, capacity: usize, allowed: *bool) usize {
+    if (!moon_notification_rules_enabled()) return 0;
+    var buffer: notifications.Buffer = undefined;
+    const rules = notifications.list(&buffer);
+    if (index>=rules.len or rules[index].origin.len>=capacity) return 0;
+    const rule = rules[index];
+    @memcpy(origin[0..rule.origin.len],rule.origin);
+    origin[rule.origin.len] = 0;
+    allowed.* = rule.mode==.allow;
+    return rule.origin.len;
+}
+
+fn notificationTabMatches(id: u64, origin: []const u8) bool {
+    if (!moon_notification_rules_enabled() or count==0) return false;
+    const tab = &tabs[active];
+    if (tab.id!=id or tab.extension or !tab.document_committed or tab.loading) return false;
+    const page = tab.view orelse return false;
+    var url: [4096:0]u8 = @splat(0);
+    native.moon_engine_committed_url(page,&url,url.len);
+    const key = popups.origin(slice(&url)) orelse return false;
+    return equals(slice(&key),origin);
+}
+
+export fn moon_notification_display_allowed(id: u64, origin: [*c]const u8) bool {
+    return notificationTabMatches(id,slice(origin)) and notifications.mode(slice(origin))==.allow;
+}
+
+var notification_prompt = false;
+fn confirmNotifications(origin: []const u8) bool {
+    if (notification_prompt) return false;
+    notification_prompt = true;
+    defer notification_prompt = false;
+    var body: [640]u8 = undefined;
+    const message = std.fmt.bufPrintSentinel(&body,"允许 {s} 在浏览器中显示网站通知？你可随时在站点设置中撤销。",.{origin},0) catch return false;
+    return native.moon_shell_confirm("允许网站通知？",message.ptr);
+}
+
+export fn moon_notification_request(id: u64, origin: [*c]const u8) bool {
+    const key = popups.origin(slice(origin)) orelse return false;
+    const address = slice(&key);
+    if (!notificationTabMatches(id,address)) return false;
+    switch (notifications.mode(address)) {
+        .allow => return true,
+        .block => return false,
+        .ask => {},
+    }
+    const navigation = tabs[active].navigation;
+    if (!confirmNotifications(address) or !notificationTabMatches(id,address) or tabs[active].navigation!=navigation) return false;
+    notifications.save(std.heap.page_allocator,key,.allow) catch return false;
+    native.moon_engine_notification_policy(&key,native.MOON_NOTIFICATION_ALLOW);
+    return true;
+}
+
+export fn moon_notification_change_allowed(owner: [*c]const u8, panel: u64, origin: [*c]const u8, allow: bool) bool {
+    if (!notificationPanelAllowed(slice(owner),panel)) return false;
+    return !allow or (confirmNotifications(slice(origin)) and notificationPanelAllowed(slice(owner),panel));
+}
+
+fn notificationPanelAllowed(owner: []const u8, panel: u64) bool {
+    return native.moon_engine_notifications_available() and moon_notification_rules_enabled() and
+        count!=0 and tabs[active].id==panel and tabs[active].extension and
+        plugins.hasGrant(owner,.@"siteSettings.notifications");
 }
 
 export fn moon_site_sound_mutes(url: [*c]const u8) bool {
