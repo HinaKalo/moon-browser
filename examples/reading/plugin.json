@@ -1,7 +1,7 @@
 {
   "id": "moon.reading",
   "name": "查找、缩放与阅读",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonReading.exe",

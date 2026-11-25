@@ -616,6 +616,7 @@ addEventListener('load',()=>{
                     '<aside class="advertisement">排除侧栏广告标记</aside>'
                     '<article><h1>月湾的潮汐记录</h1><p id="dynamic"></p>'
                     f'<h2>港口日志</h2><p>{paragraph * 4}</p>'
+                    '<h3>潮汐测量</h3>'
                     f'<blockquote>{paragraph}</blockquote><ul><li>检查海图</li><li>记录潮位</li></ul>'
                     '<p><a href="javascript:void(0)">原文引用</a></p></article>'
                     '<script>document.getElementById("dynamic").textContent="活"+"页正文 🌙";</script>'
@@ -1930,10 +1931,15 @@ def run_win32(exe, base, root):
         action = next(cmd for cmd in manifest["contributes"]["commands"] if cmd["id"]=="reader")
         manifest["contributes"] = {"commands": [{"id": action["id"], "label": "运行阅读模式验收", "menu": "page"}]}
         (fixture / "plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+        source_page = reader_page.read_text(encoding="utf-8")
+        if 'id="outline"' in source_page:
+            reader_config = profile / f'extension-{sha256(b"moon.reader-fixture").hexdigest()}.json'
+            reader_config.write_text('{"reader":{"size":17,"appearance":"dark"}}',encoding="utf-8")
         contract = """
 <script>(async()=>{
     const api=window.webkit.messageHandlers.moonSettings;
-    const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));
+    const saved=async()=>JSON.parse(await api.postMessage('{"op":"read"}')).value;
+    const emit=async value=>api.postMessage(JSON.stringify({op:"write",value:{...await saved(),...value}}));
     const wait=async(fn,label)=>{for(let n=0;n<200;n++){const result=await fn();if(result)return result;
         await new Promise(resolve=>setTimeout(resolve,50));}throw Error(label);};
     try {
@@ -1952,20 +1958,32 @@ def run_win32(exe, base, root):
             !content.querySelector("blockquote")||!content.querySelector("ul>li")||
             content.textContent.includes("排除侧栏广告标记")||content.querySelector("a,form,script,input,iframe"))
             throw Error("incorrect article markup: "+content.textContent.slice(0,200));
+        const outline=byId("outline");
+        if(outline){
+            await wait(()=>getComputedStyle(content).fontSize==="17px"&&
+                document.documentElement.dataset.appearance==="dark","saved reader preferences");
+            const buttons=[...outline.querySelectorAll("button")];
+            if(outline.hidden||buttons.map(button=>button.textContent).join(",")!=="月湾的潮汐记录,港口日志,潮汐测量")
+                throw Error("reader outline contents");
+            outline.open=true;buttons.at(-1).click();
+            if(outline.open||document.activeElement!==content.querySelector("h3"))throw Error("reader outline jump");
+        }
         byId("larger").click();
-        if(getComputedStyle(content).fontSize!=="21px")throw Error("font size control");
+        if(getComputedStyle(content).fontSize!==(outline?"19px":"21px"))throw Error("font size control");
         const appearance=byId("appearance");
         appearance.value="sepia";appearance.dispatchEvent(new Event("change"));
         if(document.documentElement.dataset.appearance!=="sepia")throw Error("appearance control");
+        if(outline)await wait(async()=>{const prefs=(await saved())?.reader;return prefs?.size===19&&prefs.appearance==="sepia";},
+                              "updated reader preferences not saved");
         await emit({ready:true});back.click();
         await wait(async()=>(await host("reading.article")).state==="stale","article was not invalidated");
-        await wait(()=>!content.textContent,"stale article was visible");
+        await wait(()=>!content.textContent&&(!outline||(outline.hidden&&!outline.querySelector("button"))),"stale article was visible");
         if(await host("reading.read",{generation:result.generation,offset:0}).then(()=>true,()=>false))
             throw Error("stale article could be read");
         await emit({passed:true});
     }catch(error){await emit({error:String(error)});}
 })();</script>"""
-        page = reader_page.read_text(encoding="utf-8").replace("<title>阅读模式</title>","<title>阅读模式验收页</title>")
+        page = source_page.replace("<title>阅读模式</title>","<title>阅读模式验收页</title>")
         (fixture / "reader.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
     if capture_plugin.exists():
         fixture = profile / "plugins" / "network-capture-contract"
@@ -3865,7 +3883,8 @@ def run_win32(exe, base, root):
             set_control(edit,"extension://moon.reader-fixture/reader.html")
             user.PostMessageW(edit,0x0100,0x0D,1)
             config = profile / f'extension-{sha256(b"moon.reader-fixture").hexdigest()}.json'
-            isolated = wait_for(lambda: read_settings(config),"Reader owner check did not report")
+            isolated = wait_for(lambda: (value:=read_settings(config)) and ("isolated" in value or "error" in value) and value,
+                                "Reader owner check did not report")
             if not isolated.get("isolated"):
                 raise RuntimeError(f"Reader owner check: {isolated}")
             invoke("Moon fixture reader-contract")
@@ -3887,6 +3906,8 @@ def run_win32(exe, base, root):
             if not result.get("passed"):
                 raise RuntimeError(f"Reader invalidation check: {result}")
             print("reader_system_plugin=ok shortcut=ok live_dom=ok structure=ok appearance=ok return_to_tab=ok owner_isolation=ok stale_snapshot=ok",flush=True)
+            if 'id="outline"' in reader_page.read_text(encoding="utf-8"):
+                print("reader_outline=ok heading_focus=ok reader_preferences=ok stale_outline=ok",flush=True)
 
         if blocker.exists():
             invoke("管理网页过滤")

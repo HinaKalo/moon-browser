@@ -54,9 +54,13 @@ function Check-Release {
 }
 
 $head = (Native 'git' @('-C',$root,'rev-parse','HEAD')).Trim()
-$remoteHead = (Native 'gh' @('api',"repos/$repo/git/ref/heads/main",'--jq','.object.sha')).Trim()
-if ($head -ne $remoteHead -or (Native 'git' @('-C',$root,'status','--porcelain'))) {
-    throw 'Publish from a clean source commit already pushed to GitHub main.'
+if (Native 'git' @('-C',$root,'status','--porcelain')) {
+    throw 'The release source checkout must be clean.'
+}
+$remote = Native 'git' @('ls-remote','--exit-code','--refs',"https://github.com/$repo.git",'refs/heads/main')
+$remoteHead = ($remote -split '\s+', 2)[0]
+if ($head -ne $remoteHead) {
+    throw "The release commit $head does not match GitHub main $remoteHead."
 }
 $lookup = & gh release view $tag --repo $repo --json isDraft,targetCommitish,assets 2>$null
 if ($LASTEXITCODE -ne 0) {
