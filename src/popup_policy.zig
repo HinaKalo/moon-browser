@@ -8,7 +8,7 @@ pub const Origin = [320:0]u8;
 const Entry = struct { origin: Origin, mode: sdk.PopupMode };
 const State = struct { entries: [max_rules]Entry = undefined, len: usize = 0 };
 const Notice = struct { source: u64, id: u64, count: u32, target: [4096:0]u8 };
-const Binding = struct { panel: u64, source: u64, owner: [96:0]u8, origin: Origin };
+const Binding = struct { panel: u64, source: u64, navigation: u64, revision: u64, owner: [96:0]u8, origin: Origin };
 pub const Status = struct { currentOrigin: ?[]const u8, rules: []const sdk.PopupRule, blocked: ?sdk.PopupNotice };
 
 var state: State = .{};
@@ -108,9 +108,10 @@ pub fn save(allocator: std.mem.Allocator, rule: sdk.PopupRule) !void {
     state = next;
 }
 
-pub fn bind(panel: u64, owner: []const u8, source: u64, current: Origin) void {
+pub fn bind(panel: u64, owner: []const u8, source: u64, navigation: u64, current: Origin) void {
     if (owner.len >= 96) return;
-    binding = .{ .panel=panel, .source=source, .owner=@splat(0), .origin=current };
+    sequence += 1;
+    binding = .{ .panel=panel, .source=source, .navigation=navigation, .revision=sequence, .owner=@splat(0), .origin=current };
     if (binding) |*entry| @memcpy(entry.owner[0..owner.len],owner);
 }
 
@@ -141,6 +142,11 @@ fn selected(panel: u64, owner: []const u8) ?*const Binding {
 pub fn boundOrigin(panel: u64, owner: []const u8) ?[]const u8 {
     const bound = selected(panel,owner) orelse return null;
     return if (bound.origin[0]!=0) text(&bound.origin) else null;
+}
+
+pub fn boundPage(panel: u64, owner: []const u8) ?Binding {
+    const bound = selected(panel,owner) orelse return null;
+    return if (bound.origin[0]!=0) bound.* else null;
 }
 
 pub fn status(panel: u64, owner: []const u8, buffer: *RuleBuffer, target: *Origin) Status {

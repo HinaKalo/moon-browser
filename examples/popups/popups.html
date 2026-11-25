@@ -40,6 +40,9 @@
   #autoplay-status:empty,#sound-status:empty,#zoom-status:empty { display:none; }
   #zoom-query { width:100%; margin-bottom:12px; }
   #zoom-pages { justify-content:flex-end; margin-top:12px; }
+  #site-tools,#site-summary { justify-content:flex-start; margin-top:12px; }
+  #site-summary button { background:var(--soft); border-color:transparent; }
+  #site-tool-status:not(:empty) { margin-top:10px; color:var(--muted); }
 </style>
 <main>
   <header><h1>站点设置</h1><p>按网站保存规则。HTTP、HTTPS 和不同端口各自设置。</p></header>
@@ -50,6 +53,17 @@
       <div><p id="blocked-summary"></p><code id="blocked-target" class="origin"></code></div>
       <button id="open-blocked" type="button">打开一次</button>
     </div>
+    <div class="row" id="site-summary" role="group" aria-label="当前网站规则" hidden>
+      <button type="button" id="current-autoplay" hidden></button>
+      <button type="button" id="current-sound" hidden></button>
+      <button type="button" id="current-zoom" hidden></button>
+    </div>
+    <div class="row" id="site-tools" role="group" aria-label="当前网页工具" hidden>
+      <button type="button" data-tool="page">返回网页</button>
+      <button type="button" data-tool="data">查看站点数据</button>
+      <button type="button" data-tool="console">打开控制台</button>
+    </div>
+    <p id="site-tool-status" role="status"></p>
   </section>
   <section>
     <h2>弹窗例外</h2>
@@ -120,6 +134,8 @@
 </main>
 <script>
   const get = id => document.getElementById(id);
+  const tools = [...document.querySelectorAll('[data-tool]')];
+  let overview, overviewRevision=0;
   const input = get('origin'), mode = get('mode'), rows = get('results'), status = get('status');
   const labels = {allow:'允许自动弹窗', block:'阻止新窗口'};
   const autoplayInput = get('autoplay-origin'), autoplayMode = get('autoplay-mode'), autoplayStatus = get('autoplay-status');
@@ -144,6 +160,49 @@
     mode.value = selected;
     input.focus();
   }
+  async function refreshOverview() {
+    const revision=++overviewRevision;
+    let site;
+    try { site=await host('siteSettings.current'); } catch {}
+    if (revision!==overviewRevision) return;
+    overview=site;
+    get('site-summary').hidden=!(site?.origin && (site.autoplay!==null || site.muted!==null || site.zoom!==null));
+    get('site-tools').hidden=!site?.tools.length;
+    for (const button of tools) button.hidden=!site?.tools.includes(button.dataset.tool);
+    get('use-current').textContent='弹窗 · '+(labels[site?.popups] || '默认规则');
+    const playback=get('current-autoplay'), sound=get('current-sound'), zoom=get('current-zoom');
+    playback.hidden=site?.autoplay==null;
+    sound.hidden=site?.muted==null;
+    zoom.hidden=site?.zoom==null;
+    if (!playback.hidden) playback.textContent='自动播放 · '+(autoplayLabels[site.autoplay] || '默认规则');
+    if (!sound.hidden) sound.textContent=site.muted ? '取消网站静音' : '静音此网站';
+    if (!zoom.hidden) zoom.textContent='缩放 · '+site.zoom+'%';
+  }
+  for (const button of tools) button.onclick=async () => {
+    if (!overview?.revision) return;
+    const result=get('site-tool-status');
+    button.disabled=true;
+    result.textContent='';
+    try {
+      if (!await host('siteSettings.openTool',{revision:overview.revision,tool:button.dataset.tool})) throw Error();
+    } catch {
+      await refreshOverview();
+      result.textContent=overview?.revision ? '暂时无法打开该工具。' : '原网页已切换或关闭，请从目标网页重新打开站点设置。';
+    } finally { button.disabled=false; }
+  };
+  get('current-autoplay').onclick=()=>{
+    if (!overview?.origin || autoplayInput.disabled) return;
+    autoplayInput.value=overview.origin;
+    autoplayMode.value=overview.autoplay;
+    autoplayMode.focus();
+  };
+  get('current-sound').onclick=()=>{ if (overview?.origin) saveSound(overview.origin,!overview.muted); };
+  get('current-zoom').onclick=()=>{
+    if (!overview?.origin || zoomPercent.disabled) return;
+    zoomInput.value=overview.origin;
+    zoomPercent.value=overview.zoom;
+    zoomPercent.focus();
+  };
   async function refresh() {
     current = await host('popups.status');
     get('current').hidden = !current.currentOrigin;
@@ -184,6 +243,7 @@
     try {
       await host('popups.setRule',{origin,mode:value});
       await refresh();
+      await refreshOverview();
       status.textContent = value === 'automatic' ? '已恢复默认规则。' : '网站规则已保存。';
     } catch (error) {
       status.textContent = messages[error.message] || '暂时无法保存网站规则。';
@@ -229,6 +289,7 @@
     try {
       await host('siteSettings.autoplay.set',{origin,mode:value});
       await refreshAutoplay();
+      await refreshOverview();
       if (autoplayInput.value === origin) autoplayMode.value = value;
       autoplayStatus.textContent = value === 'automatic' ? '已恢复默认设置。下次打开或刷新网页时生效。' : '已保存。下次打开或刷新网页时生效。';
     } catch (error) {
@@ -263,6 +324,7 @@
     try {
       await host('siteSettings.sound.set',{origin,muted});
       await refreshSound();
+      await refreshOverview();
       soundStatus.textContent = muted ? '此网站已静音。' : '已取消网站静音。';
     } catch (error) {
       soundStatus.textContent = messages[error.message] || '暂时无法修改网站静音。';
@@ -344,6 +406,7 @@
         zoomPercent.value=applied.percent;
       }
       await refreshZoom(0);
+      await refreshOverview();
       zoomStatus.textContent=percent===100?'已恢复 100%。':'已保存并应用 '+percent+'%。';
     } catch (error) {
       zoomStatus.textContent=messages[error.message] || '暂时无法保存网站缩放。';
@@ -361,6 +424,7 @@
     refreshAutoplay().catch(() => { get('autoplay').hidden = true; });
     refreshSound().catch(() => { get('sound').hidden = true; });
     refreshZoom(0);
+    refreshOverview();
   }
   document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });
   load();

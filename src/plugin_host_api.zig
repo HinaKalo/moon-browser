@@ -65,6 +65,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
         .@"page.saveHtml" => .@"page.save",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
+        .@"siteSettings.current", .@"siteSettings.openTool" => .@"popups.manage",
         .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => .@"siteSettings.autoplay",
         .@"siteSettings.sound.get", .@"siteSettings.sound.set", .@"siteSettings.sound.toggle" => .@"siteSettings.sound",
         .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => .@"siteSettings.zoom",
@@ -217,6 +218,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
+        .@"siteSettings.current", .@"siteSettings.openTool" => {},
         .@"siteSettings.sound.get", .@"siteSettings.sound.set" => {},
         .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => {},
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => {},
@@ -411,6 +413,36 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             var rules: popups.RuleBuffer = undefined;
             var target: popups.Origin = undefined;
             return sdk.result(output,id,popups.status(context.target_tab_id,context.plugin_id,&rules,&target));
+        },
+        .@"siteSettings.current" => {
+            if (!context.from_page or native.moon_shell_private() or !native.moon_extension_panel_active(context.target_tab_id))
+                return sdk.failure(output,id,.PermissionDenied);
+            if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
+            const origin = popups.boundOrigin(context.target_tab_id,context.plugin_id) orelse return sdk.result(output,id,sdk.SiteOverview{});
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            var current: sdk.SiteOverview = .{
+                .origin=origin,.popups=popups.mode(origin),
+                .autoplay=if (context.grants.contains(.@"siteSettings.autoplay")) autoplay.mode(origin) else null,
+                .muted=if (context.grants.contains(.@"siteSettings.sound")) site_sound.muted(origin) else null,
+                .zoom=if (context.grants.contains(.@"siteSettings.zoom")) reading.load(origin) else null,
+            };
+            const tool_mask = native.moon_site_settings_tools(context.target_tab_id,owner.ptr,&current.revision);
+            var tools: [std.enums.values(sdk.SiteTool).len]sdk.SiteTool = undefined;
+            var count: usize = 0;
+            for (std.enums.values(sdk.SiteTool),0..) |tool,index| {
+                if (tool_mask & (@as(c_uint,1) << @as(u5,@intCast(index))) == 0) continue;
+                tools[count]=tool;
+                count+=1;
+            }
+            current.tools=tools[0..count];
+            return sdk.result(output,id,current);
+        },
+        .@"siteSettings.openTool" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const value = decode(struct { revision: u64, tool: sdk.SiteTool },allocator,params) catch
+                return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            return sdk.result(output,id,native.moon_site_settings_open_tool(context.target_tab_id,owner.ptr,value.revision,@intFromEnum(value.tool)));
         },
         .@"popups.setRule" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);

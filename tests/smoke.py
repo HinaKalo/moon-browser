@@ -838,6 +838,7 @@ def run_win32(exe, base, root):
     autoplay_settings = "siteSettings.autoplay" in popup_manifest.get("permissions",[])
     sound_settings = "siteSettings.sound" in popup_manifest.get("permissions",[])
     zoom_settings = "siteSettings.zoom" in popup_manifest.get("permissions",[])
+    site_overview = popups.exists() and 'siteSettings.current' in popups.with_name("popups.html").read_text(encoding="utf-8")
     reading = exe.parent / "plugins" / "reading" / "MoonReading.exe"
     reading_manifest = json.loads(reading.with_name("plugin.json").read_text(encoding="utf-8")) if reading.exists() else {}
     reader_page = reading.with_name("reader.html")
@@ -1000,6 +1001,16 @@ def run_win32(exe, base, root):
     try {
         await wait(()=>!get("zoom").hidden&&zoomPercent.value==="110","active origin and saved zoom");
         if(zoomInput.value!==SITE_ORIGIN)throw Error("panel not bound to active website");
+        if(get("site-summary")){
+            await wait(()=>!get("site-summary").hidden&&get("current-zoom").textContent.includes("110%"),"current site overview");
+            const site=await host("siteSettings.current");
+            if(site.origin!==SITE_ORIGIN||!site.revision||site.autoplay!==null||site.muted!==null||site.zoom!==110||
+                site.tools.join(",")!=="page,data,console") throw Error("incorrect site overview "+JSON.stringify(site));
+            if(await host("siteSettings.openTool",{tool:"page",revision:site.revision+1})) throw Error("stale revision opened a tool");
+            zoomInput.value="https://different.invalid";
+            get("current-zoom").click();
+            if(zoomInput.value!==site.origin||zoomPercent.value!=="110") throw Error("quick edit used the wrong site");
+        }
         const normal=await host("siteSettings.zoom.set",{origin:"HTTPS://ZOOM-00.fixture.invalid:443/a",percent:125});
         if(normal.origin!==sites[0]||normal.percent!==125)throw Error("origin normalization");
         for(const origin of sites.slice(1))await host("siteSettings.zoom.set",{origin,percent:150});
@@ -1019,7 +1030,15 @@ def run_win32(exe, base, root):
         await wait(()=>zoomStatus.textContent==="已保存并应用 150%。"&&rows().length===1&&rows()[0].textContent.includes(SITE_ORIGIN),"save from form");
         const final=await host("siteSettings.zoom.get");
         if(final.currentPercent!==150||final.rules.length!==1||final.next!==null)throw Error("saved state mismatch");
+        if(get("site-summary")&&!get("current-zoom").textContent.includes("150%"))throw Error("site overview did not update");
         await emit({passed:true});
+        if(get("site-tools")){
+            for(let i=0;i<80;i++){
+                const read=JSON.parse(await window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:"read"})));
+                if(read.value?.openData){document.querySelector('[data-tool="data"]').click();break;}
+                await new Promise(r=>setTimeout(r,100));
+            }
+        }
     } catch(error){await emit({error:String(error)});}
 })();</script>
 """
@@ -3472,6 +3491,17 @@ def run_win32(exe, base, root):
                 invoke("运行站点缩放验收")
                 wait_for(lambda: read_address()=="extension://moon.zoom-fixture/popups.html","The site zoom panel did not open")
                 library_result("moon.zoom-fixture")
+                if site_overview:
+                    config = profile / f'extension-{sha256(b"moon.zoom-fixture").hexdigest()}.json'
+                    signal = config.with_suffix(".signal")
+                    signal.write_text('{"openData":true}',encoding="utf-8")
+                    signal.replace(config)
+                    wait_for(lambda: read_address()=="extension://moon.site-data/site-data.html",
+                             "The site overview did not open its source in the bundled site data plugin")
+                    click(px(251),px(222))
+                    wait_for(lambda: read_address()=="extension://moon.zoom-fixture/popups.html",
+                             "Closing the data tab did not return to site settings")
+                    print("site_overview=ok live_rule=ok permission_scope=ok stale_revision=ok delegated_site_data=ok",flush=True)
                 click(px(251),px(187))  # Close the settings tab and return to the original page.
                 wait_for(lambda: read_address()==persisted and 0<viewport("reading-restart")[0]<normal_width*0.8,
                          "Saving the site rule did not reflow the already open source tab")

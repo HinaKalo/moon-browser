@@ -2339,6 +2339,7 @@ export fn moon_web_popup(source: u64, opener: [*c]const u8, destination: [*c]con
 export fn moon_popups_open(owner: [*c]const u8, source: u64) bool {
     if (stopped or count == 0 or tabs[active].id != source or native.moon_shell_private()) return false;
     const tab = &tabs[active];
+    const navigation = tab.navigation;
     var origin: popups.Origin = @splat(0);
     if (!tab.extension and tab.document_committed) {
         if (tab.view) |view| {
@@ -2348,13 +2349,64 @@ export fn moon_popups_open(owner: [*c]const u8, source: u64) bool {
         }
     }
     if (!moon_plugin_open_page(owner)) return false;
-    popups.bind(tabs[active].id,slice(owner),source,origin);
+    popups.bind(tabs[active].id,slice(owner),source,navigation,origin);
     return true;
 }
 
 fn popupPanelAllowed(owner: []const u8, panel: u64) bool {
     return !stopped and count != 0 and tabs[active].id == panel and tabs[active].extension and
         !native.moon_shell_private() and plugins.hasGrant(owner,.@"popups.manage");
+}
+
+fn boundSitePage(panel: u64, owner: []const u8) ?struct { index: usize, revision: u64 } {
+    if (!popupPanelAllowed(owner,panel)) return null;
+    const bound = popups.boundPage(panel,owner) orelse return null;
+    const index = tabIndex(bound.source) orelse return null;
+    const tab = &tabs[index];
+    if (tab.navigation!=bound.navigation or tab.extension) return null;
+    const origin = popups.origin(slice(&tab.url)) orelse return null;
+    if (!equals(slice(&origin),slice(&bound.origin))) return null;
+    return .{ .index=index,.revision=bound.revision };
+}
+
+fn siteToolBit(tool: sdk.SiteTool) c_uint {
+    return @as(c_uint,1) << @as(u5,@intCast(@intFromEnum(tool)));
+}
+
+fn siteToolAvailable(tab: *const Tab, tool: sdk.SiteTool) bool {
+    if (tool==.page) return true;
+    if (!hasSite(tab) or !tab.loaded or tab.loading) return false;
+    return switch (tool) {
+        .page => unreachable,
+        .data => plugins.hasGrant("moon.site-data",.@"siteData.read"),
+        .console => plugins.hasGrant("moon.devtools",.@"page.inspect"),
+    };
+}
+
+export fn moon_site_settings_tools(panel: u64, owner: [*c]const u8, revision: *u64) c_uint {
+    revision.*=0;
+    const bound = boundSitePage(panel,slice(owner)) orelse return 0;
+    revision.*=bound.revision;
+    var available: c_uint=0;
+    for (std.enums.values(sdk.SiteTool)) |tool| {
+        if (siteToolAvailable(&tabs[bound.index],tool)) available |= siteToolBit(tool);
+    }
+    return available;
+}
+
+export fn moon_site_settings_open_tool(panel: u64, owner: [*c]const u8, revision: u64, raw: c_uint) bool {
+    const bound = boundSitePage(panel,slice(owner)) orelse return false;
+    const tool = std.enums.fromInt(sdk.SiteTool,raw) orelse return false;
+    const tab = &tabs[bound.index];
+    if (bound.revision!=revision or !siteToolAvailable(tab,tool)) return false;
+    const started = switch (tool) {
+        .page => true,
+        .data => plugins.launchSystemCommand("moon.site-data","inspect",snapshotFor(tab)),
+        .console => plugins.launchSystemCommand("moon.devtools","console",snapshotFor(tab)),
+    };
+    if (!started) return false;
+    chooseTab(bound.index,true);
+    return true;
 }
 
 export fn moon_autoplay_rules_active() bool {

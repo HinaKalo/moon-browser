@@ -55,6 +55,8 @@ bool moon_shell_focus_mode(void);
 bool moon_shell_set_appearance(bool dark, bool focused);
 bool moon_appearance_available(void);
 bool moon_extension_panel_active(uint64_t panel);
+unsigned moon_site_settings_tools(uint64_t panel, const char *owner, uint64_t *revision);
+bool moon_site_settings_open_tool(uint64_t panel, const char *owner, uint64_t revision, unsigned tool);
 void moon_site_zoom_apply(const char *origin, unsigned percent, uint64_t except_tab);
 void moon_shell_focus_address(void);
 bool moon_shell_tab_search(void);

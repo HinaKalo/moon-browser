@@ -139,6 +139,16 @@ pub const AutoplayRule = struct { origin: []const u8, mode: AutoplayMode };
 pub const AutoplaySettings = struct { currentOrigin: ?[]const u8, rules: []const AutoplayRule };
 pub const SiteSoundRule = struct { origin: []const u8, muted: bool };
 pub const SiteSoundSettings = struct { currentOrigin: ?[]const u8, muted: []const []const u8 };
+pub const SiteTool = enum(c_uint) { page, data, console };
+pub const SiteOverview = struct {
+    origin: ?[]const u8 = null,
+    revision: u64 = 0,
+    tools: []const SiteTool = &.{},
+    popups: PopupMode = .automatic,
+    autoplay: ?AutoplayMode = null,
+    muted: ?bool = null,
+    zoom: ?u16 = null,
+};
 pub const SiteSoundResult = enum(c_uint) { unavailable, muted, unmuted, limitReached };
 pub const PopupNotice = struct { id: u64, count: u32, targetOrigin: []const u8 };
 pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
@@ -365,6 +375,8 @@ pub const Method = enum {
     @"popups.status",
     @"popups.setRule",
     @"popups.openBlocked",
+    @"siteSettings.current",
+    @"siteSettings.openTool",
     @"siteSettings.autoplay.get",
     @"siteSettings.autoplay.set",
     @"siteSettings.sound.get",

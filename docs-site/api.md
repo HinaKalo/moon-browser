@@ -63,6 +63,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteSettings.sound.set` | `siteSettings.sound` | 活动插件页传入 `{ origin, muted }`。`muted` 为布尔值，成功后立即同步该来源的已打开标签页。 |
 | `siteSettings.sound.toggle` | `siteSettings.sound` | 用户在网页触发命令时传入 `{}`。目标由浏览器绑定到触发命令的活动网页。返回 `muted`、`unmuted`、`limitReached` 或 `unavailable`。 |
 | `siteSettings.zoom.get` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ query?, offset? }`。返回 `{ currentOrigin, currentPercent, levels, rules, previous, next }`。分页偏移为空时表示该方向没有更多页面。 |
+| `siteSettings.current` / `siteSettings.openTool` | `popups.manage` | 活动插件页读取绑定站点的规则和可用工具，或传入 `{ revision, tool }` 打开原网页、站点数据或控制台。参见[站点设置](./popups)。 |
 | `siteSettings.zoom.set` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ origin, percent }`，比例取自 `levels`。返回规范化后的规则。设为 100 会删除该来源的例外。 |
 | `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
 | `history.list` | `history.manage` | 传入 `{ query?, before?, from?, until? }`。`from` 含边界，`until` 不含边界，均使用 Unix 毫秒。返回 `{ visits, next }`，每条为 `{ id, title, url, visitedAt }`。翻页时将 `next` 作为 `before`，沿用原有筛选条件。 |

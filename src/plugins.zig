@@ -1218,6 +1218,15 @@ pub fn namedCommand(id: []const u8, action_id: []const u8, snapshot: ?Snapshot) 
     }
     return false;
 }
+
+pub fn launchSystemCommand(id: []const u8, action_id: []const u8, snapshot: Snapshot) bool {
+    for (all[0..len],0..) |*plugin,index| {
+        if (!plugin.bundled or !plugin.enabled or !std.mem.eql(u8,idAt(index),id)) continue;
+        const command_index = findAction(plugin,action_id) orelse return false;
+        return launch(index,command_index,.command,snapshot);
+    }
+    return false;
+}
 pub fn changed(snapshot: ?Snapshot) void {
     for (all[0..len], 0..) |*plugin, index| {
         if (!plugin.enabled or !plugin.subscribes) continue;
