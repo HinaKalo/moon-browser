@@ -41,9 +41,11 @@ try {
     git -C $root worktree add --detach $checkout $Commit
     $attached = $true
     Push-Location -LiteralPath $checkout
+    $artifactLease = $null
     try {
         & .\build.ps1 test
-        $lines = @(& .\build.ps1 release 6>&1 | ForEach-Object { Write-Host "$_"; "$_" }) -split '\r?\n'
+        $lines = @(& .\build.ps1 release -ArtifactLease ([ref]$artifactLease) 6>&1 | ForEach-Object { Write-Host "$_"; "$_" }) -split '\r?\n'
+        if (!$artifactLease) { throw 'Build did not lease its release artifact.' }
         $portable = $lines | Where-Object { [IO.Path]::IsPathFullyQualified($_) -and $_.EndsWith('\MoonBrowser-Portable-win-x64.zip') } | Select-Object -Last 1
         if (!$portable -or ![IO.File]::Exists($portable)) { throw 'Build returned no Portable archive.' }
         $artifact = Split-Path -Parent $portable
@@ -70,7 +72,10 @@ try {
         git push origin "$($Commit):refs/heads/main"
         & .\tools\publish-release.ps1 -ArtifactDirectory $artifact -NotesFile ".\docs\$($version.name).md"
         & .\tools\release-winget.ps1 -Version $version -Installer $installer -ManifestDirectory $manifests -Submit
-    } finally { Pop-Location }
+    } finally {
+        if ($artifactLease) { $artifactLease.Dispose() }
+        Pop-Location
+    }
     git -C $root worktree remove $checkout --force
     $attached = $false
     Write-Host "RELEASE COMPLETE $($version.name)"

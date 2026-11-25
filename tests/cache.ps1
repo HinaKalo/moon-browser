@@ -56,6 +56,27 @@ try {
     }
     Write-Host 'PASS latest-two retention'
 
+    $leasedFolder = Join-Path $cache 'artifacts\generation-2'
+    $protectedFile = Join-Path $leasedFolder 'fixture.txt'
+    $lease = [IO.File]::Open((Join-Path $leasedFolder '.release-lease'),'OpenOrCreate','ReadWrite','None')
+    try {
+        $new = [IO.Directory]::CreateDirectory((Join-Path $cache 'artifacts\generation-4')).FullName
+        [IO.File]::WriteAllText((Join-Path $new 'fixture.txt'), 'new release output')
+        [IO.Directory]::SetLastWriteTimeUtc($leasedFolder,[DateTime]::UtcNow.AddMinutes(-30))
+        & $entry cache-prune -CacheDir $cache
+        if (![IO.File]::Exists($protectedFile) -or ![IO.Directory]::Exists($new) -or
+            [IO.Directory]::Exists((Join-Path $cache 'artifacts\generation-3'))) {
+            throw 'Retention did not preserve the in-use artifact and newest generation.'
+        }
+        & $entry cache-prune -CacheDir $cache -SoftLimitBytes 1 -HardLimitBytes 100
+        if ([IO.File]::ReadAllText($protectedFile) -ne 'fixture') { throw 'Quota cleanup altered a leased artifact.' }
+        Assert-Rejected { & $entry cache-prune -CacheDir $cache -SoftLimitBytes 1 -HardLimitBytes 2 } 'exceeds its budget'
+        if (![IO.File]::Exists($protectedFile)) { throw 'Quota failure removed a leased artifact.' }
+    } finally { $lease.Dispose() }
+    & $entry cache-prune -CacheDir $cache -SoftLimitBytes 1 -HardLimitBytes 100
+    if ([IO.Directory]::Exists($leasedFolder)) { throw 'A finished release still prevented cleanup.' }
+    Write-Host 'PASS release artifact lease, quota and cleanup after close'
+
     & {
         function Get-ChildItem {
             [CmdletBinding()]

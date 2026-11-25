@@ -4116,10 +4116,17 @@ def run_win32(exe, base, root):
             popup_loaded("default",base)
 
             target = base + "/page/popup-click"
-            set_control(edit,target)
-            user.PostMessageW(edit,0x0100,0x0D,1)
-            wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
-                     "User-initiated popup fixture did not load")
+            for attempt in range(2):
+                set_control(edit,target)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                try:
+                    wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),
+                             "User-initiated popup fixture did not load")
+                    break
+                except RuntimeError as error:
+                    address=read_address()
+                    if attempt or address!=base+"/popup-target/default":
+                        raise RuntimeError(f"{error}: current address={address!r}") from error
             page_click(px(30),px(20))
             popup_loaded("click",base)
 

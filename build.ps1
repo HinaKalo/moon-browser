@@ -7,7 +7,8 @@ param(
     [long]$SoftLimitBytes = 3GB,
     [long]$HardLimitBytes = 4GB,
     [long]$FreeFloorBytes = 5GB,
-    [switch]$Preview
+    [switch]$Preview,
+    [ref]$ArtifactLease
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -22,6 +23,9 @@ if ($root -eq $driveRoot -or $driveRoot -notmatch '^[A-Za-z]:\\$') {
 }
 if ($SoftLimitBytes -le 0 -or $HardLimitBytes -le $SoftLimitBytes -or $FreeFloorBytes -lt 0) {
     throw 'Require 0 < soft limit < hard limit and a nonnegative free-space floor.'
+}
+if ($null -ne $ArtifactLease -and ($Action -ne 'release' -or $null -ne $ArtifactLease.Value)) {
+    throw 'ArtifactLease requires a release build and an empty reference.'
 }
 
 function Assert-PlainPath([string]$Path) {
@@ -90,6 +94,18 @@ function Remove-CacheEntry([string]$Path) {
 function Get-FreeBytes {
     ([IO.DriveInfo]::new($driveRoot)).AvailableFreeSpace
 }
+function Test-ArtifactLease([string]$Path) {
+    $lease = Join-Path $Path '.release-lease'
+    Assert-PlainPath $lease
+    if (![IO.File]::Exists($lease)) { return $false }
+    try {
+        $probe = [IO.File]::Open($lease, 'Open', 'ReadWrite', 'None')
+    } catch [IO.IOException] {
+        return $true
+    }
+    $probe.Dispose()
+    return $false
+}
 function Get-Generations([string]$Category) {
     Get-ChildItem -LiteralPath (Join-Path $root $Category) -Directory -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTimeUtc -Descending
@@ -97,19 +113,20 @@ function Get-Generations([string]$Category) {
 function Prune-Cache([string]$KeepEngine = '', [string]$KeepArtifact = '') {
     $remaining = Get-CacheSize $root
     $wouldFree = 0L
+    $leased = @(Get-Generations 'artifacts' | Where-Object { Test-ArtifactLease $_.FullName } | Select-Object -ExpandProperty FullName)
     foreach ($category in 'engine','artifacts') {
         $keep = if ($category -eq 'engine') { $KeepEngine } else { $KeepArtifact }
         $generations = @(Get-Generations $category)
-        $preferred = @($generations | Where-Object Name -EQ $keep) +
-            @($generations | Where-Object Name -NE $keep)
-        foreach ($generation in ($preferred | Select-Object -Skip 2)) {
+        $protected = @($generations | Where-Object { $_.Name -eq $keep -or $_.FullName -in $leased })
+        $available = @($generations | Where-Object { $_.Name -ne $keep -and $_.FullName -notin $leased })
+        foreach ($generation in ($available | Select-Object -Skip ([Math]::Max(0, 2 - $protected.Count)))) {
             $size = Get-CacheSize $generation.FullName
             if (Remove-CacheEntry $generation.FullName) { $remaining -= $size; $wouldFree += $size }
         }
     }
     $candidates = @(
         Get-Generations 'engine' | Where-Object Name -NE $KeepEngine
-        Get-Generations 'artifacts' | Where-Object Name -NE $KeepArtifact
+        Get-Generations 'artifacts' | Where-Object { $_.Name -ne $KeepArtifact -and $_.FullName -notin $leased }
     ) | Sort-Object LastWriteTimeUtc
     $candidates = @($candidates) + @(Get-Item -LiteralPath (Join-Path $root 'zig') -ErrorAction SilentlyContinue)
     foreach ($candidate in $candidates) {
@@ -193,6 +210,14 @@ try {
         if ($stdout.Result) { Write-Host $stdout.Result.TrimEnd() }
         if ($stderr.Result) { Write-Host $stderr.Result.TrimEnd() }
         if ($worker.ExitCode) { throw "Build worker failed (exit $($worker.ExitCode))." }
+        if ($null -ne $ArtifactLease) {
+            $generation = [IO.File]::ReadAllText((Join-Path $scratch 'artifact.txt')).Trim()
+            if ($generation -cnotmatch '^[a-f0-9]{32}$') { throw 'Invalid release artifact generation.' }
+            $leasePath = Join-Path $root "artifacts\$generation\.release-lease"
+            Assert-PlainPath $leasePath
+            # Transfer the open handle before releasing the cache mutex.
+            $ArtifactLease.Value = [IO.File]::Open($leasePath, 'OpenOrCreate', 'ReadWrite', 'None')
+        }
     } finally {
         if ($worker) {
             if (!$worker.HasExited) {
