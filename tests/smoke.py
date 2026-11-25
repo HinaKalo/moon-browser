@@ -459,14 +459,16 @@ class Fixture(BaseHTTPRequestHandler):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
             if name == "chrome-window":
                 demo = (
-                    '<style>body{min-height:300vh;background:#64bfa8}main{position:sticky;top:0}'
+                    '<style>:root{--fixture-narrow:0}@media(max-width:480px){:root{--fixture-narrow:1}}'
+                    'body{min-height:300vh;background:#64bfa8}main{position:sticky;top:0}'
                     'aside{position:fixed;right:0;top:0;width:42px;height:100%;background:#ed795b;transform:translateZ(0)}'
                     '#pick-target{position:fixed;left:15px;top:15px;z-index:2;width:144px;height:44px}</style>'
                     '<aside></aside><button id="pick-target">Inspector target</button><script>'
                     'document.querySelector("#pick-target").onclick=()=>fetch("/inspector-click",{cache:"no-store"});'
                     'let timer,sequence=0;const report=()=>{clearTimeout(timer);'
                     'timer=setTimeout(()=>fetch("/chrome-layout/"+'
-                    '[++sequence,Math.round(performance.timeOrigin),innerWidth,innerHeight,Math.round(scrollY)].join("/"),'
+                    '[++sequence,Math.round(performance.timeOrigin),innerWidth,innerHeight,Math.round(scrollY),'
+                    '+getComputedStyle(document.documentElement).getPropertyValue("--fixture-narrow")].join("/"),'
                     '{cache:"no-store"}),90);};'
                     'addEventListener("load",()=>{scrollTo(0,280);report();});'
                     'addEventListener("resize",report);addEventListener("scroll",report);</script>'
@@ -2576,6 +2578,56 @@ def run_win32(exe, base, root):
                     wait_for(lambda: not attached_inspector(),"F12 did not close the moved inspector")
                     set_inspector_placement("docked",160)
                     print("devtools_placement=ok saved_window=ok saved_dock=ok panel_keeps_position=ok live_dock=ok",flush=True)
+                if '"viewport"' in devtools.with_name("plugin.json").read_text(encoding="utf-8"):
+                    invoke("停靠开发者工具")
+                    wait_for(attached_inspector,"The Inspector did not dock before responsive preview")
+                    invoke("切换响应式预览")
+
+                    def viewport_bar():
+                        handle = user.FindWindowExW(surface,None,"MoonResponsiveViewport",None)
+                        return handle if handle and user.IsWindowVisible(handle) else None
+
+                    def dimensions():
+                        return Fixture.chrome_layout[1:3] if Fixture.chrome_layout else ()
+
+                    bar = wait_for(viewport_bar,"The responsive preview toolbar did not open")
+                    wait_for(inspector_window,"Responsive preview did not move the Inspector to its independent window")
+                    close_independent_inspector()
+                    try:
+                        wait_for(lambda: dimensions()[0:1]==(390,) and Fixture.chrome_layout[4]==1,
+                                 "The default viewport did not activate the CSS breakpoint")
+                    except RuntimeError as error:
+                        bounds = wt.RECT()
+                        user.GetClientRect(page,ctypes.byref(bounds))
+                        actual = read_control(user.GetDlgItem(bar,1316))
+                        raise RuntimeError(f"{error}: webpage={Fixture.chrome_layout}, native={bounds.right}×{bounds.bottom}, toolbar={actual}") from error
+                    width, height = user.GetDlgItem(bar,1310),user.GetDlgItem(bar,1312)
+                    set_control(width,"360")
+                    set_control(height,"420")
+                    user.PostMessageW(height,0x0100,0x0D,1)
+                    wait_for(lambda: dimensions()==(360,420),"The webpage did not receive the dimensions entered in the toolbar")
+                    if Fixture.chrome_layout[0]!=baseline[0]:
+                        raise RuntimeError("Responsive preview reloaded the inspected document")
+                    set_control(width,"42")
+                    user.PostMessageW(bar,0x0111,1313,0)
+                    sleep(0.2)
+                    if dimensions()!=(360,420):
+                        raise RuntimeError("Responsive preview accepted an invalid width")
+                    user.PostMessageW(bar,0x0111,1314,0)
+                    wait_for(lambda: dimensions()==(420,360),"The rotate action did not swap viewport dimensions")
+                    user.SetWindowPos(frame,None,window_rect.left,window_rect.top,px(700),px(375),0x0014)
+                    wait_for(lambda: dimensions()[1]<360 and "× 360" not in read_control(user.GetDlgItem(bar,1316)),
+                             "The toolbar did not show the actual constrained viewport")
+                    user.SetWindowPos(frame,None,window_rect.left,window_rect.top,*large,0x0014)
+                    wait_for(lambda: dimensions()==(420,360),"Resizing the window lost the requested preview size")
+                    invoke("新建标签页")
+                    wait_for(lambda: not viewport_bar(),"Responsive preview leaked to another tab")
+                    invoke("Moon fixture chrome-window")
+                    wait_for(lambda: viewport_bar()==bar and dimensions()==(420,360),"Responsive preview did not follow its tab")
+                    user.PostMessageW(bar,0x0111,1315,0)
+                    wait_for(lambda: not viewport_bar() and Fixture.chrome_layout[4]==0 and dimensions()[0]>480,
+                             "Closing responsive preview did not restore the desktop viewport")
+                    print("responsive_viewport=ok css_breakpoint=ok native_edit=ok invalid_size=ok rotate=ok clamp=ok tab_isolation=ok inspector_window=ok",flush=True)
                 user.SetWindowPos(frame,None,window_rect.left,window_rect.top,
                     window_rect.right-window_rect.left,window_rect.bottom-window_rect.top,0x0014)
                 print("inspector_docking=ok layout_reflow=ok tab_isolation=ok detach=ok narrow_fallback=ok",flush=True)

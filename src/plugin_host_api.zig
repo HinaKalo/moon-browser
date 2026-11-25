@@ -61,7 +61,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"tabs.getActive" => .@"tabs.read",
         .@"lua.scripts.list", .@"lua.scripts.install", .@"lua.scripts.setEnabled", .@"lua.scripts.remove" => .@"lua.scripts.manage",
         .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive", .@"lua.scripts.lastError" => .@"lua.scripts.manage",
-        .@"devtools.open", .@"devtools.toggle", .@"devtools.hardReload" => .@"page.inspect",
+        .@"devtools.open", .@"devtools.toggle", .@"devtools.hardReload", .@"devtools.viewport" => .@"page.inspect",
         .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
         .@"page.saveHtml" => .@"page.save",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
@@ -359,6 +359,20 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!noParams(params)) return sdk.failure(output,id,.InvalidParams);
             const outcome = native.moon_devtools_hard_reload(context.target_tab_id,context.target_navigation);
             return sdk.result(output,id,std.enums.fromInt(sdk.HardReloadResult,outcome) orelse .unavailable);
+        },
+        .@"devtools.viewport" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const value = decode(struct { size: ?sdk.ViewportSize = null },allocator,params) catch
+                return sdk.failure(output,id,.InvalidParams);
+            if (value.size) |size| {
+                if (size.width<native.MOON_VIEWPORT_MIN or size.width>native.MOON_VIEWPORT_MAX or
+                    size.height<native.MOON_VIEWPORT_MIN or size.height>native.MOON_VIEWPORT_MAX)
+                    return sdk.failure(output,id,.InvalidParams);
+            }
+            const size = value.size orelse sdk.ViewportSize{ .width=0,.height=0 };
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const outcome = native.moon_devtools_viewport(owner.ptr,context.target_tab_id,context.target_navigation,size.width,size.height);
+            return sdk.result(output,id,std.enums.fromInt(sdk.ViewportResult,outcome) orelse .unavailable);
         },
         .@"pageSource.open" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

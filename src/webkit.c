@@ -128,6 +128,8 @@ struct MoonView {
     WKPageRef page;
     WKPreferencesRef view_preferences;
     HWND surface, hwnd;
+    MoonViewport viewport;
+    char viewport_owner[96];
     WKInspectorRef inspector;
     InspectorPlacement inspector_placement;
     uint64_t inspector_deadline;
@@ -938,8 +940,10 @@ void moon_engine_refresh_extension_appearance(void) {
     char script[160];
     snprintf(script,sizeof(script),"Object.assign(document.documentElement.dataset,{moonTheme:'%s',moonFocusMode:'%s'})",
         moon_shell_dark_mode()?"dark":"light",moon_shell_focus_mode()?"true":"false");
-    for (MoonView *view=views; view; view=view->next)
+    for (MoonView *view=views; view; view=view->next) {
+        if (view->viewport.bar) RedrawWindow(view->surface,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN);
         if (view->extension_address) moon_engine_apply_dom(view,script);
+    }
 }
 void moon_engine_close(MoonView *view) {
     MoonView **link = &views;
@@ -957,6 +961,7 @@ void moon_engine_close(MoonView *view) {
     wk.WKPageSetPageFindClient(view->page,NULL);
     if (!view->extension_address && filter_bundle_available) wk.WKPageSetPageInjectedBundleClient(view->page,NULL);
     if (view->inspector) wk.WKInspectorClose(view->inspector);
+    moon_viewport_close(&view->viewport);
     wk.WKPageClose(view->page);
     DestroyWindow(view->surface);
     release(view->view);
@@ -991,15 +996,20 @@ void moon_engine_find(MoonView *view, const char *query, bool backwards) {
     release(string);
 }
 void moon_engine_hide_find(MoonView *view) { wk.WKPageHideFindUI(view->page); }
+static void resize_view(MoonView *view, bool dpi_changed);
 void moon_engine_set_zoom(MoonView *view, unsigned percent) {
     const double factor = percent / 100.0;
-    if (factor != wk.WKPageGetPageZoomFactor(view->page)) wk.WKPageSetPageZoomFactor(view->page,factor);
+    if (factor != wk.WKPageGetPageZoomFactor(view->page)) {
+        wk.WKPageSetPageZoomFactor(view->page,factor);
+        if (view->viewport.bar) resize_view(view,false);
+    }
 }
 unsigned moon_engine_zoom(MoonView *view) {
     const double factor = wk.WKPageGetPageZoomFactor(view->page);
     return factor >= 0.1 && factor <= 10.0 ? (unsigned)(factor * 100.0 + 0.5) : 100;
 }
 static bool can_dock(MoonView *view) {
+    if (view->viewport.bar) return false;
     RECT area;
     if (!GetClientRect(view->surface,&area)) return false;
     const UINT dpi=GetDpiForWindow(view->surface);
@@ -1013,14 +1023,64 @@ static void resize_view(MoonView *view, bool dpi_changed) {
         wk.WKInspectorDetach(view->inspector);
         view->docked=wk.WKInspectorIsAttached(view->inspector);
     }
-    // WebKit reserves space for its attached sibling on WM_WINDOWPOSCHANGING.
-    MoveWindow(view->hwnd,0,0,area.right,area.bottom,TRUE);
+    if (view->viewport.bar) {
+        const int toolbar=moon_viewport_layout(&view->viewport,area.right);
+        const int dpi=(int)GetDpiForWindow(view->surface);
+        const int scale=max(1,dpi*(int)moon_engine_zoom(view));
+        const int pad=MulDiv(12,dpi,96);
+        const int width=max(1,min(MulDiv(view->viewport.width,scale,9600),area.right-2*pad));
+        const int height=max(1,min(MulDiv(view->viewport.height,scale,9600),area.bottom-toolbar-2*pad));
+        const int x=(area.right-width)/2, y=max(toolbar,toolbar+(area.bottom-toolbar-height)/2);
+        view->viewport.bounds=(RECT){x,y,x+width,y+height};
+        MoveWindow(view->hwnd,x,y,width,height,TRUE);
+        moon_viewport_update(&view->viewport,MulDiv(width,9600,scale),MulDiv(height,9600,scale));
+        InvalidateRect(view->surface,NULL,TRUE);
+    } else {
+        // WebKit reserves space for its attached sibling on WM_WINDOWPOSCHANGING.
+        MoveWindow(view->hwnd,0,0,area.right,area.bottom,TRUE);
+    }
     if (dpi_changed) {
         for (HWND child=GetWindow(view->surface,GW_CHILD); child; child=GetWindow(child,GW_HWNDNEXT)) {
             RECT size;
             if (GetClientRect(child,&size)) SendMessageW(child,WM_SIZE,SIZE_RESTORED,MAKELPARAM(size.right,size.bottom));
         }
     }
+}
+
+bool moon_engine_viewport_active(const MoonView *view) { return view->viewport.bar!=NULL; }
+
+void moon_engine_viewport_apply(MoonView *view, unsigned width, unsigned height) {
+    moon_viewport_set_size(&view->viewport,width,height);
+    resize_view(view,false);
+}
+
+void moon_engine_viewport_close(MoonView *view, bool focus) {
+    if (!view->viewport.bar) return;
+    moon_viewport_close(&view->viewport);
+    view->viewport_owner[0]=0;
+    resize_view(view,false);
+    if (focus && IsWindowVisible(view->surface)) SetFocus(view->hwnd);
+}
+
+int moon_engine_viewport(MoonView *view, const char *owner, unsigned width, unsigned height) {
+    if (view->extension_address || strlen(owner)>=sizeof(view->viewport_owner)) return 2;
+    if (!width && view->viewport.bar) {
+        moon_engine_viewport_close(view,true);
+        return 1;
+    }
+    if (!view->viewport.bar && !moon_viewport_open(&view->viewport,view,view->surface,view->hwnd)) return 2;
+    strcpy(view->viewport_owner,owner);
+    if (view->inspector && wk.WKInspectorIsAttached(view->inspector)) {
+        wk.WKInspectorDetach(view->inspector);
+        view->docked=wk.WKInspectorIsAttached(view->inspector);
+    }
+    moon_engine_viewport_apply(view,width ? width : view->viewport.width,height ? height : view->viewport.height);
+    return 0;
+}
+
+void moon_engine_check_viewports(void) {
+    for (MoonView *view=views; view; view=view->next)
+        if (view->viewport.bar && !moon_devtools_viewport_granted(view->viewport_owner)) moon_engine_viewport_close(view,false);
 }
 
 void moon_engine_resize_views(bool dpi_changed) {
@@ -1089,6 +1149,7 @@ static void update_inspector(MoonView *view, uint64_t now) {
         if (!dock && attached) wk.WKInspectorDetach(view->inspector);
     }
     if (visible || now>=view->inspector_deadline) view->inspector_placement=INSPECTOR_KEEP;
+    if (visible && view->viewport.bar && wk.WKInspectorIsAttached(view->inspector)) wk.WKInspectorDetach(view->inspector);
     const bool docked=visible && wk.WKInspectorIsAttached(view->inspector);
     if (docked!=view->docked) {
         view->docked=docked;

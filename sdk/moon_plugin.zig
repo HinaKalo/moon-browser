@@ -58,6 +58,7 @@ pub const Shortcut = enum {
     @"Ctrl+U",
     F11,
     @"Ctrl+Shift+C",
+    @"Ctrl+Shift+E",
     @"Ctrl+S",
     @"Ctrl+Shift+B",
     @"Ctrl+Shift+R",
@@ -209,6 +210,8 @@ pub const ScriptSource = struct { sourceBase64: []const u8 };
 pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
 pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
 pub const InspectorPanel = enum(c_int) { inspector, console, resources, elements };
+pub const ViewportSize = struct { width: u16, height: u16 };
+pub const ViewportResult = enum(c_int) { enabled, disabled, unavailable };
 pub const HardReloadResult = enum(c_int) { started, unavailable, edited, resubmission };
 pub const InspectorPlacement = enum(c_int) { docked, window, preferred };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
@@ -353,6 +356,7 @@ pub const Method = enum {
     @"devtools.open",
     @"devtools.toggle",
     @"devtools.hardReload",
+    @"devtools.viewport",
     @"pageSource.open",
     @"pageSource.status",
     @"pageSource.read",

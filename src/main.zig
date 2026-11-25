@@ -1146,7 +1146,7 @@ fn sync(tab: *Tab) void {
 }
 fn tabProtection(tab: *const Tab) ?sdk.TaskProtection {
     if (count != 0 and site_data.protected(tab.id,tabs[active].id)) return .siteInspection;
-    if (tab.view) |view| if (native.moon_engine_inspecting(view)) return .developerTools;
+    if (tab.view) |view| if (native.moon_engine_inspecting(view) or native.moon_engine_viewport_active(view)) return .developerTools;
     if (tab.download_count != 0) return .download;
     if (tab.activity) return .media;
     if (tab.unsafe_history) return .nonGet;
@@ -1179,6 +1179,18 @@ export fn moon_devtools_open(panel: c_int, placement: c_int, tab_id: u64, naviga
     const view = devtoolsTarget(tab_id,navigation) orelse return false;
     return native.moon_engine_inspect(view,panel,placement);
 }
+export fn moon_devtools_viewport(owner: [*c]const u8, tab_id: u64, navigation: u64, width: c_uint, height: c_uint) c_int {
+    const view = devtoolsTarget(tab_id,navigation) orelse return @intFromEnum(sdk.ViewportResult.unavailable);
+    const tab = &tabs[active];
+    if (!moon_devtools_viewport_granted(owner) or (!native.moon_engine_viewport_active(view) and (tab.loading or !tab.loaded)))
+        return @intFromEnum(sdk.ViewportResult.unavailable);
+    return native.moon_engine_viewport(view,owner,width,height);
+}
+
+export fn moon_devtools_viewport_granted(owner: [*c]const u8) bool {
+    return plugins.hasGrant(slice(owner),.@"page.inspect");
+}
+
 export fn moon_devtools_prefer_window() bool {
     if (native.moon_shell_private()) return false;
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -2027,6 +2039,7 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     }
     if (permission == null or permission == .@"page.inspect" or permission == .@"ui.commands")
         native.moon_engine_context_inspect_available(plugins.inspectElementLabel()!=null);
+    if (permission == null or permission == .@"page.inspect") native.moon_engine_check_viewports();
     if (permission == null or permission == .@"page.reading") checkFindGrant();
     if (fullscreen_owner[0]!=0 and !plugins.hasGrant(slice(&fullscreen_owner),.@"window.fullscreen")) {
         native.moon_shell_leave_fullscreen();

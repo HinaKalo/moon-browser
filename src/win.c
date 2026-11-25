@@ -1906,7 +1906,7 @@ static bool keyboard(MSG *msg) {
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
     if (modifiers==MOD_ALT && msg->wParam=='I' && !moon_ime_composing(msg->hwnd))
         return repeated || site_menu(frame);
-    const bool shell_chord=modifiers==(MOD_CONTROL|MOD_SHIFT) && (msg->wParam=='I' || msg->wParam=='C' || msg->wParam=='A');
+    const bool shell_chord=modifiers==(MOD_CONTROL|MOD_SHIFT) && (msg->wParam=='I' || msg->wParam=='C' || msg->wParam=='A' || msg->wParam=='E');
     if (in_content && !in_page && msg->wParam!=VK_F11 && msg->wParam!=VK_F12 && !shell_chord) return false;
     if ((ctrl || alt || msg->wParam==VK_F9 || msg->wParam==VK_F11 || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
         moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
@@ -2040,7 +2040,7 @@ static int run_shell(int argc, wchar_t **argv) {
             !moon_ime_composing(msg.hwnd) && palette_key(&msg)) continue;
         if ((msg.hwnd==frame || IsChild(frame,msg.hwnd)) &&
             (msg.message==WM_KEYDOWN || msg.message==WM_SYSKEYDOWN) &&
-            ((tab_drag.source && msg.wParam==VK_ESCAPE && keyboard(&msg)) || moon_find_key(&msg) || keyboard(&msg))) continue;
+            ((tab_drag.source && msg.wParam==VK_ESCAPE && keyboard(&msg)) || moon_find_key(&msg) || moon_viewport_key(&msg) || keyboard(&msg))) continue;
         if (fullscreen && fullscreen_exit && msg.message==WM_MOUSEMOVE && GetForegroundWindow()==frame &&
             !IsWindowVisible(fullscreen_exit) && (msg.hwnd==frame || IsChild(frame,msg.hwnd))) {
             RECT bounds;
