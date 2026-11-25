@@ -7,7 +7,7 @@
   "entry": "MoonSettings.exe",
   "settingsPage": "settings.html",
   "contributes": {
-    "commands": [{ "id": "open", "label": "打开浏览器设置", "menu": "page", "shortcut": "Ctrl+," }]
+    "commands": [{ "id": "open", "label": "打开浏览器设置", "menu": "page", "menuPinned": true, "shortcut": "Ctrl+," }]
   },
   "permissions": ["ui.settings"]
 }

@@ -1,0 +1,20 @@
+.{
+    .name = .moon_browser,
+    .version = "0.1.0",
+    .fingerprint = 0x7130fd92aa842db6,
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{
+        .moonui = .{
+            .path = "../moon-win32-modern",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "sdk",
+        "examples",
+        "tests",
+        "third_party",
+    },
+}

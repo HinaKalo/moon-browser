@@ -11,8 +11,10 @@ pub fn build(b: *std.Build) void {
     app.subsystem = .windows;
     const bridge = b.addTranslateC(.{ .root_source_file = b.path("src/bridge.h"), .target = target, .optimize = optimize });
     const plugin_sdk = b.createModule(.{ .root_source_file = b.path("sdk/moon_plugin.zig") });
+    const moonui = b.dependency("moonui", .{ .target = target, .optimize = optimize });
     app.root_module.addImport("native", bridge.createModule());
     app.root_module.addImport("moon_plugin", plugin_sdk);
+    app.root_module.addImport("moonui", moonui.module("moonui"));
     app.root_module.addAnonymousImport("readability_source", .{ .root_source_file = b.path("third_party/Readability/Readability.js") });
     app.root_module.addWin32ResourceFile(.{ .file=b.path("src/moon-browser.rc") });
     app.root_module.addIncludePath(b.path("third_party"));

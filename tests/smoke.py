@@ -506,9 +506,10 @@ addEventListener('load',()=>{
                 demo=(f'<button style="position:fixed;z-index:1;top:0;left:0;padding:10px">Play fixture</button>'
                       f'<{tag} loop playsinline preload="none" src="{source}"></{tag}><script>'
                       f'const stage={json.dumps(stage)}, media=document.querySelector("{tag}");'
-                      'let count=0,advanced=false,backgroundAt=null,backgroundAdvanced=false;'
+                      'let count=0,advanced=false,backgroundAt=null,backgroundAdvanced=false;const seeks=[];'
                       'const report=(event,detail)=>fetch("/media-control-report/"+stage+"-"+event+"?"+detail,{cache:"no-store"});'
                       'media.onplaying=()=>report("playing",++count);'
+                      'media.onseeked=()=>{seeks.push(media.currentTime);report("seeks",JSON.stringify(seeks));};'
                       'media.ontimeupdate=()=>{'
                       'if(!advanced&&media.currentTime>=0.6){advanced=true;report("advanced","yes");}'
                       'if(!backgroundAdvanced&&document.hidden&&backgroundAt!==null&&media.currentTime>=backgroundAt+0.2){'
@@ -1367,10 +1368,19 @@ def run_win32(exe, base, root):
         await wait(()=>!row.tab.muted,"unmute");
         row.play.click();
         await wait(()=>row.tab.paused && !row.tab.pending && row.play.textContent==="继续播放","pause");
+        const seekTest=Boolean(row.forward)&&options.title==="media-control-wav";
+        if(seekTest){
+            if(await host("media.control",{id,navigation:navigation+1,action:"seekForward"})!=="unavailable")
+                throw Error("stale seek target");
+            row.forward.click();
+            await wait(()=>!controlling&&!row.tab.pending&&row.tab.paused&&row.tab.playbackResult==="seeked","seek forward");
+            row.back.click();
+            await wait(()=>!controlling&&!row.tab.pending&&row.tab.paused&&row.tab.playbackResult==="seeked","seek backward");
+        }
         row.play.click();
         await wait(()=>!row.tab.paused && !row.tab.pending && correctKind() && row.tab.playbackResult==="resumed",
                    "resume");
-        await emit({passed:true,id,navigation});
+        await emit({passed:true,id,navigation,seekTest});
         await wait(async()=> (await read())?.focus,"await focus signal");
         row.focus.click();
       } catch(error){await emit({error:String(error),tabs:[...rendered.values()].map(row=>row.tab)});}
@@ -4015,6 +4025,12 @@ def run_win32(exe, base, root):
                     raise RuntimeError(f"Media controls failed for {stage}: {result}. Fixture reports: {Fixture.media_reports}")
                 wait_for(lambda: Fixture.media_reports.get(stage+"-pause")=="yes" and Fixture.media_reports.get(stage+"-playing")=="2",
                          "Pause and resume did not affect the real HTML media element")
+                if result.get("seekTest"):
+                    def observed_seeks():
+                        values=json.loads(unquote(Fixture.media_reports.get(stage+"-seeks","[]")))
+                        return len(values)>=2 and 9.5<=values[-2]<=12 and values[-2]-values[-1]>=9.5
+                    wait_for(observed_seeks,"Media did not seek forward and backward on the source page")
+                    print("media_seek=ok source_events=ok remains_paused=ok stale_navigation=ok",flush=True)
                 signal.write_text('{"focus":true}',encoding="utf-8")
                 signal.replace(config)
                 wait_for(lambda: read_address()==target,"The media focus action did not return to the original tab")
@@ -5316,9 +5332,14 @@ def run_win32(exe, base, root):
             groups = native_entries()
             if "管理插件" not in groups:
                 raise RuntimeError("The native menu has no plugin management entry")
+            pinned_expected = {"历史记录\tCtrl+H","查看下载\tCtrl+J","管理书签\tCtrl+Shift+O"}
+            if browser_settings.exists():
+                pinned_expected.add("打开浏览器设置\tCtrl+,")
+            if missing_pinned := pinned_expected - groups.keys():
+                raise RuntimeError(f"Native top-level menu is missing pinned entries {missing_pinned}")
             expected = {
                 "标签与页面": {"页内查找\tCtrl+F","放大页面\tCtrl++","切换浏览器全屏\tF11","恢复上一个关闭的标签\tCtrl+Shift+T"},
-                "浏览资料": {"历史记录\tCtrl+H","查看下载\tCtrl+J","管理书签\tCtrl+Shift+O"},
+                "浏览资料": {"将当前页加入书签\tCtrl+D"},
                 "隐私与安全": {"清除浏览数据\tCtrl+Shift+Delete","查看当前站点数据"},
                 "开发与诊断": {"打开网页控制台\tCtrl+Shift+J","浏览器任务管理器\tCtrl+Shift+M"},
                 "扩展工具": {"打开 Lua 脚本编辑器","配置菜单与快捷键示例","显示 Moon 命令提示"},

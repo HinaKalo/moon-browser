@@ -59,6 +59,7 @@ const Grant = struct {
     browser_default_app: ?bool = null,
     menu_items: []const []const u8 = &.{},
     hidden_menu_items: []const []const u8 = &.{},
+    unpinned_menu_items: []const []const u8 = &.{},
     hotkey: ?sdk.RegisteredShortcut = null,
 };
 const Outcome = enum { ok, failed, timed_out, crashed };
@@ -96,7 +97,7 @@ const Task = struct {
     message: [512:0]u8 = @splat(0),
     toast: bool = false,
 };
-const MenuOverride = enum { default, pinned, hidden };
+const MenuOverride = enum { default, pinned, unpinned, hidden };
 const UserShortcut = struct { plugin: []const u8, command: []const u8, shortcut: []const u8 };
 const PendingCommand = struct { action: usize, tab: u64, navigation: u64 };
 const WebContextAction = enum { inspect_element, highlight_link };
@@ -104,6 +105,7 @@ const Command = struct {
     id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false,
     shortcut: ?sdk.Shortcut = null,
     menu_group: ?sdk.MenuGroup = null,
+    default_pinned: bool = false,
     site_menu: bool = false,
     link_menu: ?sdk.LinkMenuAction = null,
     web_context_action: ?WebContextAction = null,
@@ -125,7 +127,7 @@ const Hotkey = struct {
     text: [24:0]u8 = @splat(0), slot: ?u1 = null,
 };
 const hotkey_id: c_uint = 0x4100;
-const menu_limit = 4;
+const menu_limit = 12;
 const Plugin = struct {
     id: [96:0]u8,
     label: [256:0]u8,
@@ -217,7 +219,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     var has_highlight_link = false;
     for (commands, 0..) |item, index| {
         if (!validComponent(item.id) or item.label.len == 0) return;
-        if ((item.linkMenu != null or item.tabDrop) and (item.shortcut != null or item.siteMenu or item.menu != null)) return;
+        if ((item.linkMenu != null or item.tabDrop) and (item.shortcut != null or item.siteMenu or item.menu != null or item.menuPinned)) return;
         if (item.tabDrop) {
             if (has_tab_drop or item.linkMenu!=null or !requests.contains(.@"tabs.organize")) return;
             has_tab_drop = true;
@@ -237,6 +239,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         plugin.actions[index].interactive = item.interactive;
         plugin.actions[index].shortcut = item.shortcut;
         plugin.actions[index].menu_group = item.menu;
+        plugin.actions[index].default_pinned = bundled and item.menuPinned;
         plugin.actions[index].site_menu = item.siteMenu;
         plugin.actions[index].link_menu = item.linkMenu;
         plugin.actions[index].tab_drop = item.tabDrop;
@@ -483,16 +486,23 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"tabs.groups")) plugin.grants.insert(.@"tabs.groups");
         if (grant.enabled and (grant.browser_default_app orelse plugin.default_grants.contains(.@"browser.defaultApp")) and
             plugin.requests.contains(.@"browser.defaultApp")) plugin.grants.insert(.@"browser.defaultApp");
+        if (grant.enabled) {
+            for (grant.unpinned_menu_items) |id| {
+                if (findAction(plugin,id)) |index| {
+                    if (plugin.actions[index].default_pinned) plugin.actions[index].menu_override = .unpinned;
+                }
+            }
+            for (grant.menu_items) |id| {
+                if (menuSize() >= menu_limit) break;
+                if (findAction(plugin,id)) |index| {
+                    if (!plugin.actions[index].bound()) plugin.actions[index].menu_override = .pinned;
+                }
+            }
+        }
         if (canContribute(plugin)) {
             for (grant.hidden_menu_items) |id| {
                 if (findAction(plugin,id)) |index| {
                     if (plugin.actions[index].menu_group!=null) plugin.actions[index].menu_override = .hidden;
-                }
-            }
-            for (grant.menu_items) |id| {
-                if (menuSize()==menu_limit) break;
-                if (findAction(plugin,id)) |index| {
-                    if (!plugin.actions[index].bound()) plugin.actions[index].menu_override = .pinned;
                 }
             }
             if (grant.hotkey) |saved_key| {
@@ -517,14 +527,17 @@ fn persist() bool {
     var items: [all.len]Grant = undefined;
     var menus: [all.len][sdk.command_limit][]const u8 = undefined;
     var hidden_menus: [all.len][sdk.command_limit][]const u8 = undefined;
+    var unpinned_menus: [all.len][sdk.command_limit][]const u8 = undefined;
     for (all[0..len], 0..) |*plugin, index| {
         var used: usize = 0;
         var hidden: usize = 0;
+        var unpinned: usize = 0;
         for (plugin.actions[0..plugin.action_count]) |*action_entry| {
             const id = std.mem.sliceTo(&action_entry.id,0);
             switch (action_entry.menu_override) {
                 .default => {},
                 .pinned => { menus[index][used] = id; used += 1; },
+                .unpinned => { unpinned_menus[index][unpinned] = id; unpinned += 1; },
                 .hidden => { hidden_menus[index][hidden] = id; hidden += 1; },
             }
         }
@@ -578,6 +591,7 @@ fn persist() bool {
         .browser_default_app = plugin.grants.contains(.@"browser.defaultApp"),
         .menu_items = menus[index][0..used],
         .hidden_menu_items = hidden_menus[index][0..hidden],
+        .unpinned_menu_items = unpinned_menus[index][0..unpinned],
         .hotkey = saved_key,
         };
     }
@@ -676,7 +690,9 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
     }
     if (!canContribute(plugin)) {
         plugin.hotkey = null;
-        for (plugin.actions[0..plugin.action_count]) |*action_entry| action_entry.menu_override = .default;
+        for (plugin.actions[0..plugin.action_count]) |*action_entry| {
+            if (!plugin.enabled or action_entry.menu_override == .hidden) action_entry.menu_override = .default;
+        }
     }
     if (!persist()) {
         plugin.enabled = enabled;
@@ -825,21 +841,54 @@ fn menuSize() usize {
     return count_entries;
 }
 
+fn groupLocation(group: ?sdk.MenuGroup) c_uint {
+    return switch (group orelse return native.MOON_MENU_NONE) {
+        .page => native.MOON_MENU_PAGE,
+        .library => native.MOON_MENU_LIBRARY,
+        .privacy => native.MOON_MENU_PRIVACY,
+        .developer => native.MOON_MENU_DEVELOPER,
+        .extensions => native.MOON_MENU_EXTENSIONS,
+    };
+}
+
 pub fn menuLocation(index: usize, command_index: usize) c_uint {
     const plugin = &all[index];
-    if (!plugin.enabled or (!plugin.bundled and !canContribute(plugin))) return native.MOON_MENU_NONE;
+    if (!plugin.enabled) return native.MOON_MENU_NONE;
     const entry = &plugin.actions[command_index];
     return switch (entry.menu_override) {
         .pinned => native.MOON_MENU_PINNED,
         .hidden => native.MOON_MENU_NONE,
-        .default => switch (entry.menu_group orelse return native.MOON_MENU_NONE) {
-            .page => native.MOON_MENU_PAGE,
-            .library => native.MOON_MENU_LIBRARY,
-            .privacy => native.MOON_MENU_PRIVACY,
-            .developer => native.MOON_MENU_DEVELOPER,
-            .extensions => native.MOON_MENU_EXTENSIONS,
-        },
+        .unpinned => if (plugin.bundled or canContribute(plugin)) groupLocation(entry.menu_group) else native.MOON_MENU_NONE,
+        .default => if (entry.default_pinned) native.MOON_MENU_PINNED
+            else if (plugin.bundled or canContribute(plugin)) groupLocation(entry.menu_group)
+            else native.MOON_MENU_NONE,
     };
+}
+
+pub fn isMenuPinned(index: usize, command_index: usize) bool {
+    return menuLocation(index, command_index) == native.MOON_MENU_PINNED;
+}
+
+pub fn setUserMenuPin(index: usize, id: []const u8, pinned: bool) sdk.UiRegistration {
+    if (changing_state or index >= len) return .unavailable;
+    const plugin = &all[index];
+    if (!plugin.enabled) return .unavailable;
+    const command_index = findAction(plugin, id) orelse return .notFound;
+    const entry = &plugin.actions[command_index];
+    if (entry.bound()) return .unavailable;
+    const before = entry.menu_override;
+    const after: MenuOverride = if (pinned)
+        (if (entry.default_pinned) .default else .pinned)
+    else
+        (if (entry.default_pinned) .unpinned else .default);
+    if (before == after) return .saved;
+    if (after == .pinned and menuSize() >= menu_limit) return .limitReached;
+    entry.menu_override = after;
+    if (!persist()) {
+        entry.menu_override = before;
+        return .unavailable;
+    }
+    return .saved;
 }
 
 pub fn siteMenuVisible(index: usize, command_index: usize) bool {

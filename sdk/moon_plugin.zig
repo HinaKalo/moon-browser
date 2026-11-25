@@ -92,6 +92,7 @@ pub const Command = struct {
     interactive: bool = false,
     shortcut: ?Shortcut = null,
     menu: ?MenuGroup = null,
+    menuPinned: bool = false,
     siteMenu: bool = false,
     linkMenu: ?LinkMenuAction = null,
     inspectElementMenu: ?[]const u8 = null,
@@ -160,9 +161,11 @@ pub const SiteFiltering = struct {
     pausedBy: ?[]const u8 = null,
 };
 pub const SiteFilteringResult = enum(c_int) { applied, cancelled, unavailable, inherited, limitReached, failed };
-pub const MediaAction = enum(c_uint) { focus, mute, unmute, pause, @"resume" };
+pub const MediaAction = enum(c_uint) { focus, mute, unmute, pause, @"resume", seekBackward, seekForward };
 pub const MediaResult = enum(c_int) { applied, pending, unavailable, busy };
-pub const MediaPlayback = enum(c_uint) { idle, paused, resumed, partial, unavailable, failed };
+pub const MediaPlayback = enum(c_uint) {
+    idle, paused, resumed, partial, unavailable, failed, seeked, seekUnavailable, seekAmbiguous, seekFailed,
+};
 pub const MediaTab = struct {
     id: u64,
     navigation: u64,

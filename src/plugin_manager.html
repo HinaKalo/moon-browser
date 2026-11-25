@@ -5,15 +5,15 @@
 <style>
   :root {
     color-scheme: light;
-    --page:#f5f6f9; --panel:#fff; --surface:#f1f3f9; --line:#d9dce6;
-    --text:#14161d; --muted:#51586a; --accent:#354db8; --soft:#e8ecff;
+    --page:#f6f7f9; --panel:#ffffff; --surface:#f1f3f6; --line:#e3e6eb;
+    --text:#14161b; --muted:#5b6270; --accent:#5b4df0; --soft:#edebfd;
     font:14px/1.5 "Microsoft YaHei UI","Segoe UI",sans-serif;
     color:var(--text); background:var(--page);
   }
   :root[data-moon-theme=dark] {
     color-scheme:dark;
-    --page:#191c23; --panel:#20232c; --surface:#292d38; --line:#3a4256;
-    --text:#e9ebf2; --muted:#b7becf; --accent:#adbcff; --soft:#2b365e;
+    --page:#0e0f13; --panel:#181a20; --surface:#20232b; --line:#262932;
+    --text:#eceef3; --muted:#9aa0ae; --accent:#7c6cff; --soft:#262244;
   }
   *,*::before,*::after { box-sizing:border-box; }
   [hidden] { display:none !important; }
@@ -63,6 +63,7 @@
   .command { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:5px 8px; padding:4px 0; }
   .command-actions,.shortcut-actions { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
   .command-actions .action { font-size:12px; padding:3px 7px; }
+  .command-actions .action[aria-pressed=true] { background:var(--soft); border-color:var(--accent); color:var(--accent); }
   .shortcut-editor { margin:4px 0 8px; padding:10px; border:1px solid var(--line); border-radius:8px; background:var(--surface); }
   .shortcut-editor .hint { margin-bottom:7px; }
   .shortcut-editor [role=status] { margin-top:6px; color:var(--accent); }
@@ -127,7 +128,13 @@
         return;
       }
       if (response.result === 'unavailable') throw Error('UNAVAILABLE');
-      status.textContent = response.result === 'cancelled' ? cancelled[fields.op] : '已保存。';
+      if (response.result === 'limitReached') {
+        status.textContent = '主菜单固定项已达上限。';
+      } else if (fields.op === 'menuPin') {
+        status.textContent = fields.enabled ? '已固定到右上角主菜单。' : '已移回分组子菜单。';
+      } else {
+        status.textContent = response.result === 'cancelled' ? cancelled[fields.op] : '已保存。';
+      }
     } catch {
       status.textContent = '操作未完成。请重试。';
     } finally {
@@ -292,6 +299,13 @@
         if (command.linkMenu) tools.append(make('small', '链接右键菜单'));
         if (command.tabDrop) tools.append(make('small', '标签排序'));
         if (data.enabled && !command.linkMenu && !command.tabDrop) {
+          const pinBtn = make('button', command.menuPinned ? '移出主菜单' : '固定到主菜单', 'action');
+          pinBtn.id = 'menu-pin-' + command.id;
+          pinBtn.type = 'button';
+          pinBtn.setAttribute('aria-pressed', String(Boolean(command.menuPinned)));
+          pinBtn.setAttribute('aria-label', (command.menuPinned ? '从主菜单移出「' : '固定「') + command.label + (command.menuPinned ? '」' : '」到主菜单'));
+          pinBtn.onclick = () => apply(plugin, { op:'menuPin', command:command.id, enabled:!command.menuPinned }, pinBtn);
+          tools.append(pinBtn);
           const trigger = make('button', command.shortcut ? '修改' : '添加', 'action');
           trigger.id = 'shortcut-' + command.id;
           trigger.setAttribute('aria-label', '设置「' + command.label + '」的浏览器快捷键');

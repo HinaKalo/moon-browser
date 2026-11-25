@@ -5,10 +5,10 @@
 <title>媒体控件</title>
 <style>
   :root { color-scheme:light; font:14px/1.5 "Segoe UI","Microsoft YaHei UI",sans-serif;
-    --page:#f6f7fa; --panel:#fff; --text:#181c27; --quiet:#555e70; --line:#dce0eb; --soft:#eef1ff; --accent:#3b51af;
+    --page:#f6f7f9; --panel:#ffffff; --text:#14161b; --quiet:#5b6270; --line:#e3e6eb; --soft:#edebfd; --accent:#5b4df0;
     background:var(--page); color:var(--text); }
   :root[data-moon-theme=dark] { color-scheme:dark;
-    --page:#171a22; --panel:#202430; --text:#eef0f8; --quiet:#b9c1d3; --line:#404960; --soft:#30385b; --accent:#bac5ff; }
+    --page:#0e0f13; --panel:#181a20; --text:#eceef3; --quiet:#9aa0ae; --line:#262932; --soft:#262244; --accent:#7c6cff; }
   * { box-sizing:border-box; }
   [hidden] { display:none !important; }
   body { margin:0; }
@@ -56,7 +56,10 @@
   const playbackMessages={
     partial:'已恢复部分媒体。其余内容仍可重试。',
     failed:'无法控制此媒体。可转到原标签操作。',
-    unavailable:'此标签没有可控制的媒体元素。'
+    unavailable:'此标签没有可控制的媒体元素。',
+    seekUnavailable:'此媒体当前无法跳转。可转到原标签操作。',
+    seekAmbiguous:'此标签有多个播放器。请在原标签选择要控制的播放器。',
+    seekFailed:'无法调整播放进度。可转到原标签操作。'
   };
   let sequence=0, offset=0, nextOffset=null, loading=false, controlling=false;
   async function host(method,params={}) {
@@ -83,8 +86,10 @@
     const muted=tab.siteMuted ? ' · 网站已静音' : tab.muted ? ' · 标签已静音' : '';
     const status=tab.pending ? '正在应用…' : playbackMessages[tab.playbackResult];
     setText(row.state,status || activity+muted);
-    row.play.hidden=!tab.canPlayback;
-    row.play.setAttribute('aria-disabled',String(controlling || tab.pending));
+    for (const button of [row.back, row.play, row.forward]) {
+      button.hidden=!tab.canPlayback;
+      button.setAttribute('aria-disabled',String(controlling || tab.pending));
+    }
     row.mute.setAttribute('aria-disabled',String(controlling));
     row.focus.setAttribute('aria-disabled',String(controlling));
     setText(row.play,tab.paused ? '继续播放' : '暂停');
@@ -94,11 +99,16 @@
     const item=element('li',''), identity=element('div',''), actions=element('div','actions');
     const title=element('p','title'), origin=element('p','origin'), state=element('p','state');
     const play=element('button','play'), mute=element('button',''), focus=element('button','','转到标签');
-    play.type=mute.type=focus.type='button';
+    const back=element('button','','−10 秒'), forward=element('button','','+10 秒');
+    back.setAttribute('aria-label','后退 10 秒');
+    forward.setAttribute('aria-label','前进 10 秒');
+    back.type=play.type=forward.type=mute.type=focus.type='button';
     identity.append(title,origin);
-    actions.append(play,mute,focus);
+    actions.append(back,play,forward,mute,focus);
     item.append(identity,actions,state);
-    const row={item,title,origin,state,play,mute,focus,tab};
+    const row={item,title,origin,state,back,play,forward,mute,focus,tab};
+    back.onclick=()=>control(row,'seekBackward');
+    forward.onclick=()=>control(row,'seekForward');
     play.onclick=()=>control(row,row.tab.paused ? 'resume' : 'pause');
     mute.onclick=()=>control(row,row.tab.muted ? 'unmute' : 'mute');
     focus.onclick=()=>control(row,'focus');
@@ -147,7 +157,7 @@
     } finally { loading=false; }
   }
   async function control(row,action) {
-    if (controlling || (row.tab.pending && (action==='pause' || action==='resume'))) return;
+    if (controlling || row.tab.pending && !['focus','mute','unmute'].includes(action)) return;
     const {id,navigation}=row.tab;
     controlling=true;
     setText(feedback,'');

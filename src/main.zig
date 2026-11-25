@@ -28,6 +28,10 @@ const profile_db = @import("profile_db.zig");
 const last_session = @import("session.zig");
 const tab_groups = @import("tab_groups.zig");
 
+comptime {
+    _ = @import("shell_ui.zig");
+}
+
 const max_tabs = last_session.limit;
 const max_pinned = 24;
 const PinnedEntry = struct { url: []const u8, title: []const u8 };
@@ -67,7 +71,7 @@ const MediaControls = struct {
     result: sdk.MediaPlayback = .idle,
     kind: c_uint = 0,
     visible_until: u64 = 0,
-    pending: ?struct { request: u64, deadline: u64, resuming: bool } = null,
+    pending: ?struct { request: u64, deadline: u64, action: sdk.MediaAction } = null,
 };
 const Retiring = struct { handle: *anyopaque, pid: u32 };
 
@@ -1513,7 +1517,7 @@ fn maintenance() void {
         if (tab.media.pending) |pending| {
             if (now>=pending.deadline) {
                 tab.media.pending=null;
-                tab.media.result=.failed;
+                tab.media.result=if (mediaSeek(pending.action)) .seekFailed else .failed;
             }
         }
     }
@@ -1645,6 +1649,10 @@ export fn moon_media_control(panel: u64, owner: [*c]const u8, id: u64, navigatio
     return @intFromEnum(controlMedia(panel,slice(owner),id,navigation,raw));
 }
 
+fn mediaSeek(action: sdk.MediaAction) bool {
+    return action == .seekBackward or action == .seekForward;
+}
+
 fn controlMedia(panel: u64, owner: []const u8, id: u64, navigation: u64, raw: c_uint) sdk.MediaResult {
     if (stopped or count==0 or native.moon_shell_private() or tabs[active].id!=panel or !tabs[active].extension or
         !plugins.hasGrant(owner,.@"media.control")) return .unavailable;
@@ -1663,15 +1671,15 @@ fn controlMedia(panel: u64, owner: []const u8, id: u64, navigation: u64, raw: c_
             native.moon_engine_mute(view,tab.muted);
             native.moon_shell_refresh();
         },
-        .pause, .@"resume" => {
+        .pause, .@"resume", .seekBackward, .seekForward => {
             if (tab.media.pending!=null) return .busy;
             if ((action==.pause and playing==0 and now>=tab.media.visible_until) or
                 (action==.@"resume" and !tab.media.paused)) return .unavailable;
             media_serial+%=1;
-            if (!native.moon_engine_media_action(view,media_serial,action==.@"resume")) return .unavailable;
+            if (!native.moon_engine_media_action(view,media_serial,@tagName(action))) return .unavailable;
             tab.last_used=now;
             if (playing!=0) tab.media.kind=playing;
-            tab.media.pending=.{ .request=media_serial,.deadline=now+4500,.resuming=action==.@"resume" };
+            tab.media.pending=.{ .request=media_serial,.deadline=now+4500,.action=action };
             tab.media.result=.idle;
             return .pending;
         },
@@ -1687,13 +1695,19 @@ export fn moon_media_action_result(id: u64, request: u64, result: [*c]const u8) 
     if (pending.request!=request) return;
     tab.media.pending=null;
     const raw = slice(result);
+    if (mediaSeek(pending.action)) {
+        tab.media.result = if (equals(raw,"{\"status\":\"seeked\"}")) .seeked
+            else if (equals(raw,"{\"status\":\"seekUnavailable\"}")) .seekUnavailable
+            else if (equals(raw,"{\"status\":\"seekAmbiguous\"}")) .seekAmbiguous else .seekFailed;
+        return;
+    }
     tab.media.result = if (equals(raw,"{\"status\":\"paused\"}")) .paused
         else if (equals(raw,"{\"status\":\"resumed\"}")) .resumed
         else if (equals(raw,"{\"status\":\"partial\"}")) .partial
         else if (equals(raw,"{\"status\":\"unavailable\"}")) .unavailable else .failed;
     if (tab.media.result==.paused) tab.media.paused=true;
     if (tab.media.result==.resumed) tab.media.visible_until=native.moon_clock()+2500;
-    if (tab.media.result==.resumed or (pending.resuming and tab.media.result==.unavailable)) tab.media.paused=false;
+    if (tab.media.result==.resumed or (pending.action==.@"resume" and tab.media.result==.unavailable)) tab.media.paused=false;
 }
 fn taskProcessLessThan(order: sdk.TaskProcessOrder, left: native.MoonSample, right: native.MoonSample) bool {
     return switch (order) {
@@ -2487,6 +2501,12 @@ export fn moon_plugins_request(panel: u64, raw: [*c]const u8, response: [*c]u8, 
     switch (input.op) {
         .shortcut => {
             const result = plugins.setUserShortcut(index,input.command orelse return false,input.shortcut);
+            if (result == .saved) native.moon_shell_refresh();
+            return plugin_manager.reply(allocator,output,.{ .result = result });
+        },
+        .menuPin => {
+            const enabled = input.enabled orelse return false;
+            const result = plugins.setUserMenuPin(index,input.command orelse return false,enabled);
             if (result == .saved) native.moon_shell_refresh();
             return plugin_manager.reply(allocator,output,.{ .result = result });
         },

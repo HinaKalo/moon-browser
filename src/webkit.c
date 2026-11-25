@@ -141,7 +141,11 @@ extern WKDictionaryRef WKDictionaryCreate(const WKStringRef *, const WKTypeRef *
     X(WKFramePolicyListenerUse) X(WKFramePolicyListenerIgnore) X(WKFramePolicyListenerDownload) \
     X(WKFramePolicyListenerUseWithPolicies) X(WKWebsitePoliciesCreate) X(WKWebsitePoliciesSetAutoplayPolicy) \
     X(WKErrorCopyLocalizedDescription) X(WKDownloadGetOriginatingPage) X(WKDownloadCopyRequest) X(WKDownloadCancel) \
-    X(WKPageListenForLayoutMilestones) X(WKPageCallAfterNextPresentationUpdate)
+    X(WKPageListenForLayoutMilestones) X(WKPageCallAfterNextPresentationUpdate) \
+    X(WKPageSetCustomUserAgent)
+
+static const char default_user_agent[] =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15";
 
 static struct {
 #define FIELD(name) __typeof__(&name) name;
@@ -1136,8 +1140,8 @@ bool moon_engine_apply_lua_dom(MoonView *view,const char *operations) {
     return send_site_request(view,0,operations,"MoonApplyLuaDOM");
 }
 bool moon_engine_media_actions_available(void) { return filter_bundle_available; }
-bool moon_engine_media_action(MoonView *view,uint64_t request,bool resume) {
-    return send_site_request(view,request,resume ? "resume" : "pause","MoonControlMedia");
+bool moon_engine_media_action(MoonView *view,uint64_t request,const char *action) {
+    return send_site_request(view,request,action,"MoonControlMedia");
 }
 
 static MoonView *open_view(uint64_t token, const char *extension_id, const char *address) {
@@ -1194,6 +1198,13 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
     view->token = token;
     if (!view->page || !view->hwnd) goto fail;
     release(config);
+    if (!address) {
+        WKStringRef ua = wk.WKStringCreateWithUTF8CString(default_user_agent);
+        if (ua) {
+            wk.WKPageSetCustomUserAgent(view->page, ua);
+            release(ua);
+        }
+    }
     view->next = views;
     views = view;
     WKPageNavigationClientV1 navigation = { .base={1,view},

@@ -50,7 +50,7 @@ typedef struct MoonMediaTab {
 size_t moon_media_tabs(uint32_t offset, MoonMediaTab *rows, size_t cap);
 int moon_media_control(uint64_t panel, const char *owner, uint64_t id, uint64_t navigation, unsigned action);
 unsigned moon_engine_playing(const MoonView *view);
-bool moon_engine_media_action(MoonView *view, uint64_t request, bool resume);
+bool moon_engine_media_action(MoonView *view, uint64_t request, const char *action);
 bool moon_engine_media_actions_available(void);
 void moon_media_action_result(uint64_t tab, uint64_t request, const char *result);
 enum { MOON_DOM_SET_TEXT = 1, MOON_DOM_HIDE, MOON_DOM_ADD_CLASS, MOON_DOM_MAX_OPS = 32 };
@@ -431,4 +431,23 @@ bool moon_update_open(bool portable, uint64_t size, const uint8_t *hash);
 bool moon_market_read(char *buffer, size_t capacity, size_t *length);
 bool moon_market_thread(void);
 void moon_market_worker(void);
+typedef struct MoonShellFrame {
+    void *hwnd;
+    void *surface;
+    uint32_t pixel_w, pixel_h, dpi;
+    int width, height;
+    int hover_x, hover_y;
+    bool dark, focus_mode, fullscreen, private_window, show_home, zoomed;
+    bool address_focused, home_focused;
+    bool bookmark_visible, bookmark_more;
+    size_t first_tab, sidebar_count;
+    const MoonSidebarRow *sidebar_rows;
+    size_t bookmark_count;
+    const MoonBookmarkBarEntry *bookmark_roots;
+    bool drag_active, drag_into_group;
+    uint64_t drag_source, drag_anchor;
+    int drag_guide;
+} MoonShellFrame;
+void moon_shell_ui_release(void);
+bool moon_shell_ui_paint(const MoonShellFrame *frame);
 #endif

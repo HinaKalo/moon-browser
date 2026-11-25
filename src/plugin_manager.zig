@@ -7,7 +7,7 @@ pub const address: [:0]const u8 = native.MOON_PLUGIN_MANAGER_ADDRESS;
 pub const document: [:0]const u8 = @embedFile("plugin_manager.html");
 
 pub const Request = struct {
-    op: enum { list, details, enable, grant, settings, market, shortcut, capture },
+    op: enum { list, details, enable, grant, settings, market, shortcut, menuPin, capture },
     offset: usize = 0,
     id: ?[]const u8 = null,
     permission: ?sdk.Permission = null,
@@ -24,6 +24,7 @@ const Command = struct {
     shortcut: []const u8,
     custom: bool,
     globalShortcut: ?[]const u8,
+    menuPinned: bool,
     linkMenu: bool,
     tabDrop: bool,
 };
@@ -77,6 +78,7 @@ pub fn details(allocator: std.mem.Allocator, output: []u8, index: usize) bool {
             .shortcut = if (global != null and user == null) "" else std.mem.span(native.moon_plugin_action_shortcut(index,i)),
             .custom = user != null,
             .globalShortcut = if (global) |key| std.mem.span(key) else null,
+            .menuPinned = plugins.isMenuPinned(index, i),
             .linkMenu = plugins.linkOnly(index,i),
             .tabDrop = plugins.tabDropOnly(index,i),
         };

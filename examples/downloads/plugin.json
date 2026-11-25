@@ -8,7 +8,7 @@
   "settingsPage": "downloads.html",
   "contributes": {
     "settings": {"section": "general", "title": "下载", "description": "设置下载保存位置，查看下载进度和历史。"},
-    "commands": [{ "id": "open", "label": "查看下载", "menu": "library", "shortcut": "Ctrl+J" }]
+    "commands": [{ "id": "open", "label": "查看下载", "menu": "library", "menuPinned": true, "shortcut": "Ctrl+J" }]
   },
   "permissions": ["downloads.manage", "downloads.preferences", "downloads.open"]
 }
