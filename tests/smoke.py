@@ -3282,6 +3282,40 @@ def run_win32(exe, base, root):
                     click_inspector_target()
                     wait_for(lambda: Fixture.inspector_clicks==clicks+3,"Escape did not cancel the element picker")
                     print("devtools_element_picker=ok selection_intercepted=ok escape_cancel=ok f12_toggle=ok repeat_suppression=ok",flush=True)
+                    if tuple(map(int,json.loads(devtools.with_name("plugin.json").read_text(encoding="utf-8"))["version"].split(".")[:2])) >= (1,8):
+                        panel = wait_for(attached_inspector,"The inspector dock disappeared")
+                        invoke("拾取网页元素")
+                        wait_for(picker_ready,"WebKit did not start the picker for docked Escape")
+                        user.PostMessageW(panel,0x0100,0x1B,1)
+                        wait_for(lambda: not user.GetPropW(page,"MoonInspectorPickerState"),"Escape from the dock did not cancel selection")
+
+                        invoke("拾取网页元素")
+                        wait_for(picker_ready,"WebKit did not start the picker for the Console shortcut")
+                        # Share the target queue's key state without sending keys to the foreground app.
+                        thread=user.GetWindowThreadProcessId(panel,None)
+                        current=ctypes.windll.kernel32.GetCurrentThreadId()
+                        user.AttachThreadInput.argtypes=[wt.DWORD,wt.DWORD,wt.BOOL]
+                        if not user.AttachThreadInput(current,thread,True):
+                            raise RuntimeError("Could not share the dock input queue")
+                        key_state=(wt.BYTE*256)()
+                        saved=False
+                        try:
+                            saved=bool(user.GetKeyboardState(key_state))
+                            if not saved:
+                                raise RuntimeError("Could not read dock keyboard state")
+                            pressed=(wt.BYTE*256)(*key_state)
+                            pressed[0x10]=pressed[0x11]=0x80  # Shift and Ctrl
+                            if not user.SetKeyboardState(pressed):
+                                raise RuntimeError("Could not set dock modifiers")
+                            user.PostMessageW(panel,0x0100,ord("J"),1)
+                            wait_for(lambda: not user.GetPropW(page,"MoonInspectorPickerState"),"Ctrl+Shift+J from the dock did not switch to Console")
+                        finally:
+                            if saved:
+                                user.SetKeyboardState(key_state)
+                            user.AttachThreadInput(current,thread,False)
+                        if attached_inspector()!=panel or inspector_window():
+                            raise RuntimeError("The Console shortcut changed the inspector placement")
+                        print("devtools_docked_shortcuts=ok console=ok picker_escape=ok",flush=True)
                 user.SetWindowPos(frame,None,window_rect.left,window_rect.top,px(700),px(375),0x0014)
                 close_independent_inspector()
                 if devtools_placement:
