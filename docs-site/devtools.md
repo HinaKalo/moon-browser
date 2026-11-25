@@ -9,7 +9,7 @@
 - **打开网页控制台**。查看日志并在当前网页上下文使用 JavaScript 控制台。
 - **查看网页资源和站点数据**。打开 WebKit Inspector 后选择 Storage，查看该页面可用的 Cookies、Local Storage、Session Storage 等。
 - **切换网页开发者工具**。在 WebKit Inspector 中使用 Elements、Network、Sources 等面板。
-- **拾取网页元素**。从 0.1.0-preview.38 起，按 Ctrl+Shift+C 或从「… → 开发与诊断」启动。鼠标悬停预览元素，点击后在 Elements 中检查。选择中的点击由检查器处理。按 Esc 或切换网页可取消。
+- **拾取网页元素**。从 0.1.0-preview.38 起，按 Ctrl+Shift+C 或从「… → 开发与诊断」启动。鼠标悬停预览元素，点击后在 Elements 中检查。选择中的点击由检查器处理。按 Esc 或切换网页可取消。从 0.1.0-preview.91 起，元素拾取启动或取消期间的左键点击会被宿主拦截，避免误触网页链接或按钮。
 - **右键检查元素**。从 0.1.0-preview.47 起，在网页元素上右键选择「检查元素」，直接在 Elements 定位该节点。开发者工具会在空间允许时停靠到当前标签。停用插件或撤销开发者工具权限后，网页右键菜单会移除该入口。
 
 常用的 Cookie、Local Storage 和 Session Storage 可直接从独立的「查看当前站点数据」命令打开。[站点数据](./site-data)

@@ -2122,6 +2122,7 @@ static int run_shell(int argc, wchar_t **argv) {
             if (GetClientRect(frame,&bounds) && pointer.y>=0 && pointer.y<px(8) &&
                 abs(pointer.x-bounds.right/2)<px(103)) show_fullscreen_exit();
         }
+        if (moon_engine_filter_picker_click(msg.hwnd,msg.message)) continue;
         if (page_input(msg.message,msg.wParam) && IsChild(content,msg.hwnd) && moon_engine_page_window(msg.hwnd))
             moon_command(MOON_INPUT,0,NULL);
         TranslateMessage(&msg);

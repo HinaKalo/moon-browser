@@ -3183,20 +3183,26 @@ def run_win32(exe, base, root):
                     clicks = Fixture.inspector_clicks
                     click_inspector_target()
                     wait_for(lambda: Fixture.inspector_clicks==clicks+1,"The uninspected element did not receive its click")
+                    user.GetPropW.argtypes=[wt.HWND,wt.LPCWSTR]
+                    user.GetPropW.restype=wt.HANDLE
+                    def picker_ready():
+                        return user.GetPropW(page,"MoonInspectorPickerState")==2
+
                     invoke("拾取网页元素")
                     wait_for(attached_inspector,"Element picking did not open the WebKit inspector",20)
-                    sleep(0.65)
+                    wait_for(picker_ready,"WebKit did not start element picking")
                     click_inspector_target()
                     sleep(0.4)
                     if Fixture.inspector_clicks!=clicks+1:
                         raise RuntimeError("The inspector picker forwarded its selection click to the document")
+                    wait_for(lambda: not user.GetPropW(page,"MoonInspectorPickerState"),"The picker remained active after selecting an element")
                     click_inspector_target()
                     wait_for(lambda: Fixture.inspector_clicks==clicks+2,"The picker did not exit after selecting an element")
 
                     invoke("拾取网页元素")
-                    sleep(0.6)
+                    wait_for(picker_ready,"WebKit did not restart element picking")
                     user.PostMessageW(page,0x0100,0x1B,1)
-                    sleep(0.25)
+                    wait_for(lambda: not user.GetPropW(page,"MoonInspectorPickerState"),"Escape did not leave the picker")
                     click_inspector_target()
                     wait_for(lambda: Fixture.inspector_clicks==clicks+3,"Escape did not cancel the element picker")
                     print("devtools_element_picker=ok selection_intercepted=ok escape_cancel=ok f12_toggle=ok repeat_suppression=ok",flush=True)

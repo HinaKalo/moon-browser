@@ -169,6 +169,7 @@ static WKStringRef current_request_policy;
 
 typedef enum { INSPECTOR_KEEP, INSPECTOR_DOCK, INSPECTOR_WINDOW } InspectorPlacement;
 typedef enum { PICK_IDLE, PICK_WAIT_VISIBLE, PICK_STARTING, PICK_CANCEL_START, PICK_STOPPING } InspectorPicker;
+static const wchar_t picker_state_property[]=L"MoonInspectorPickerState";
 
 struct MoonView {
     WKViewRef view;
@@ -182,6 +183,8 @@ struct MoonView {
     uint64_t inspector_deadline;
     InspectorPicker picker;
     uint64_t picker_deadline;
+    unsigned picker_window_state;
+    bool picker_blocked_press;
     bool docked, inspector_visible;
     bool tab_muted, site_muted;
     bool capture_network;
@@ -1287,6 +1290,7 @@ void moon_engine_close(MoonView *view) {
     wk.WKPageSetPageFindClient(view->page,NULL);
     if (!view->extension_address && filter_bundle_available) wk.WKPageSetPageInjectedBundleClient(view->page,NULL);
     if (view->inspector) wk.WKInspectorClose(view->inspector);
+    if (view->picker_window_state) RemovePropW(view->hwnd,picker_state_property);
     moon_viewport_close(&view->viewport);
     wk.WKPageClose(view->page);
     DestroyWindow(view->surface);
@@ -1496,10 +1500,23 @@ bool moon_engine_cancel_pick(MoonView *view) {
     return true;
 }
 
-static void update_picker(MoonView *view, uint64_t now, bool visible) {
-    if (!IsWindowVisible(view->surface)) moon_engine_cancel_pick(view);
+bool moon_engine_filter_picker_click(void *window, unsigned message) {
+    if (message!=WM_LBUTTONDOWN && message!=WM_LBUTTONUP && message!=WM_LBUTTONDBLCLK) return false;
+    for (MoonView *view=views;view;view=view->next) {
+        if (window!=view->hwnd && !IsChild(view->hwnd,window)) continue;
+        if (message==WM_LBUTTONUP) {
+            const bool blocked=view->picker_blocked_press;
+            view->picker_blocked_press=false;
+            return blocked;
+        }
+        view->picker_blocked_press=view->picker!=PICK_IDLE;
+        return view->picker_blocked_press;
+    }
+    return false;
+}
+
+static void advance_picker(MoonView *view, uint64_t now, bool visible, bool active) {
     if (view->picker==PICK_IDLE) return;
-    const bool active=wk.WKInspectorIsElementSelectionActive(view->inspector);
     if (now>=view->picker_deadline) {
         view->picker=PICK_IDLE;
     } else if (view->picker==PICK_WAIT_VISIBLE && visible) {
@@ -1516,6 +1533,17 @@ static void update_picker(MoonView *view, uint64_t now, bool visible) {
     } else if (!active && view->picker==PICK_STOPPING) {
         view->picker=PICK_IDLE;
     }
+}
+
+static void update_picker(MoonView *view, uint64_t now, bool visible) {
+    if (!IsWindowVisible(view->surface)) moon_engine_cancel_pick(view);
+    const bool active=visible && wk.WKInspectorIsElementSelectionActive(view->inspector);
+    advance_picker(view,now,visible,active);
+    const unsigned state=view->picker!=PICK_IDLE?1:active?2:0;
+    if (state==view->picker_window_state) return;
+    view->picker_window_state=state;
+    if (state) SetPropW(view->hwnd,picker_state_property,(HANDLE)(UINT_PTR)state);
+    else RemovePropW(view->hwnd,picker_state_property);
 }
 
 static void update_inspector(MoonView *view, uint64_t now) {
