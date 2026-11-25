@@ -795,6 +795,8 @@ def run_win32(exe, base, root):
     bookmark_bar = bookmarks.exists() and '"id": "bar"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     has_bulk_clear = downloads.exists() and "clear-completed" in (downloads.parent / "downloads.html").read_text(encoding="utf-8")
+    download_preferences = downloads.is_file() and "downloads.preferences" in json.loads(
+        downloads.with_name("plugin.json").read_text(encoding="utf-8"))["permissions"]
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     has_site_menu = site_data.exists() and json.loads(site_data.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"][0].get("siteMenu")
     cache_remove = site_data.exists() and '"siteData.cacheWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
@@ -925,6 +927,9 @@ def run_win32(exe, base, root):
              'JSON.stringify({jsonrpc:"2.0",id:"10",method:"downloads.clearCompleted",params:{}}));'
              'if(JSON.parse(downloadsDenied).error?.code!==-32001)return;'
              if has_bulk_clear else '') +
+            ('const downloadPrefsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"17",method:"downloads.preferences.get",params:{}}));'
+             'if(JSON.parse(downloadPrefsDenied).error?.code!==-32001)return;' if download_preferences else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -1909,7 +1914,7 @@ def run_win32(exe, base, root):
             user.PostMessageW(view,0x0201,1,coords)
             user.PostMessageW(view,0x0202,0,coords)
 
-        def pick_file(title, selected, owner=None):
+        def pick_file(title, selected, owner=None, folder=False):
             dialog = wait_for(lambda: owned_window("#32770",title,owner),f"The {title} dialog did not open")
             if selected is None:
                 user.PostMessageW(dialog,0x0111,2,0)  # IDCANCEL
@@ -1937,11 +1942,19 @@ def run_win32(exe, base, root):
                     user.EnumChildWindows(dialog,find_filename,0)
                 if not field:
                     raise RuntimeError("The file chooser's filename edit is unavailable")
-                set_control(field,str(selected))
+                if folder:
+                    filename=ctypes.create_unicode_buffer(str(selected))
+                    user.SendMessageW(field,0x00B1,0,-1)  # EM_SETSEL
+                    user.SendMessageW(field,0x00C2,1,ctypes.addressof(filename))  # EM_REPLACESEL
+                else:
+                    set_control(field,str(selected))
                 if read_control(field)!=str(selected):
                     raise RuntimeError("The file chooser did not accept the test path")
-                user.PostMessageW(dialog,0x0111,1,0)  # IDOK
-            wait_for(lambda: not user.IsWindow(dialog),f"The {title} dialog did not close")
+                if folder and (accept:=user.GetDlgItem(dialog,1)):
+                    user.PostMessageW(accept,0x00F5,0,0)  # BM_CLICK
+                else:
+                    user.PostMessageW(dialog,0x0111,1,0)  # IDOK
+            wait_for(lambda: not user.IsWindow(dialog),f"The {title} dialog did not close after {'cancel' if selected is None else 'selection'}")
 
         invoke("版本与更新")
         popup = wait_for(lambda: owned_window("#32770", "版本与更新"), "Compact update dialog did not open")
@@ -4298,6 +4311,92 @@ def run_win32(exe, base, root):
             native_entries(choose=(page_menu,theme_action))
             wait_for(lambda: theme_stored("light"),"The theme toggle failed to start from the persisted dark theme")
             print("appearance_system_plugin=ok page_theme_control=ok native_focus=ok persistent_theme=ok window_scoped_focus=ok",flush=True)
+        if download_preferences:
+            settings_env=preview_env(root/"download-settings")
+            settings_profile=Path(settings_env["MOON_BROWSER_PROFILE_DIR"])
+            chosen_folder=root/"download-settings"/"已选下载"
+            chosen_folder.mkdir(parents=True)
+            fixture=settings_profile/"plugins"/"download-settings"
+            fixture.mkdir(parents=True)
+            fixture_id="moon.download-settings-fixture"
+            config=settings_profile/f'extension-{sha256(fixture_id.encode()).hexdigest()}.json'
+            prefs_file=settings_profile/"download-preferences.json"
+            (settings_profile/"plugin-state.json").write_text(json.dumps([
+                {"id":fixture_id,"enabled":True,"tabs_read":False,"downloads_manage":True,"downloads_preferences":True}
+            ]),encoding="utf-8")
+            (fixture/"plugin.json").write_text(json.dumps({
+                "id":fixture_id,"name":"Download preferences fixture","version":"1.0.0",
+                "apiVersion":2,"runtime":"native","entry":"Unused.exe","settingsPage":"downloads.html",
+                "permissions":["downloads.manage","downloads.preferences"],
+                "contributes":{"commands":[{"id":"open","label":"Fixture"}]}
+            }),encoding="utf-8")
+            page=downloads.with_name("downloads.html").read_text(encoding="utf-8")
+            contract="""
+<script>(async()=>{
+    const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:"write",value}));
+    const wait=async(fn,label)=>{for(let i=0;i<240;i++){if(fn())return;
+        await new Promise(r=>setTimeout(r,50));}throw Error(label);};
+    try {
+        await wait(()=>!preferencesPanel.hidden,"preferences did not load");
+        preferencesPanel.open=true;
+        if(!preferences.askWhereToSave||preferences.custom||!preferences.folder)throw Error("default preferences");
+        folderPicker.click();
+        await wait(()=>preferencesStatus.textContent==="已取消。","cancelled picker");
+        if(preferences.custom)throw Error("cancellation changed the folder");
+        folderPicker.click();
+        await wait(()=>preferences.custom&&!savingPreferences,"folder selection");
+        if(folderName.textContent!==preferences.folder)throw Error("folder not rendered");
+        askPath.click();
+        await wait(()=>!preferences.askWhereToSave&&!savingPreferences,"automatic download opt-in");
+        await emit({passed:true});
+    } catch(error){await emit({error:String(error)});}
+})();</script>
+"""
+            (fixture/"downloads.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
+
+            def restart_download_settings():
+                user.PostMessageW(frame,0x0010,0,0)
+                if proc.wait(8)!=0:
+                    raise RuntimeError("Could not close the browser before the download settings check")
+                process=subprocess.Popen([str(exe),"--gdi"],env=settings_env)
+                window=browser_frame(process)
+                return process,window,user.GetDlgItem(window,1001)
+
+            proc,frame,edit=restart_download_settings()
+            set_control(edit,f"extension://{fixture_id}/downloads.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            pick_file("选择下载文件夹",None)
+            pick_file("选择下载文件夹",chosen_folder,folder=True)
+            result=wait_for(lambda: read_settings(config),"The download preferences page did not report")
+            if not result.get("passed"):
+                raise RuntimeError(f"Download preferences: {result.get('error')}")
+            persisted=read_settings(prefs_file)
+            if Path(persisted["folder"])!=chosen_folder or persisted["askWhereToSave"]:
+                raise RuntimeError("Download preferences were not saved to the active profile")
+            original=chosen_folder/"moon.txt"
+            original.write_bytes(b"Keep this existing download")
+            proc,frame,edit=restart_download_settings()
+            def completed_download(path):
+                try:
+                    with closing(sqlite3.connect(settings_profile/"downloads.sqlite3",timeout=0.2)) as database:
+                        return database.execute("SELECT 1 FROM downloads WHERE path=? AND state=2",(str(path),)).fetchone()
+                except sqlite3.OperationalError:
+                    return None
+
+            for index in (1,2):
+                path=chosen_folder/f"moon ({index}).txt"
+                set_control(edit,base+f"/download?collision={index}")
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: completed_download(path),"Automatic download did not finish")
+                if path.read_bytes()!=PAYLOAD:
+                    raise RuntimeError("Automatic download contained the wrong response bytes")
+            if original.read_bytes()!=b"Keep this existing download":
+                raise RuntimeError("The automatic download overwrote an existing file")
+            chosen_folder.rename(chosen_folder.with_name("已选择目录已移动"))
+            set_control(edit,base+"/download?missing-folder")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            pick_file("保存下载",None)
+            print("download_preferences=ok folder_picker=ok cancel=ok persisted=ok suffix_no_overwrite=ok missing_folder_prompt=ok",flush=True)
         if commands.exists():
             user.PostMessageW(frame,0x0010,0,0)
             if proc.wait(8)!=0:

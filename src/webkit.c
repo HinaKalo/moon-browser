@@ -154,6 +154,7 @@ typedef struct {
     WKDownloadRef download;
     uint64_t token;
     uint32_t id;
+    wchar_t *path;
 } DownloadSlot;
 static DownloadSlot downloads[64];
 
@@ -351,10 +352,66 @@ static void finish_download(WKDownloadRef download, int state, const char *detai
     if (!slot) return;
     const DownloadSlot result=*slot;
     *slot=(DownloadSlot){0};
+    free(result.path);
     if (result.id) moon_download_finish(result.id,state);
     if (*test_download_path) test_download_result = state==MOON_DL_COMPLETE ? 1 : -1;
     if (result.token) moon_engine_event(MOON_DOWNLOAD_END,result.token,detail);
 }
+static bool download_filename_valid(const wchar_t *name) {
+    const size_t length=wcslen(name);
+    if (!length || length>255 || name[length-1]==L' ' || name[length-1]==L'.' ||
+        wcspbrk(name,L"\\/:*?\"<>|")) return false;
+    for (const wchar_t *letter=name;*letter;++letter)
+        if (*letter<32 || *letter==127 || (*letter>=0x202a && *letter<=0x202e) ||
+            (*letter>=0x2066 && *letter<=0x2069)) return false;
+    const wchar_t *dot=wcschr(name,L'.');
+    size_t stem=dot?(size_t)(dot-name):length;
+    while (stem && name[stem-1]==L' ') --stem;
+    static const wchar_t *const devices[]={ L"CON",L"PRN",L"AUX",L"NUL",L"CLOCK$",L"CONIN$",L"CONOUT$" };
+    for (size_t i=0;i<ARRAYSIZE(devices);++i)
+        if (wcslen(devices[i])==stem && !_wcsnicmp(name,devices[i],stem)) return false;
+    return stem!=4 || (_wcsnicmp(name,L"COM",3) && _wcsnicmp(name,L"LPT",3)) ||
+        !wcschr(L"123456789\u00b9\u00b2\u00b3",name[3]);
+}
+
+static bool remember_download_path(DownloadSlot *slot,const wchar_t *path) {
+    const size_t bytes=(wcslen(path)+1)*sizeof(*path);
+    wchar_t *copy=malloc(bytes);
+    if (!copy) return false;
+    memcpy(copy,path,bytes);
+    free(slot->path);
+    slot->path=copy;
+    return true;
+}
+
+static bool automatic_download_path(DownloadSlot *slot,const wchar_t *folder,const wchar_t *name,wchar_t *path,size_t capacity) {
+    const DWORD attributes=GetFileAttributesW(folder);
+    if (!slot || attributes==INVALID_FILE_ATTRIBUTES || !(attributes&FILE_ATTRIBUTE_DIRECTORY)) return false;
+    const bool drive=folder[0] && folder[1]==L':' && folder[2]==L'\\';
+    const bool unc=folder[0]==L'\\' && folder[1]==L'\\' && folder[2]!=L'.' && folder[2]!=L'?';
+    if (!drive && !unc) return false;
+    const wchar_t *separator=folder[wcslen(folder)-1]==L'\\'?L"":L"\\";
+    const wchar_t *extension=wcsrchr(name,L'.');
+    if (!extension || extension==name) extension=name+wcslen(name);
+    const int stem=(int)(extension-name);
+    for (unsigned number=0;number<100;++number) {
+        if (number && wcslen(name)+(number>=10?5:4)>255) return false;
+        int written=number ? swprintf(path,capacity,L"%ls%ls%.*ls (%u)%ls",folder,separator,stem,name,number,extension) :
+            swprintf(path,capacity,L"%ls%ls%ls",folder,separator,name);
+        if (written<0 || (size_t)written>=capacity) return false;
+        if (GetFileAttributesW(path)!=INVALID_FILE_ATTRIBUTES) continue;
+        if (GetLastError()!=ERROR_FILE_NOT_FOUND) return false;
+        bool reserved=false;
+        for (size_t i=0;i<ARRAYSIZE(downloads);++i)
+            if (downloads[i].path && CompareStringOrdinal(downloads[i].path,-1,path,-1,TRUE)==CSTR_EQUAL) {
+                reserved=true;
+                break;
+            }
+        if (!reserved) return remember_download_path(slot,path);
+    }
+    return false;
+}
+
 static WKStringRef download_destination(WKContextRef unused, WKDownloadRef download, WKStringRef suggested,
                                          bool *overwrite, const void *client) {
     if (*test_download_path) {
@@ -363,14 +420,26 @@ static WKStringRef download_destination(WKContextRef unused, WKDownloadRef downl
         if (slot && slot->id) moon_download_destination(slot->id,test_download_path);
         return wk.WKStringCreateWithUTF8CString(test_download_path);
     }
-    char suggested_utf8[1024] = {0}, path_utf8[8192];
-    wchar_t path[4096];
-    if (suggested) wk.WKStringGetUTF8CString(suggested,suggested_utf8,sizeof(suggested_utf8));
-    if (!moon_utf16(suggested_utf8,path,ARRAYSIZE(path))) path[0] = 0;
-    if (!*path || wcspbrk(path, L"\\/:*?\"<>|") || !wcscmp(path,L".") || !wcscmp(path,L".."))
-        wcscpy(path,L"download");
+    char suggested_utf8[1024] = {0}, path_utf8[8192], preference[4096];
+    wchar_t name[1024], path[4096], folder[4096];
+    const size_t bytes=suggested ? wk.WKStringGetUTF8CString(suggested,suggested_utf8,sizeof(suggested_utf8)) : 0;
+    const bool safe_name=bytes>1 && bytes<sizeof(suggested_utf8) && strlen(suggested_utf8)+1==bytes &&
+        moon_utf16(suggested_utf8,name,ARRAYSIZE(name)) && download_filename_valid(name);
+    bool ask=true;
+    const bool has_folder=moon_download_folder(preference,sizeof(preference),&ask) &&
+        moon_utf16(preference,folder,ARRAYSIZE(folder));
+    if (!ask && safe_name && has_folder &&
+        automatic_download_path(download_slot(download),folder,name,path,ARRAYSIZE(path)) &&
+        moon_utf8(path,path_utf8,sizeof(path_utf8))) {
+        *overwrite=false;
+        DownloadSlot *slot=download_slot(download);
+        if (slot && slot->id) moon_download_destination(slot->id,path_utf8);
+        return wk.WKStringCreateWithUTF8CString(path_utf8);
+    }
+    wcscpy(path,safe_name?name:L"download");
     OPENFILENAMEW dialog = { .lStructSize = sizeof(dialog), .hwndOwner = moon_shell_window(),
         .lpstrFile = path, .nMaxFile = ARRAYSIZE(path), .lpstrTitle = L"保存下载",
+        .lpstrInitialDir=has_folder?folder:NULL,
         .Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER |
             (moon_shell_private() ? OFN_DONTADDTORECENT : 0) };
     if (!GetSaveFileNameW(&dialog) || !moon_utf8(path,path_utf8,sizeof(path_utf8))) {
@@ -379,6 +448,7 @@ static WKStringRef download_destination(WKContextRef unused, WKDownloadRef downl
     }
     *overwrite = true;
     DownloadSlot *slot=download_slot(download);
+    if (slot) (void)remember_download_path(slot,path);
     if (slot && slot->id) moon_download_destination(slot->id,path_utf8);
     return wk.WKStringCreateWithUTF8CString(path_utf8);
 }
@@ -528,6 +598,10 @@ void moon_engine_shutdown(void) {
     if (store) release(store);
     if (context) release(context);
     store = NULL; context = NULL;
+    for (size_t i=0;i<ARRAYSIZE(downloads);++i) {
+        free(downloads[i].path);
+        downloads[i].path=NULL;
+    }
     // WK's run loop can have posted completion callbacks. Let Windows unload
     // the DLL on process exit after the UI message pump has stopped.
 }

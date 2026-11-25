@@ -15,13 +15,68 @@ const Active = struct {
 var slots: [64]Active = @splat(.{});
 var database: ?*db_api.Database = null;
 var path: [4096:0]u8 = @splat(0);
+var preferences_path: [4096:0]u8 = @splat(0);
+var preferred_folder: [4096:0]u8 = @splat(0);
+var ask_where_to_save = true;
 var process: u32 = 0;
 var birth: u64 = 0;
+const StoredPreferences = struct { folder: ?[]const u8 = null, askWhereToSave: bool = true };
+pub const Preferences = struct { folder: ?[]const u8, custom: bool, askWhereToSave: bool };
 
 pub fn init(profile: []const u8) void {
     _ = std.fmt.bufPrintSentinel(&path,"{s}\\downloads.sqlite3",.{profile},0) catch return;
     process = native.moon_current_pid();
     birth = native.moon_process_birth(process);
+    _ = std.fmt.bufPrintSentinel(&preferences_path,"{s}\\download-preferences.json",.{profile},0) catch return;
+    var raw: [32768]u8 = undefined;
+    if (!native.moon_read_text(&preferences_path,&raw,raw.len)) return;
+    const decoded = std.json.parseFromSlice(StoredPreferences,std.heap.page_allocator,std.mem.sliceTo(&raw,0),.{}) catch return;
+    defer decoded.deinit();
+    if (!validFolder(decoded.value.folder)) return;
+    applyPreferences(decoded.value);
+}
+
+fn storedFolder() ?[]const u8 {
+    return if (preferred_folder[0]==0) null else std.mem.sliceTo(&preferred_folder,0);
+}
+
+fn validFolder(folder: ?[]const u8) bool {
+    const value = folder orelse return true;
+    return value.len>0 and value.len<preferred_folder.len and
+        std.unicode.utf8ValidateSlice(value) and std.mem.indexOfScalar(u8,value,0)==null;
+}
+
+fn applyPreferences(value: StoredPreferences) void {
+    const folder = value.folder orelse "";
+    std.mem.copyForwards(u8,preferred_folder[0..folder.len],folder);
+    preferred_folder[folder.len]=0;
+    ask_where_to_save=value.askWhereToSave;
+}
+
+fn savePreferences(allocator: std.mem.Allocator, value: StoredPreferences) !void {
+    if (preferences_path[0]==0 or !validFolder(value.folder)) return error.IOError;
+    const json = try std.json.Stringify.valueAlloc(allocator,value,.{});
+    defer allocator.free(json);
+    const bytes = try allocator.dupeSentinel(u8,json,0);
+    defer allocator.free(bytes);
+    if (!native.moon_write_text(&preferences_path,bytes.ptr)) return error.IOError;
+    applyPreferences(value);
+}
+
+pub fn preferences(buffer: *[4096]u8) Preferences {
+    const custom = storedFolder();
+    const folder: ?[]const u8 = if (custom) |value| value else if (native.moon_shell_download_default(buffer,buffer.len))
+        std.mem.sliceTo(buffer,0) else null;
+    return .{ .folder=folder,.custom=custom!=null,.askWhereToSave=ask_where_to_save };
+}
+
+pub fn configurePrompt(allocator: std.mem.Allocator, prompt: bool) !void {
+    if (prompt!=ask_where_to_save)
+        try savePreferences(allocator,.{ .folder=storedFolder(),.askWhereToSave=prompt });
+}
+
+pub fn configureFolder(allocator: std.mem.Allocator, folder: ?[]const u8) !void {
+    try savePreferences(allocator,.{ .folder=folder,.askWhereToSave=ask_where_to_save });
 }
 
 fn connection() !*db_api.Database {

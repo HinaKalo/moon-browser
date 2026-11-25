@@ -35,9 +35,29 @@
   #confirm-clear { background:var(--accent); color:var(--page); }
   #more { margin-top:14px; }
   #feedback:empty,#status:empty { display:none; }
+  #download-settings { background:var(--surface); border:1px solid var(--line); border-radius:10px; margin-bottom:14px; }
+  #download-settings summary { padding:11px 13px; cursor:pointer; }
+  #download-settings .settings-body { padding:0 13px 14px; }
+  #download-settings .settings-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:10px 0; }
+  #download-folder { margin:0; color:var(--muted); overflow-wrap:anywhere; }
+  #download-settings input[type=checkbox] { width:auto; accent-color:var(--accent); }
+  #download-preferences-status { margin:6px 0 0; color:var(--muted); }
+  #download-preferences-status:empty { display:none; }
 </style>
 <main>
   <header class="toolbar"><h1>下载</h1><button id="clear-completed" type="button">清除已完成</button></header>
+  <details id="download-settings" hidden>
+    <summary>下载设置</summary>
+    <div class="settings-body">
+      <p id="download-folder" aria-label="默认下载文件夹"></p>
+      <div class="settings-row">
+        <button id="choose-download-folder" type="button">更改文件夹</button>
+        <button id="reset-download-folder" type="button">恢复系统默认</button>
+      </div>
+      <label><input id="ask-download-path" type="checkbox" checked> 下载前询问保存位置</label>
+      <p id="download-preferences-status" role="status"></p>
+    </div>
+  </details>
   <input id="search" type="search" placeholder="搜索下载" aria-label="搜索下载" maxlength="64">
   <p id="status" role="status">正在读取下载…</p>
   <p id="feedback" role="status"></p>
@@ -66,6 +86,40 @@
     if (reply.id !== id || reply.error) throw Error(reply.error?.message || 'INVALID_RESPONSE');
     return reply.result;
   }
+  const preferencesPanel=el('download-settings'), folderName=el('download-folder');
+  const folderPicker=el('choose-download-folder'), folderReset=el('reset-download-folder');
+  const askPath=el('ask-download-path'), preferencesStatus=el('download-preferences-status');
+  let preferences, savingPreferences=false;
+  function showPreferences() {
+    preferencesPanel.hidden=!preferences;
+    folderName.textContent=preferences?.folder || '系统下载文件夹不可用。';
+    askPath.checked=preferences?.askWhereToSave!==false;
+    folderPicker.disabled=askPath.disabled=!preferences || savingPreferences;
+    folderReset.disabled=savingPreferences || !preferences?.custom;
+  }
+  async function refreshPreferences() {
+    if (savingPreferences) return;
+    try { preferences=await host('downloads.preferences.get',{}); }
+    catch { preferences=undefined; }
+    showPreferences();
+  }
+  async function savePreferences(action,params,message) {
+    if (!preferences || savingPreferences) return;
+    savingPreferences=true;
+    preferencesStatus.textContent='';
+    showPreferences();
+    try {
+      preferences=await host('downloads.preferences.'+action,params);
+      preferencesStatus.textContent=message;
+    } catch(error) {
+      preferencesStatus.textContent=error.message==='CANCELLED'?'已取消。':'无法保存下载设置。';
+    } finally { savingPreferences=false; showPreferences(); }
+  }
+  folderPicker.onclick=()=>savePreferences('chooseFolder',{},'已更改默认下载文件夹。');
+  folderReset.onclick=()=>savePreferences('resetFolder',{},'已恢复系统下载文件夹。');
+  askPath.onchange=()=>savePreferences('setPrompt',{askWhereToSave:askPath.checked},'已保存。');
+  document.addEventListener('visibilitychange',()=>{ if (!document.hidden) refreshPreferences(); });
+  refreshPreferences();
   function bytes(value) {
     const units = ['B','KB','MB','GB','TB'];
     let level = 0;

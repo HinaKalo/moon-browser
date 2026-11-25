@@ -78,6 +78,9 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `downloads.list` | `downloads.manage` | 传入 `{ query?, before? }`，返回 `{ downloads, next }`。记录包含名称、状态、已传字节、可选总字节数及开始时间。 |
 | `downloads.cancel` / `downloads.remove` / `downloads.reveal` | `downloads.manage` | 传入 `{ id }`，操作活动传输、终态记录或已完成的文件。成功返回 `null`。 |
 | `downloads.clearCompleted` | `downloads.manage` | 传入 `{}`，清理已完成的下载记录并返回 `{ removed }`。下载文件与其他状态的记录会保留。 |
+| `downloads.preferences.get` | `downloads.preferences` | 普通窗口的活动配置页传入 `{}`，返回 `{ folder, custom, askWhereToSave }`。系统未能解析默认目录时 `folder` 为 `null`。 |
+| `downloads.preferences.setPrompt` | `downloads.preferences` | 普通窗口的活动配置页传入 `{ askWhereToSave }`，保存是否询问位置并返回更新后的设置。 |
+| `downloads.preferences.chooseFolder` / `downloads.preferences.resetFolder` | `downloads.preferences` | 普通窗口的活动配置页传入 `{}`，通过原生对话框选择目录或恢复 Windows 默认目录。返回更新后的设置。 |
 | `siteData.open` | `siteData.read` | 在用户命令中传入 `{}`，打开清单声明的面板并绑定触发命令的网页。返回布尔值。 |
 | `siteData.status` | `siteData.read` | 从已打开的面板调用，返回 `{ state, origin, generation, failure, mutation, writable, cookieDetails, cacheWritable }`。各权限标记用于控制面板中对应的操作入口。 |
 | `siteData.list` | `siteData.read` | 面板传入 `{ group }`，类别是 `cookies`、`local` 或 `session`。返回 `{ available, entries, more, generation }`。 |
@@ -133,7 +136,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 
 - 菜单、命令面板和快捷键发送 `commands.run`。`params.id` 是清单中的命令。插件用同一请求 ID 回复 `{ message?: string, toast?: boolean }`，再以退出码 0 退出。0.1.0-preview.10 起，`toast: true` 将消息显示为短暂的原生通知。
 - `tabs.changed` 是无 ID 通知，`params.tabId` 是标签 ID 或 `null`。只有声明该事件并获得 `tabs.read` 的插件会收到通知。插件处理后直接退出，繁忙时标签切换可合并。
-- 插件以 `p:1`、`p:2` 递增发送请求并逐条收取回复。宿主请求使用 `h:` 前缀，每行小于 32 KiB。普通调用最多 24 个请求，初始化与通知有约 2 秒处理窗口，普通命令最多 120 秒。声明 `interactive: true` 的命令最多运行 30 分钟，从 0.1.0-preview.58 起最多可发送 256 个请求。读取握手的 `requestLimit`，即可用实际宿主上限配置 SDK 的 `Client.request_budget`。
+- 插件以 `p:1`、`p:2` 递增发送请求并逐条收取回复。宿主请求使用 `h:` 前缀，每行小于 32 KiB。普通调用最多 24 个请求，初始化与通知有约 2 秒处理窗口，普通命令最多 120 秒。声明 `interactive: true` 的命令最多运行 30 分钟，从 0.1.0-preview.59 起最多可发送 256 个请求。读取握手的 `requestLimit`，即可用实际宿主上限配置 SDK 的 `Client.request_budget`。
 
 ~~~json
 {"jsonrpc":"2.0","id":"h:1","method":"plugin.initialize","params":{"apiVersion":2,"pluginId":"example.system-tools","permissions":["tabs.read"]}}

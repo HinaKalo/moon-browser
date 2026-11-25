@@ -1,7 +1,7 @@
 {
   "id": "moon.downloads",
   "name": "下载",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonDownloads.exe",
@@ -9,5 +9,5 @@
   "contributes": {
     "commands": [{ "id": "open", "label": "查看下载", "menu": "library", "shortcut": "Ctrl+J" }]
   },
-  "permissions": ["downloads.manage"]
+  "permissions": ["downloads.manage", "downloads.preferences"]
 }

@@ -1711,6 +1711,18 @@ export fn moon_download_begin() u32 {
 export fn moon_download_destination(id: u32, path: [*c]const u8) void {
     if (!stopped) downloads.destination(id,slice(path));
 }
+export fn moon_download_folder(folder: [*c]u8, capacity: usize, ask: *bool) bool {
+    if (stopped or native.moon_shell_private() or !plugins.systemEnabled(.@"downloads.preferences")) return false;
+    var buffer: [4096]u8 = undefined;
+    const preferences = downloads.preferences(&buffer);
+    ask.*=preferences.askWhereToSave;
+    return copy(folder[0..capacity],preferences.folder orelse return false);
+}
+
+export fn moon_download_preferences_allowed(owner: [*c]const u8, panel: u64) bool {
+    return !native.moon_shell_private() and moon_extension_panel_active(panel) and
+        plugins.hasGrant(slice(owner),.@"downloads.preferences");
+}
 export fn moon_download_progress(id: u32, chunk: u64, total: u64) void {
     if (!stopped) downloads.progress(id,chunk,total);
 }
@@ -1875,6 +1887,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"bookmarks.manage" => "允许管理书签",
         .@"bookmarks.transfer" => "允许导入和导出 HTML 书签",
         .@"downloads.manage" => "允许管理下载",
+        .@"downloads.preferences" => "允许查看和修改下载位置设置",
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"siteData.cookieDetails" => "允许查看 Cookie 属性和 HttpOnly Cookie",

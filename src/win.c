@@ -7,9 +7,11 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <imm.h>
+#include <knownfolders.h>
 #include <psapi.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 #include <shlwapi.h>
 #include <tlhelp32.h>
 #include <stdio.h>
@@ -915,6 +917,54 @@ void moon_engine_test_fallback(bool value) {
 }
 
 static void open_palette(void);
+bool moon_shell_download_default(char *folder,size_t capacity) {
+    PWSTR path=NULL;
+    const HRESULT result=SHGetKnownFolderPath(&FOLDERID_Downloads,KF_FLAG_DONT_VERIFY,NULL,&path);
+    const bool copied=SUCCEEDED(result) && path && moon_utf8(path,folder,capacity);
+    CoTaskMemFree(path);
+    return copied;
+}
+
+int moon_shell_choose_download_folder(const char *initial,char *folder,size_t capacity) {
+    static bool choosing;
+    if (choosing || private_window) return -1;
+    IFileOpenDialog *picker=NULL;
+    HRESULT result=CoCreateInstance(&CLSID_FileOpenDialog,NULL,CLSCTX_INPROC_SERVER,
+        &IID_IFileOpenDialog,(void **)&picker);
+    if (FAILED(result)) return -1;
+    FILEOPENDIALOGOPTIONS options=0;
+    result=IFileOpenDialog_GetOptions(picker,&options);
+    if (SUCCEEDED(result)) result=IFileOpenDialog_SetOptions(picker,options |
+        FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_DONTADDTORECENT);
+    if (SUCCEEDED(result)) result=IFileOpenDialog_SetTitle(picker,L"选择下载文件夹");
+    if (SUCCEEDED(result) && initial && *initial) {
+        wchar_t path[4096];
+        IShellItem *start=NULL;
+        if (moon_utf16(initial,path,ARRAYSIZE(path)) &&
+            SUCCEEDED(SHCreateItemFromParsingName(path,NULL,&IID_IShellItem,(void **)&start))) {
+            IFileOpenDialog_SetFolder(picker,start);
+            IShellItem_Release(start);
+        }
+    }
+    if (SUCCEEDED(result)) {
+        choosing=true;
+        result=IFileOpenDialog_Show(picker,frame);
+        choosing=false;
+    }
+    IShellItem *selected=NULL;
+    if (SUCCEEDED(result)) result=IFileOpenDialog_GetResult(picker,&selected);
+    PWSTR path=NULL;
+    if (SUCCEEDED(result)) result=IShellItem_GetDisplayName(selected,SIGDN_FILESYSPATH,&path);
+    const DWORD attributes=path ? GetFileAttributesW(path) : INVALID_FILE_ATTRIBUTES;
+    const bool copied=SUCCEEDED(result) && attributes!=INVALID_FILE_ATTRIBUTES &&
+        (attributes&FILE_ATTRIBUTE_DIRECTORY) && moon_utf8(path,folder,capacity);
+    CoTaskMemFree(path);
+    if (selected) IShellItem_Release(selected);
+    IFileOpenDialog_Release(picker);
+    if (copied) return 1;
+    return result==HRESULT_FROM_WIN32(ERROR_CANCELLED)?0:-1;
+}
+
 static int pick_html_file(bool save,const wchar_t *title,wchar_t *file,DWORD capacity) {
     OPENFILENAMEW dialog={.lStructSize=sizeof(dialog), .hwndOwner=frame,
         .lpstrFilter=L"HTML 文件 (*.html;*.htm)\0*.html;*.htm\0\0",

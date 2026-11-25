@@ -43,6 +43,7 @@ pub const Permission = enum {
     @"siteData.records",
     @"window.appearance",
     @"siteSettings.zoom",
+    @"downloads.preferences",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -361,6 +362,10 @@ pub const Method = enum {
     @"downloads.remove",
     @"downloads.clearCompleted",
     @"downloads.reveal",
+    @"downloads.preferences.get",
+    @"downloads.preferences.setPrompt",
+    @"downloads.preferences.chooseFolder",
+    @"downloads.preferences.resetFolder",
     @"siteData.open",
     @"siteData.status",
     @"siteData.list",

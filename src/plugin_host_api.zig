@@ -74,6 +74,8 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"bookmarks.bar.toggle" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
+        .@"downloads.preferences.get", .@"downloads.preferences.setPrompt",
+        .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => .@"downloads.preferences",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.database", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"siteData.cookieDetails", .@"siteData.cookieValue" => .@"siteData.cookieDetails",
@@ -203,6 +205,8 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
+        .@"downloads.preferences.get", .@"downloads.preferences.setPrompt",
+        .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.cacheRemove", .@"siteData.database" => {},
         .@"siteData.databaseRecords" => {},
@@ -571,6 +575,39 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"downloads.clearCompleted" => clear: {
             const count = downloads.clearCompleted() catch |err| return sdk.failure(output,id,libraryReason(err));
             break :clear sdk.result(output,id,.{ .removed=count });
+        },
+        .@"downloads.preferences.get", .@"downloads.preferences.setPrompt",
+        .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => {
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (!context.from_page or !native.moon_download_preferences_allowed(owner.ptr,context.target_tab_id))
+                return sdk.failure(output,id,.PermissionDenied);
+            if (method!=.@"downloads.preferences.setPrompt" and !noParams(params))
+                return sdk.failure(output,id,.InvalidParams);
+            var buffer: [4096]u8 = undefined;
+            switch (method) {
+                .@"downloads.preferences.get" => {},
+                .@"downloads.preferences.setPrompt" => {
+                    const value = decode(struct { askWhereToSave: bool },allocator,params) catch
+                        return sdk.failure(output,id,.InvalidParams);
+                    downloads.configurePrompt(allocator,value.askWhereToSave) catch
+                        return sdk.failure(output,id,.InternalError);
+                },
+                .@"downloads.preferences.resetFolder" => downloads.configureFolder(allocator,null) catch
+                    return sdk.failure(output,id,.InternalError),
+                .@"downloads.preferences.chooseFolder" => {
+                    const previous = downloads.preferences(&buffer);
+                    const initial = if (previous.folder) |path| try allocator.dupeSentinel(u8,path,0) else null;
+                    var chosen: [4096:0]u8 = @splat(0);
+                    const outcome = native.moon_shell_choose_download_folder(if (initial) |path| path.ptr else null,&chosen,chosen.len);
+                    if (outcome==0 or !native.moon_download_preferences_allowed(owner.ptr,context.target_tab_id))
+                        return sdk.failure(output,id,.Cancelled);
+                    if (outcome!=1) return sdk.failure(output,id,.InternalError);
+                    downloads.configureFolder(allocator,std.mem.sliceTo(&chosen,0)) catch
+                        return sdk.failure(output,id,.InternalError);
+                },
+                else => unreachable,
+            }
+            return sdk.result(output,id,downloads.preferences(&buffer));
         },
         .@"siteData.open" => open: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

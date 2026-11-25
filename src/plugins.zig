@@ -24,6 +24,7 @@ const Grant = struct {
     id: []const u8, enabled: bool, tabs_read: bool,
     lua_scripts_manage: bool = false, page_inspect: bool = false, history_manage: bool = false, network_filter: bool = false,
     bookmarks_manage: bool = false, downloads_manage: bool = false, site_data_read: bool = false, page_reading: bool = false,
+    downloads_preferences: ?bool = null,
     tabs_closed_manage: bool = false,
     privacy_clear: bool = false,
     task_manager_manage: bool = false,
@@ -240,6 +241,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
                 plugin.grants = plugin.default_grants;
             }
         }
+        if (std.mem.eql(u8,id,"moon.downloads") and plugin.enabled and requests.contains(.@"downloads.preferences")) {
+            plugin.default_grants.insert(.@"downloads.preferences");
+            plugin.grants.insert(.@"downloads.preferences");
+        }
         if (std.mem.eql(u8,id,"moon.tab-tools") and plugin.enabled and requests.contains(.@"tabs.manage")) {
             plugin.default_grants.insert(.@"tabs.manage");
             plugin.grants.insert(.@"tabs.manage");
@@ -372,6 +377,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.network_filter and plugin.requests.contains(.@"network.filter")) plugin.grants.insert(.@"network.filter");
         if (grant.enabled and grant.bookmarks_manage and plugin.requests.contains(.@"bookmarks.manage")) plugin.grants.insert(.@"bookmarks.manage");
         if (grant.enabled and grant.downloads_manage and plugin.requests.contains(.@"downloads.manage")) plugin.grants.insert(.@"downloads.manage");
+        if (grant.enabled and (grant.downloads_preferences orelse plugin.default_grants.contains(.@"downloads.preferences")) and
+            plugin.requests.contains(.@"downloads.preferences")) plugin.grants.insert(.@"downloads.preferences");
         if (grant.enabled and grant.site_data_read and plugin.requests.contains(.@"siteData.read")) plugin.grants.insert(.@"siteData.read");
         if (grant.enabled and grant.page_source and plugin.requests.contains(.@"page.source")) plugin.grants.insert(.@"page.source");
         if (grant.enabled and grant.popups_manage and plugin.requests.contains(.@"popups.manage")) plugin.grants.insert(.@"popups.manage");
@@ -472,6 +479,7 @@ fn persist() bool {
         .network_filter = plugin.grants.contains(.@"network.filter"),
         .bookmarks_manage = plugin.grants.contains(.@"bookmarks.manage"),
         .downloads_manage = plugin.grants.contains(.@"downloads.manage"),
+        .downloads_preferences = plugin.grants.contains(.@"downloads.preferences"),
         .site_data_read = plugin.grants.contains(.@"siteData.read"),
         .page_reading = plugin.grants.contains(.@"page.reading"),
         .tabs_closed_manage = plugin.grants.contains(.@"tabs.closed.manage"),
@@ -548,6 +556,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",
                 .@"bookmarks.transfer" => "此插件可打开文件选择框，从所选 HTML 文件导入书签，或导出书签到你选的位置。",
                 .@"downloads.manage" => "此插件可读取本机下载记录、取消传输，并在文件夹中显示已保存的文件。",
+                .@"downloads.preferences" => "此插件可查看和更改是否询问保存位置，并通过系统对话框选择默认下载文件夹。",
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
                 .@"siteData.cookieDetails" => "此插件可在绑定到网页的站点数据面板查看 Cookie 属性及值，包含可能用于登录的 HttpOnly Cookie。",
