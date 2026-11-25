@@ -78,6 +78,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `history.remove` | `history.manage` | 传入 `{ id }` 移除单条记录，成功返回 `null`。 |
 | `history.removeMany` | `history.manage` | 传入 `{ ids }`，在一次操作中移除 1 至 100 个访问 ID。返回 `{ removed }`，计入实际移除的记录。 |
 | `history.clear` | `history.manage` | 清空当前配置文件的浏览历史，成功返回 `null`。 |
+| `history.clearRange` | `history.manage` | 传入 `{ from, until }`，以 Unix 毫秒表示时间范围，包含 `from` 且不包含 `until`。移除当前配置文件在该时段的所有访问记录，返回 `{ removed }`。 |
 | `network.filter.status` | `network.filter` | 返回 `{ preferred, active, exceptions }`，分别表示该插件是否被选中、规则是否已加载、已暂停的域名。 |
 | `network.filter.setSite` | `network.filter` | 当前规则插件可传入 `{ host, enabled }`。`false` 暂停该域名及其子域名，`true` 恢复，成功返回 `null`。 |
 | `network.capture.open` | `network.capture` | 从用户命令传入 `{}`。为触发命令的普通 HTTP(S) 标签开始记录，并打开插件的专属页面。返回是否已绑定并开始记录。 |

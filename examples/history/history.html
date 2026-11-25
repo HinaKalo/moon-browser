@@ -92,6 +92,7 @@
       <option value="week">最近 7 天</option>
     </select>
     <button id="clear" disabled>清空记录</button>
+    <button id="clear-range" type="button" hidden disabled>清除所选时段…</button>
   </div>
   <div class="site-heading" id="site-heading" hidden>
     <button type="button" id="site-back">返回网站列表</button>
@@ -122,6 +123,7 @@
   const status = document.getElementById('status');
   const more = document.getElementById('more');
   const clear = document.getElementById('clear');
+  const clearRange = document.getElementById('clear-range');
   const confirm = document.getElementById('confirm-clear');
   const confirmButton = document.getElementById('confirm');
   const cancelButton = document.getElementById('cancel');
@@ -286,6 +288,7 @@
     const showSites = bySite && !currentSite;
     const list = showSites ? siteResults : results;
     loading = true;
+    showClearAction();
     list.setAttribute('aria-busy', 'true');
     if (!appendMore) selected.clear();
     updateSelection();
@@ -315,9 +318,10 @@
       if (list.children.length) status.textContent = '';
       else status.textContent = text || currentSite || rangeInput.value !== 'all' ? '没有匹配的浏览记录。' : '浏览过的网页会显示在这里。';
       if (!appendMore && !text && !currentSite && rangeInput.value === 'all') clear.disabled = list.children.length === 0;
+      clearRange.disabled = false;
     } catch (error) {
       if (version !== loadVersion) return;
-      clear.disabled = true;
+      clear.disabled = clearRange.disabled = true;
       more.hidden = true;
       list.replaceChildren();
       if (showSites) siteOverview = null;
@@ -372,6 +376,10 @@
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => load(), 120);
   });
+  function showClearAction() {
+    clear.hidden = rangeInput.value !== 'all';
+    clearRange.hidden = !clear.hidden;
+  }
   rangeInput.onchange = () => {
     feedback.textContent = '';
     clearTimeout(searchTimer);
@@ -386,26 +394,37 @@
     updateSelection();
   };
   more.onclick = () => load(true);
-  function confirmRemoval(ids) {
-    removal = ids;
-    document.getElementById('confirm-title').textContent = ids ? `移除选中的 ${ids.length} 条记录？` : '清空浏览历史？';
-    document.getElementById('confirm-detail').textContent = ids ? '其他浏览记录会保留。' :
-      '此操作将移除当前浏览器配置文件中的所有浏览历史。';
-    confirmButton.textContent = ids ? '移除记录' : '清空记录';
+  function confirmRemoval({ids, period} = {}) {
+    removal = {ids, period};
+    const title = document.getElementById('confirm-title');
+    const details = document.getElementById('confirm-detail');
+    if (period) {
+      title.textContent = '清除所选时段的浏览历史？';
+      details.textContent = `将移除 ${dateFormat.format(period.from)} 至 ${dateFormat.format(period.until - 1)} 的全部访问记录。当前搜索和网站筛选不限制清除范围。`;
+    } else {
+      title.textContent = ids ? `移除选中的 ${ids.length} 条记录？` : '清空浏览历史？';
+      details.textContent = ids ? '其他浏览记录会保留。' : '此操作将移除当前浏览器配置文件中的所有浏览历史。';
+    }
+    confirmButton.textContent = ids ? '移除记录' : period ? '清除该时段' : '清空记录';
     confirm.showModal();
   }
-  clear.onclick = () => confirmRemoval(null);
-  removeSelected.onclick = () => { if (selected.size) confirmRemoval([...selected]); };
+  clear.onclick = () => confirmRemoval();
+  clearRange.onclick = () => {
+    const period = timeRange();
+    if (period.from !== undefined) confirmRemoval({period});
+  };
+  removeSelected.onclick = () => { if (selected.size) confirmRemoval({ids:[...selected]}); };
   cancelButton.onclick = () => confirm.close();
   confirm.oncancel = event => { if (confirmButton.disabled) event.preventDefault(); };
   confirmButton.onclick = async () => {
     confirmButton.disabled = cancelButton.disabled = true;
     feedback.textContent = '';
     try {
-      if (removal) {
-        const { removed } = await host('history.removeMany', { ids: removal });
-        siteOverview = null;
-        feedback.textContent = removed ? `已移除 ${removed} 条记录。` : '所选记录已不存在。';
+      const {ids, period} = removal;
+      if (ids || period) {
+        const { removed } = ids ? await host('history.removeMany', {ids}) : await host('history.clearRange', period);
+        siteOverview = sitesThrough = null;
+        feedback.textContent = removed ? `已移除 ${removed} 条记录。` : period ? '所选时段没有浏览记录。' : '所选记录已不存在。';
       } else {
         await host('history.clear');
         query.value = '';

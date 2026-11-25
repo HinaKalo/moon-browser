@@ -299,6 +299,7 @@ pub const HardReloadResult = enum(c_int) { started, unavailable, edited, resubmi
 pub const InspectorPlacement = enum(c_int) { docked, window, preferred };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
 pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
+pub const HistoryTimeRange = struct { from: u64, until: u64 };
 pub const HistorySearch = struct {
     query: []const u8 = "",
     before: ?u32 = null,
@@ -546,6 +547,7 @@ pub const Method = enum {
     @"history.remove",
     @"history.removeMany",
     @"history.clear",
+    @"history.clearRange",
     @"network.filter.status",
     @"network.filter.setSite",
     @"bookmarks.list",

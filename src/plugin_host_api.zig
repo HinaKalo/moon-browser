@@ -78,7 +78,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteSettings.notifications.get", .@"siteSettings.notifications.set" => .@"siteSettings.notifications",
         .@"siteSettings.sound.get", .@"siteSettings.sound.set", .@"siteSettings.sound.toggle" => .@"siteSettings.sound",
         .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => .@"siteSettings.zoom",
-        .@"history.list", .@"history.sites", .@"history.remove", .@"history.removeMany", .@"history.clear" => .@"history.manage",
+        .@"history.list", .@"history.sites", .@"history.remove", .@"history.removeMany", .@"history.clear", .@"history.clearRange" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.bar.toggle", .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany", .@"bookmarks.openMany" => .@"bookmarks.manage",
@@ -216,7 +216,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     const method = std.meta.stringToEnum(sdk.Method, method_name) orelse return sdk.failure(output, id, .MethodNotFound);
     if (context.from_page) switch (method) {
         .@"ui.settings.list", .@"ui.settings.open" => {},
-        .@"history.list", .@"history.sites", .@"history.remove", .@"history.removeMany", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
+        .@"history.list", .@"history.sites", .@"history.remove", .@"history.removeMany", .@"history.clear", .@"history.clearRange", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany", .@"bookmarks.openMany",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
@@ -661,6 +661,12 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const removed = history.removeMany(value.ids) catch |err|
                 return sdk.failure(output,id,if (err==error.InvalidParams) .InvalidParams else .InternalError);
             break :remove sdk.result(output,id,.{ .removed=removed });
+        },
+        .@"history.clearRange" => clear: {
+            const value = decode(sdk.HistoryTimeRange,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const removed = history.clearRange(value) catch |err|
+                return sdk.failure(output,id,if (err==error.InvalidParams) .InvalidParams else .InternalError);
+            break :clear sdk.result(output,id,.{ .removed=removed });
         },
         .@"history.clear" => clear: {
             history.clear() catch return sdk.failure(output,id,.InternalError);

@@ -202,6 +202,18 @@ pub fn removeMany(ids: []const u32) !u32 {
     return @intCast(sqlite.sqlite3_changes(db));
 }
 
+pub fn clearRange(range: sdk.HistoryTimeRange) !u32 {
+    if (range.from >= range.until) return error.InvalidParams;
+    const until = std.math.cast(i64,range.until) orelse return error.InvalidParams;
+    const db = try connection();
+    const statement = try prepare(db,"DELETE FROM visits WHERE visited_at>=?1 AND visited_at<?2");
+    defer _ = sqlite.sqlite3_finalize(statement);
+    if (sqlite.sqlite3_bind_int64(statement,1,@intCast(range.from)) != ok or
+        sqlite.sqlite3_bind_int64(statement,2,until) != ok or sqlite.sqlite3_step(statement) != done)
+        return error.IOError;
+    return @intCast(sqlite.sqlite3_changes(db));
+}
+
 pub fn clear() !void {
     const db = try connection();
     if (sqlite.sqlite3_exec(db,"DELETE FROM visits",null,null,null) != ok) return error.IOError;

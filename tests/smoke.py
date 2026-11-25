@@ -1008,6 +1008,7 @@ def run_win32(exe, base, root):
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
     history_page = (history.parent / "history.html").read_text(encoding="utf-8") if history.exists() else ""
     history_selection = 'id="remove-selected"' in history_page
+    history_clear_range = 'id="clear-range"' in history_page
     history_sites = 'id="by-site"' in history_page
     media_plugin = exe.parent / "plugins" / "media" / "MoonMedia.exe"
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
@@ -1508,6 +1509,40 @@ def run_win32(exe, base, root):
             siteRange.value = 'all';
             document.getElementById('by-date').click();
         ''' if history_sites else ''
+        clear_range_contract = r'''
+            {
+                const field=document.getElementById("query");
+                const filter=document.getElementById("range");
+                const action=document.getElementById("clear-range");
+                const modal=document.getElementById("confirm-clear");
+                const scope="history-range-";
+                const invalid=await call("history.clearRange",{from:12,until:12});
+                if(invalid.error?.code!==-32602||(await call("history.clearRange",{from:0})).error?.code!==-32602)
+                    throw Error("invalid time range accepted");
+                filter.value="yesterday";
+                field.value="history-range-token";
+                filter.dispatchEvent(new Event("change"));
+                const period=timeRange();
+                const count=async()=> (await call("history.list",{query:scope,...period})).result;
+                await waitFor(()=>!action.hidden&&!action.disabled&&document.getElementById("results").textContent.includes("history-range-token"));
+                if((await count()).next===null)throw Error("range fixture must exceed a page");
+                action.click();
+                if(!modal.open||!document.getElementById("confirm-detail").textContent.includes("搜索和网站"))
+                    throw Error("time range confirmation scope");
+                document.getElementById("cancel").click();
+                if(modal.open||(await count()).next===null)throw Error("cancelling changed history");
+                action.click();
+                document.getElementById("confirm").click();
+                await waitFor(()=>!modal.open&&document.getElementById("status").textContent==="没有匹配的浏览记录。");
+                const preserved=(await call("history.list",{query:scope})).result.visits;
+                if(filter.value!=="yesterday"||field.value!=="history-range-token"||(await count()).visits.length||
+                    preserved.length!==2||!preserved.some(v=>v.visitedAt===period.from-1)||
+                    !preserved.some(v=>v.visitedAt===period.until))
+                    throw Error("time range boundaries, entire scope, or filter preservation");
+                filter.value="all";
+                filter.dispatchEvent(new Event("change"));
+            }
+        ''' if history_clear_range else ''
         contract = (
             '<script>(async()=>{'
             'const api=window.webkit.messageHandlers;let id=0;'
@@ -1540,7 +1575,7 @@ def run_win32(exe, base, root):
             'if(excluded.result?.visits?.length!==0)throw new Error("cursor");'
             'if((await call("tabs.getActive")).error?.code!==-32601)throw new Error("scope");'
             + selection_contract +
-            sites_contract +
+            sites_contract + clear_range_contract +
             'const search=document.getElementById("query");'
             'search.value="HISTORY-contract";search.dispatchEvent(new Event("input"));'
             'const link=await waitFor(()=>document.querySelector("#results li a[href$=\'/page/history-contract\']"));'
@@ -3649,6 +3684,17 @@ def run_win32(exe, base, root):
                     db.executemany("INSERT INTO visits(title,url,visited_at) VALUES (?,?,?)", (
                         ("history-sites-"+label, url, int(visited.timestamp()*1000)) for label,url,visited in site_rows
                     ))
+            if history_clear_range:
+                today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                start = int((today - timedelta(days=1)).timestamp()*1000)
+                end = int(today.timestamp()*1000)
+                rows = [("token",start), ("before",start-1), ("after",end)]
+                rows += [(str(index),start+index*1000) for index in range(1,33)]
+                with closing(sqlite3.connect(database, timeout=0.5)) as db, db:
+                    db.executemany("INSERT INTO visits(title,url,visited_at) VALUES (?,?,?)",(
+                        ("history-range-"+label, f"https://{index%2}.range.test/history-range-{label}", timestamp)
+                        for index,(label,timestamp) in enumerate(rows)
+                    ))
             config = profile / f'extension-{sha256(b"moon.history-fixture").hexdigest()}.json'
             set_control(edit, "extension://moon.history-fixture/history.html")
             user.PostMessageW(edit, 0x0100, 0x0D, 1)
@@ -3661,6 +3707,8 @@ def run_win32(exe, base, root):
             if history_rows("SELECT count(*) FROM visits") != [(0,)]:
                 raise RuntimeError("Clearing history left visits in the database")
             print("history_system_plugin=ok history_page_contract=ok", flush=True)
+            if history_clear_range:
+                print("history_clear_range=ok cancel=ok exact_boundaries=ok offpage_deleted=ok other_times_kept=ok",flush=True)
             if history_selection:
                 print("history_selection=ok local_time_ranges=ok paging=ok cancel=ok exact_removal=ok invalid_batch_atomic=ok", flush=True)
             if history_sites:
