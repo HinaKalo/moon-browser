@@ -4,7 +4,9 @@
 
 从 0.1.0-preview.46 起，普通窗口可查看当前网页域名、路径和协议匹配的 Cookie，包括 HttpOnly Cookie。每条显示 Domain、Path、会话或到期时间，以及适用的 HttpOnly 和 Secure 标记。同名 Cookie 按各自的域名和路径显示。隐私窗口或内核数据库不可用时，面板使用网页可见的 Cookie。可用面板中的「打开开发者工具」查看内核提供的完整数据。
 
-当前面板每类最多预览 32 条。长条目会标记截断。Cookie 为只读，单条值最多预览 2048 UTF-8 字节。Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。
+当前面板每类最多预览 32 条。长条目会标记截断。Cookie 的单条值最多预览 2048 UTF-8 字节。Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。
+
+从 0.1.0-preview.73 起，在普通窗口的 Cookie 页可选「清除站点 Cookie…」。确认后，WebKit 清除同一注册域及其子域的 Cookie，包含 HttpOnly Cookie 和其他路径下的 Cookie。其他站点和 Local Storage、Session Storage、IndexedDB、Cache Storage 保留。清除登录 Cookie 后可能需要重新登录。
 
 从 0.1.0-preview.40 起，在 Local Storage 或 Session Storage 可选择「新增条目」和「清空此类」。新增同名条目会报告冲突。清空时，系统对话框会显示来源和类别。确认会移除该类别中的全部条目，包含筛选结果之外和预览上限之后的条目。
 
@@ -31,6 +33,8 @@
 Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限。`siteData.status` 的 `cookieDetails` 字段表示该窗口允许尝试读取。当前活动且已绑定的面板调用 `siteData.cookieDetails({ generation })`，返回 `{ available, entries, more, generation }`。条目包含 `id`、`name`、`domain`、`path`、`expiresAt`、`httpOnly`、`secure`、`length`、`shortened` 和 `metadataShortened`。`expiresAt` 是 Unix 毫秒时间戳，会话 Cookie 传 `null`。`available: false` 时可调用 `siteData.list({ group: "cookies" })` 显示网页可读的 Cookie。通过 `siteData.cookieValue({ id, generation })` 单独读取一个预览值。面板离开前台、网页导航、权限撤销或 Cookie 更新后，旧条目无法继续读取。
 
 面板调用 `siteData.catalog` 时传入 `{ group }`，其值为 `indexedDB` 或 `cacheStorage`。首次调用会按需读取，响应为 `pending` 时可再次查询同一代快照。目录条目包含 `name`、`shortened`，IndexedDB 还包含 `version`。对应目录为 `null` 表示当前网页无法读取该类别。
+
+`siteData.clearCookies({ generation })` 需要 `siteData.read` 和 `siteData.cookieClear`。就绪的普通窗口面板可通过 `siteData.status` 的 `cookieClear` 字段检查权限和内核支持。宿主从绑定网页确定站点，并在确认结束后重新验证面板和快照。返回 `started`、`cancelled` 或 `unavailable`。收到 `started` 后等待新快照，`mutation: "cleared"` 表示 WebKit 已完成请求。
 
 有 `siteData.read` 权限的活动绑定面板可用 `siteData.database({ index, generation })` 查看结构。下标按 IndexedDB 原始目录从 0 开始。首次请求可加 `refresh: true` 重新读取结构，查询进度时省略该字段。返回状态为 `pending`、`ready`、`changed` 或 `unavailable`。仓库包含 `name`、`keyPath`、`autoIncrement`、`indexes` 和截断标记。键路径为 `null` 或 `{ parts, compound, shortened }`。索引包含名称、键路径及 `unique`、`multiEntry` 标记。响应的 `more` 字段表示还有未展示的仓库。
 

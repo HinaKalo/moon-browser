@@ -260,6 +260,10 @@ void moon_engine_site_mute(MoonView *view, bool muted);
 bool moon_engine_site_muted(const MoonView *view);
 enum MoonSiteDataAction { MOON_SITE_REFRESH, MOON_SITE_INSPECTOR, MOON_SITE_CATALOG };
 bool moon_engine_remove_site_cache(MoonView *view, uint64_t generation, const char *change);
+bool moon_engine_clear_site_cookies_available(void);
+bool moon_engine_clear_site_cookies(const char *url, uint64_t request);
+int moon_site_clear_cookies(uint64_t panel, const char *owner, uint64_t generation);
+void moon_site_cookies_cleared(uint64_t request);
 bool moon_engine_inspect_database(MoonView *view, uint64_t request, const char *query);
 bool moon_site_data_database(uint64_t panel, const char *owner, unsigned index, uint64_t generation, bool refresh);
 bool moon_site_database_records(uint64_t panel, const char *owner, unsigned index, uint64_t generation,

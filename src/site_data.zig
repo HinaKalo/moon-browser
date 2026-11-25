@@ -34,7 +34,7 @@ const RecordsRequest = struct {
     deadline: ?u64 = null,
     result: ?std.json.Parsed(RecordsSnapshot) = null,
 };
-const AsyncMutation = union(enum) { cache, database: u64 };
+const AsyncMutation = union(enum) { cache, cookies, database: u64 };
 const allocator = std.heap.page_allocator;
 var captured: ?std.json.Parsed(Snapshot) = null;
 var cookies: ?cookie_store.Snapshot = null;
@@ -220,6 +220,28 @@ pub fn completeCache(view: *native.MoonView, tab: u64, token: u64, json: []const
     completeAsyncMutation(view,json);
 }
 
+pub fn canClearCookies(tab: u64, id: []const u8, generation: u64) bool {
+    return owns(tab,id) and received==.ready and generation==sequence;
+}
+
+pub fn clearCookies(url: [*:0]const u8) bool {
+    startRequest();
+    async_mutation = .cookies;
+    if (native.moon_engine_clear_site_cookies(url,sequence)) return true;
+    async_mutation = null;
+    failedRequest();
+    return false;
+}
+
+pub fn cookieClearSource(token: u64) ?u64 {
+    const pending = async_mutation orelse return null;
+    return if (std.meta.activeTag(pending)==.cookies and token==sequence) source else null;
+}
+
+pub fn completeCookieClear(view: *native.MoonView) void {
+    finishMutation(view,.cleared);
+}
+
 fn completeAsyncMutation(view: *native.MoonView, json: []const u8) void {
     async_mutation = null;
     const result = std.json.parseFromSlice(struct { mutation: sdk.SiteDataMutation },allocator,json,.{}) catch {
@@ -227,7 +249,12 @@ fn completeAsyncMutation(view: *native.MoonView, json: []const u8) void {
         return;
     };
     defer result.deinit();
-    mutation = result.value.mutation;
+    finishMutation(view,result.value.mutation);
+}
+
+fn finishMutation(view: *native.MoonView, result: sdk.SiteDataMutation) void {
+    async_mutation = null;
+    mutation = result;
     deadline = native.moon_clock()+5000;
     if (!native.moon_engine_inspect_site(view,sequence)) failedRequest();
 }
@@ -385,7 +412,7 @@ pub fn completeDatabase(view: *native.MoonView, tab: u64, token: u64, json: []co
             completeAsyncMutation(view,json);
             return;
         },
-        .cache => {},
+        .cache, .cookies => {},
     };
     if (tab!=source or received!=.ready or json.len>20*1024) return;
     if (record_page) |*preview| {

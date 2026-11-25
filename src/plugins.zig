@@ -36,6 +36,7 @@ const Grant = struct {
     search_manage: bool = false,
     site_data_write: ?bool = null,
     site_data_cookie_details: ?bool = null,
+    site_data_cookie_clear: ?bool = null,
     site_data_cache_write: ?bool = null,
     site_data_records: ?bool = null,
     site_data_database_write: ?bool = null,
@@ -271,6 +272,10 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             plugin.default_grants.insert(.@"siteData.cookieDetails");
             plugin.grants.insert(.@"siteData.cookieDetails");
         }
+        if (std.mem.eql(u8,id,"moon.site-data") and plugin.enabled and requests.contains(.@"siteData.cookieClear")) {
+            plugin.default_grants.insert(.@"siteData.cookieClear");
+            plugin.grants.insert(.@"siteData.cookieClear");
+        }
         if (std.mem.eql(u8,id,"moon.site-data") and plugin.enabled and requests.contains(.@"siteData.cacheWrite")) {
             plugin.default_grants.insert(.@"siteData.cacheWrite");
             plugin.grants.insert(.@"siteData.cacheWrite");
@@ -408,6 +413,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"siteData.write")) plugin.grants.insert(.@"siteData.write");
         if (grant.enabled and (grant.site_data_cookie_details orelse plugin.default_grants.contains(.@"siteData.cookieDetails")) and
             plugin.requests.contains(.@"siteData.cookieDetails")) plugin.grants.insert(.@"siteData.cookieDetails");
+        if (grant.enabled and (grant.site_data_cookie_clear orelse plugin.default_grants.contains(.@"siteData.cookieClear")) and
+            plugin.requests.contains(.@"siteData.cookieClear")) plugin.grants.insert(.@"siteData.cookieClear");
         if (grant.enabled and (grant.site_data_cache_write orelse plugin.default_grants.contains(.@"siteData.cacheWrite")) and
             plugin.requests.contains(.@"siteData.cacheWrite")) plugin.grants.insert(.@"siteData.cacheWrite");
         if (grant.enabled and (grant.site_data_records orelse plugin.default_grants.contains(.@"siteData.records")) and
@@ -507,6 +514,7 @@ fn persist() bool {
         .search_manage = plugin.grants.contains(.@"search.manage"),
         .site_data_write = plugin.grants.contains(.@"siteData.write"),
         .site_data_cookie_details = plugin.grants.contains(.@"siteData.cookieDetails"),
+        .site_data_cookie_clear = plugin.grants.contains(.@"siteData.cookieClear"),
         .site_data_cache_write = plugin.grants.contains(.@"siteData.cacheWrite"),
         .site_data_records = plugin.grants.contains(.@"siteData.records"),
         .site_data_database_write = plugin.grants.contains(.@"siteData.databaseWrite"),
@@ -577,6 +585,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
                 .@"siteData.cookieDetails" => "此插件可在绑定到网页的站点数据面板查看 Cookie 属性及值，包含可能用于登录的 HttpOnly Cookie。",
+                .@"siteData.cookieClear" => "此插件经确认可清除当前站点所属注册域及其子域的 Cookie，包含 HttpOnly Cookie。",
                 .@"window.appearance" => "此插件可以切换浏览器亮色或深色主题，并显示或隐藏当前窗口的标签侧栏。",
                 .@"siteData.cacheWrite" => "此插件经你确认后，可删除当前站点数据面板中指定的 Cache Storage 缓存。",
                 .@"siteData.records" => "此插件可在当前站点数据面板按需读取 IndexedDB 记录的键和值预览。",

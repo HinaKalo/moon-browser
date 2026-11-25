@@ -65,6 +65,7 @@
       <button data-group="cacheStorage" aria-pressed="false">Cache Storage</button>
     </div>
     <input class="search" id="search" type="search" aria-label="按名称筛选" placeholder="按名称筛选">
+    <button id="clear-cookies" hidden>清除站点 Cookie…</button>
     <div id="storage-actions" hidden>
       <button id="create">新增条目</button> <button id="clear-storage">清空此类</button>
     </div>
@@ -96,8 +97,9 @@
   const buttons = [...document.querySelectorAll('[data-group]')];
   const editor=el('editor'), feedback=el('feedback'), newValue=el('new-value'), commit=el('commit');
   const newKey=el('key'), storageActions=el('storage-actions'), clearStorage=el('clear-storage');
+  const clearCookies=el('clear-cookies');
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
-  let clearing=false, cookieGeneration, cacheWritable=false;
+  let clearing=false, cookieGeneration, cookieClear=false, cacheWritable=false;
   let databasePreview;
   let recordView, recordsAllowed=false, databaseWritable=false;
   let recordRestore;
@@ -117,7 +119,7 @@
     editor.hidden=true;
     if (refocus && previous?.button.isConnected) previous.button.focus();
   }
-  function clear() { rows.replaceChildren(); rows.hidden=true; page=catalog=databasePreview=recordView=undefined; storageActions.hidden=true; closeEditor(); }
+  function clear() { rows.replaceChildren(); rows.hidden=true; page=catalog=databasePreview=recordView=undefined; storageActions.hidden=clearCookies.hidden=true; closeEditor(); }
   function lengthHint() {
     const length=new TextEncoder().encode(newValue.value).length;
     el('bytes').textContent=length + ' / 1024 字节';
@@ -199,9 +201,13 @@
   };
   function renderStorageActions() {
     storageActions.hidden=!(writable && page?.available && (group==='local' || group==='session'));
+    clearCookies.hidden=group!=='cookies' || selected!=='ready' || !cookieClear || !page;
     el('create').disabled=clearing;
     clearStorage.disabled=clearing || !(page?.entries.length || page?.more);
   }
+  clearCookies.onclick=()=>{
+    if (!clearCookies.hidden && page) changeCatalog('siteData.clearCookies',{generation:page.generation},clearCookies);
+  };
   function render() {
     renderStorageActions();
     if (isCatalog()) { renderCatalog(); return; }
@@ -609,11 +615,12 @@
       cacheWritable=current.cacheWritable;
       recordsAllowed=current.recordPreview;
       databaseWritable=current.databaseWritable;
+      cookieClear=current.cookieClear===true;
       cookieGeneration=current.cookieDetails ? current.generation : undefined;
       el('origin').textContent=current.origin;
       const unavailable=['idle','stale','pending'].includes(current.state);
       el('refresh').disabled=el('inspector').disabled=unavailable;
-      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails + ':' + cacheWritable + ':' + recordsAllowed + ':' + databaseWritable;
+      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails + ':' + cookieClear + ':' + cacheWritable + ':' + recordsAllowed + ':' + databaseWritable;
       if (identity===latest) {
         if (selected==='ready' && isCatalog() && (!catalog || catalog.state==='pending')) await load();
         return;
@@ -626,7 +633,7 @@
       if (!recordsAllowed) recordView=undefined;
       closeEditor();
       if (current.state!=='ready' || current.generation!==dismissedMutation)
-        feedback.textContent=messages[current.mutation] || '';
+        feedback.textContent=current.mutation==='cleared' && group==='cookies' ? '已清除站点 Cookie。' : messages[current.mutation] || '';
       if (selected==='ready') await load();
       else { clear(); details.textContent=''; status.textContent=states[selected] || ''; }
     } catch {

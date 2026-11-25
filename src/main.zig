@@ -1975,6 +1975,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"siteData.cookieDetails" => "允许查看 Cookie 属性和 HttpOnly Cookie",
+        .@"siteData.cookieClear" => "允许经确认清除当前站点 Cookie",
         .@"window.appearance" => "允许设置浏览器主题和专注模式",
         .@"siteSettings.zoom" => "允许查看和修改网站缩放比例",
         .@"siteData.cacheWrite" => "允许经确认删除单个站点缓存",
@@ -2647,6 +2648,39 @@ export fn moon_site_data_cookie_url(panel: u64, id: [*c]const u8, url: [*c]u8, c
     const view = sitePanelView(panel,slice(id),.@"siteData.cookieDetails") orelse return false;
     native.moon_engine_committed_url(view,url,cap);
     return history.validURL(slice(url));
+}
+
+export fn moon_site_clear_cookies(panel: u64, id: [*c]const u8, generation: u64) c_int {
+    return @intFromEnum(clearSiteCookies(panel,slice(id),generation));
+}
+
+fn clearSiteCookies(panel: u64, owner: []const u8, generation: u64) sdk.SiteDataClearStart {
+    const permission: sdk.Permission = .@"siteData.cookieClear";
+    if (site_clear_confirming or !native.moon_engine_clear_site_cookies_available() or
+        !site_data.canClearCookies(panel,owner,generation) or sitePanelView(panel,owner,permission)==null)
+        return .unavailable;
+    const origin = site_data.status(panel,owner,false,false,false,false).origin;
+    var body: [4608]u8 = undefined;
+    const message = std.fmt.bufPrintSentinel(&body,
+        "清除 {s} 所属站点的 Cookie？\n将清除同一注册域及其子域的 Cookie，包含登录 Cookie。你可能需要重新登录。",
+        .{origin},0) catch return .unavailable;
+    site_clear_confirming = true;
+    defer site_clear_confirming = false;
+    if (!native.moon_shell_confirm("清除站点 Cookie？",message.ptr)) return .cancelled;
+    if (!site_data.canClearCookies(panel,owner,generation)) return .unavailable;
+    const view = sitePanelView(panel,owner,permission) orelse return .unavailable;
+    var url: [4096:0]u8 = @splat(0);
+    native.moon_engine_committed_url(view,&url,url.len);
+    if (!history.validURL(slice(&url))) return .unavailable;
+    return if (site_data.clearCookies(&url)) .started else .unavailable;
+}
+
+export fn moon_site_cookies_cleared(request: u64) void {
+    if (stopped) return;
+    const source = site_data.cookieClearSource(request) orelse return;
+    const index = tabIndex(source) orelse return;
+    const view = tabs[index].view orelse return;
+    site_data.completeCookieClear(view);
 }
 
 export fn moon_site_database_remove_record(panel: u64, id: [*c]const u8, index: c_uint, generation: u64,

@@ -536,6 +536,8 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", "moon-http-only=unrelated-value; HttpOnly; Path=/page/site")
             self.send_header("Set-Cookie", "moon-http-only=scoped-value; HttpOnly; Path=/page")
             self.send_header("Set-Cookie", "moon-persistent=persistent-value; Max-Age=3600; Path=/")
+        if path == "/page/site-cookie-other":
+            self.send_header("Set-Cookie", "moon-unrelated-site=untouched; HttpOnly; Path=/")
         if path == "/page/privacy-seed":
             self.send_header("Set-Cookie", "moon-privacy-visible=present; Path=/")
             self.send_header("Set-Cookie", "moon-privacy-http=present; HttpOnly; Path=/")
@@ -840,6 +842,7 @@ def run_win32(exe, base, root):
     download_preferences = "downloads.preferences" in download_permissions
     download_open = "downloads.open" in download_permissions
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
+    cookie_clear = site_data.exists() and '"siteData.cookieClear"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     has_site_menu = site_data.exists() and json.loads(site_data.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"][0].get("siteMenu")
     cache_remove = site_data.exists() and '"siteData.cacheWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     database_schema = site_data.exists() and "siteData.database" in site_data.with_name("site-data.html").read_text(encoding="utf-8")
@@ -899,7 +902,8 @@ def run_win32(exe, base, root):
             {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True,
              "downloads_open": download_open},
             {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True,
-             "site_data_write": True, "site_data_cookie_details": True, "site_data_cache_write": cache_remove,
+             "site_data_write": True, "site_data_cookie_details": True, "site_data_cookie_clear": cookie_clear,
+             "site_data_cache_write": cache_remove,
              "site_data_records": database_records, "site_data_database_write": database_write},
             {"id": "moon.source-fixture", "enabled": True, "tabs_read": False, "page_source": True},
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
@@ -939,6 +943,9 @@ def run_win32(exe, base, root):
             ('const recordsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"13",method:"siteData.databaseRecords",params:{index:0,generation:1,revision:1,store:0}}));'
              'if(JSON.parse(recordsDenied).error?.code!==-32001)return;' if database_records else '') +
+            ('const cookiesClearDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"cookie-clear-denied",method:"siteData.clearCookies",params:{generation:1}}));'
+             'if(JSON.parse(cookiesClearDenied).error?.code!==-32001)return;' if cookie_clear else '') +
             ('const clearDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"object-store-denied",method:"siteData.clearObjectStore",params:{index:0,generation:1,revision:1,store:0}}));'
              'if(JSON.parse(clearDenied).error?.code!==-32001)return;' if database_write else '') +
@@ -1503,6 +1510,32 @@ def run_win32(exe, base, root):
             'show.click();await wait(()=>!hidden.hidden&&hidden.textContent==="private-value","reveal HttpOnly value");'
             'show.click();if(!hidden.hidden||hidden.textContent)throw Error("HttpOnly value remains in DOM");'
         ) if "siteData.cookieDetails" in manifest["permissions"] else ""
+        cookie_clear_contract = r'''
+            if(!result.cookieClear) throw Error('Cookie cleanup permission or engine support missing');
+            const oldCookies={generation:result.generation};
+            if(await host('siteData.clearCookies',{generation:result.generation-1})!=='unavailable')
+                throw Error('old Cookie generation was accepted');
+            document.querySelector('[data-group=cookies]').click();
+            const clearAction=await wait(()=>!el('clear-cookies').hidden&&el('clear-cookies'),'Cookie clear action');
+            await emit({cookieStage:'cancel'});
+            clearAction.click();
+            await wait(()=>el('feedback').textContent==='已取消。','cancel Cookie cleanup');
+            if((await host('siteData.status')).generation!==oldCookies.generation ||
+                !(await host('siteData.cookieDetails',oldCookies)).entries.some(row=>row.name==='moon-http-only'))
+                throw Error('Cookie cleanup cancellation modified data');
+            await emit({cookieStage:'confirm'});
+            clearAction.click();
+            result=await wait(async()=>{const state=await host('siteData.status');
+                return state.state==='ready'&&state.generation>oldCookies.generation&&state;},'Cookie cleanup result');
+            if(result.mutation!=='cleared'||await host('siteData.clearCookies',oldCookies)!=='unavailable')
+                throw Error('Cookie cleanup result or invalidation '+JSON.stringify(result));
+            const remainingCookies=await host('siteData.cookieDetails',{generation:result.generation});
+            if(!remainingCookies.available || remainingCookies.entries.some(row=>row.name.startsWith('moon-')))
+                throw Error('Cookie cleanup left test cookies behind');
+            const remainingStorage=await host('siteData.list',{group:'local'});
+            if(!remainingStorage.entries.some(row=>row.name==='moon-local')) throw Error('Cookie action also cleared Local Storage');
+            await wait(()=>el('feedback').textContent==='已清除站点 Cookie。','Cookie cleanup feedback');
+        ''' if cookie_clear else ""
         cache_contract = (
             'if(!result.cacheWritable)throw Error("cache removal permission missing");'
             'const generation=result.generation, index=cached.entries.findIndex(e=>e.name==="moon-request-cache");'
@@ -1682,6 +1715,7 @@ def run_win32(exe, base, root):
             'row.querySelector("button").click();'
             '}const cookies=await host("siteData.list",{group:"cookies"});'
             'if(cookies.entries.some(row=>row.name==="moon-http-only"||row.name==="forged"))throw Error("cookie scope");'
+            + cookie_clear_contract +
             'if(document.querySelector("[data-group=indexedDB]")){'
             'const inventory=(group)=>wait(async()=>{const value=await host("siteData.catalog",{group});'
             'return value.state!=="pending"&&value;},"storage catalog "+group);'
@@ -3069,6 +3103,12 @@ def run_win32(exe, base, root):
             if download_open:
                 print("download_open=ok native_cancel=ok missing=ok active_rejected=ok arbitrary_path_rejected=ok grant_required=ok",flush=True)
         if site_data.exists():
+            if cookie_clear:
+                other=base.replace("127.0.0.1","localhost")+"/page/site-cookie-other"
+                set_control(edit,other)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(other,)),
+                         "Could not seed an unrelated site's Cookie")
             target = base + "/page/site-data-contract"
             set_control(edit,target)
             user.PostMessageW(edit,0x0100,0x0D,1)
@@ -3087,6 +3127,16 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address() == "extension://moon.site-data-fixture/site-data.html",
                      "The site data contract did not bind its page")
             config = profile / f'extension-{sha256(b"moon.site-data-fixture").hexdigest()}.json'
+            if cookie_clear:
+                for stage,button in (("cancel",7),("confirm",6)):
+                    def cookie_dialog():
+                        result = read_settings(config)
+                        if result.get("error"):
+                            raise RuntimeError(f"Site Cookie cleanup: {result['error']}")
+                        return owned_window("#32770","清除站点 Cookie？") if result.get("cookieStage")==stage else None
+                    question=wait_for(cookie_dialog,f"Cookie confirmation for {stage} did not open",15)
+                    user.PostMessageW(question,0x0111,button,0)
+                    wait_for(lambda: not user.IsWindow(question),"The Cookie confirmation did not close")
             if database_schema:
                 phase = wait_for(lambda: (value:=read_settings(config)) and (value.get("schemaStage") or value.get("error")) and value,
                                  "IndexedDB schema check did not request the deletion fixture",15)
@@ -3173,6 +3223,14 @@ def run_win32(exe, base, root):
                               "The site data contract reported no navigation result",15)
             if not result.get("passed"):
                 raise RuntimeError(f"Site data invalidation: {result}")
+            if cookie_clear:
+                cookie_db=profile/"Cookies.db"
+                with closing(sqlite3.connect(cookie_db.as_uri()+"?mode=ro",uri=True)) as db:
+                    rows=db.execute("SELECT name FROM Cookie WHERE name IN (?,?,?,?)",
+                                    ("moon-unrelated-site","moon-visible","moon-http-only","moon-persistent")).fetchall()
+                if rows!=[("moon-unrelated-site",)]:
+                    raise RuntimeError(f"Cookie cleanup missed a path or affected another site: {rows}")
+                print("site_cookie_clear=ok http_only=ok all_paths=ok unrelated_site_preserved=ok local_storage_preserved=ok cancel=ok stale_generation=ok grant_required=ok",flush=True)
             if has_catalog:
                 print("site_catalog=ok indexeddb_version=ok cache_limit=ok isolated_apis=ok catalog_search=ok stale_catalog=ok",flush=True)
             if database_schema:

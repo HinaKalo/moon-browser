@@ -1,11 +1,11 @@
 {
   "id": "moon.site-data",
   "name": "站点数据",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonSiteData.exe",
   "settingsPage": "site-data.html",
   "contributes": { "commands": [{ "id": "inspect", "label": "查看当前站点数据", "menu": "privacy", "siteMenu": true }] },
-  "permissions": ["siteData.read", "siteData.write", "siteData.cookieDetails", "siteData.cacheWrite", "siteData.records", "siteData.databaseWrite"]
+  "permissions": ["siteData.read", "siteData.write", "siteData.cookieDetails", "siteData.cookieClear", "siteData.cacheWrite", "siteData.records", "siteData.databaseWrite"]
 }

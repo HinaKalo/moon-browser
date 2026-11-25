@@ -46,6 +46,7 @@ pub const Permission = enum {
     @"siteSettings.zoom",
     @"downloads.preferences",
     @"downloads.open",
+    @"siteData.cookieClear",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -269,6 +270,7 @@ pub const SiteDataStatus = struct {
     state: SiteDataState, origin: []const u8, generation: u64,
     failure: ?SiteDataFailure = null, mutation: ?SiteDataMutation = null, writable: bool = false,
     cookieDetails: bool = false,
+    cookieClear: bool = false,
     cacheWritable: bool = false,
     recordPreview: bool = false,
     databaseWritable: bool = false,
@@ -430,6 +432,7 @@ pub const Method = enum {
     @"siteData.value",
     @"siteData.cookieDetails",
     @"siteData.cookieValue",
+    @"siteData.clearCookies",
     @"siteData.refresh",
     @"siteData.openInspector",
     @"siteData.update",

@@ -101,6 +101,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteData.value` | `siteData.read` | 面板传入 `{ group, id, generation }`，返回当前快照中的预览值。 |
 | `siteData.cookieDetails` | `siteData.read`、`siteData.cookieDetails` | 普通窗口的活动绑定面板传入 `{ generation }`，返回 Cookie 属性。列表不含值。 |
 | `siteData.cookieValue` | `siteData.read`、`siteData.cookieDetails` | 活动绑定面板传入 `{ id, generation }`，单独读取一个 Cookie 的预览值，支持 HttpOnly。 |
+| `siteData.clearCookies` | `siteData.read`、`siteData.cookieClear` | 普通窗口的活动绑定面板传入 `{ generation }`，请求用户确认后清除网页所属同一注册域及其子域的 Cookie。返回 `started`、`cancelled` 或 `unavailable`。 |
 | `siteData.refresh` / `siteData.openInspector` | `siteData.read` | 前台面板可刷新同一网页的快照，或为原网页打开已启用的 WebKit Inspector。返回布尔值。 |
 | `reading.find` | `page.reading` | 在用户命令中传入 `{}`，为触发命令的活动标签打开原生查找栏。返回布尔值。 |
 | `reading.zoom` | `page.reading` | 在用户命令中传入 `{ action }`。支持 `increase`、`decrease`、`reset`，返回新的整数百分比。活动页不可用时返回 `null`。 |

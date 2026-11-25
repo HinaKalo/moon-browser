@@ -110,6 +110,7 @@ static struct {
 static HMODULE module;
 static WKContextRef context;
 static WKWebsiteDataStoreRef store;
+static void (*delete_site_cookies)(WKWebsiteDataStoreRef, WKStringRef, bool, void *, void (*)(void *));
 static WKUserContentControllerRef normal_page_content;
 static DLL_DIRECTORY_COOKIE dll_directory;
 static wchar_t engine_dir[2048];
@@ -543,6 +544,7 @@ const char *moon_engine_init(void) {
     if (!wk.name) return "Packaged engine is missing " #name ".";
     WK_FUNCTIONS(RESOLVE)
 #undef RESOLVE
+    delete_site_cookies = (__typeof__(delete_site_cookies))GetProcAddress(module,"WKWebsiteDataStoreStatisticsDeleteCookiesForTesting");
     WKContextConfigurationRef ctx = wk.WKContextConfigurationCreate();
     if (!ctx) return "Could not create process configuration.";
     wk.WKContextConfigurationSetPrewarmsProcessesAutomatically(ctx,false);
@@ -1349,6 +1351,24 @@ static EraseTask erase_site, erase_cache;
 static void erase_completed(void *context) {
     EraseTask *task = context;
     if (task->remaining && --task->remaining == 0) moon_privacy_engine_done(task->category);
+}
+
+bool moon_engine_clear_site_cookies_available(void) {
+    return store && delete_site_cookies && !moon_shell_private();
+}
+
+static void site_cookies_cleared(void *request) {
+    moon_site_cookies_cleared((uint64_t)(uintptr_t)request);
+}
+
+bool moon_engine_clear_site_cookies(const char *url, uint64_t request) {
+    if (!moon_engine_clear_site_cookies_available() || erase_site.remaining) return false;
+    WKStringRef target = wk.WKStringCreateWithUTF8CString(url);
+    if (!target) return false;
+    // The pinned backend removes cookies through the profile's NetworkProcess.
+    delete_site_cookies(store,target,true,(void *)(uintptr_t)request,site_cookies_cleared);
+    release(target);
+    return true;
 }
 
 unsigned moon_engine_erase_data(unsigned requested) {
