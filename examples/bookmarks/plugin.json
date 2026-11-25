@@ -1,7 +1,7 @@
 {
   "id": "moon.bookmarks",
   "name": "书签",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonBookmarks.exe",

@@ -19,6 +19,9 @@
   #folder-path button[aria-current=location] { background:var(--soft); }
   #folder-status,#selection-count,#move-description,#move-error { color:var(--muted); }
   #folder-status:empty,#selection-count:empty,#move-error:empty { display:none; }
+  #remove-selected,#remove-confirm { color:#a52937; }
+  :root[data-moon-theme=dark] #remove-selected,:root[data-moon-theme=dark] #remove-confirm { color:#ffadb6; }
+  #remove-error:empty { display:none; }
   input,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
   input { min-width:0; flex:1; }
   button { cursor:pointer; }
@@ -54,7 +57,9 @@
   <div id="folders" aria-label="子文件夹" hidden></div>
   <p id="folder-status" role="status"></p>
   <div id="selection" hidden>
+    <button type="button" id="select-displayed">选择已显示书签</button>
     <button type="button" id="move-selected" disabled>移到文件夹…</button>
+    <button type="button" id="remove-selected" disabled>删除所选…</button>
     <span id="selection-count" role="status"></span>
   </div>
   <p id="status" role="status">正在读取书签…</p>
@@ -81,12 +86,23 @@
       <div class="actions"><button type="button" id="move-cancel">取消</button><button id="move-confirm">移动</button></div>
     </form>
   </dialog>
+  <dialog id="remove-dialog" aria-labelledby="remove-title" aria-describedby="remove-description">
+    <h2 id="remove-title">删除所选书签？</h2>
+    <p id="remove-description"></p>
+    <p id="remove-error" role="alert"></p>
+    <div class="actions">
+      <button type="button" id="remove-cancel" autofocus>取消</button>
+      <button type="button" id="remove-confirm">删除书签</button>
+    </div>
+  </dialog>
 </main>
 <script>
   const el = id => document.getElementById(id);
   const search = el('search'), results = el('results'), status = el('status'), more = el('more'), editor = el('editor');
   const folderPath = el('folder-path'), folders = el('folders'), folderStatus = el('folder-status');
   const selection = el('selection'), moveSelected = el('move-selected'), selectionCount = el('selection-count');
+  const selectDisplayed=el('select-displayed'), removeSelected=el('remove-selected'), removeDialog=el('remove-dialog');
+  const removeConfirm=el('remove-confirm'), removeCancel=el('remove-cancel');
   const moveDialog = el('move-dialog'), moveConfirm = el('move-confirm'), moveCancel = el('move-cancel');
   const destination = el('destination');
   const separator = ' / ', selectionLimit = 100;
@@ -154,10 +170,14 @@
       if (version === folderVersion) folderStatus.textContent = '无法读取文件夹。';
     }
   }
+  const bookmarkChoices=()=>[...results.querySelectorAll('input[data-bookmark]')];
+  const selectionFilled=choices=>selected.size===selectionLimit || choices.every(choice=>selected.has(Number(choice.dataset.bookmark)));
   function showSelection() {
-    const choices = results.querySelectorAll('input[data-bookmark]');
+    const choices=bookmarkChoices();
     selection.hidden = choices.length===0;
-    moveSelected.disabled = loading || selected.size===0;
+    moveSelected.disabled = removeSelected.disabled = loading || selected.size===0;
+    selectDisplayed.disabled=loading;
+    selectDisplayed.textContent=selectionFilled(choices) ? '清除选择' : '选择已显示书签';
     selectionCount.textContent = selected.size ? `已选择 ${selected.size} 条` +
       (selected.size===selectionLimit ? '，已达上限' : '') : '';
     for (const choice of choices) {
@@ -165,6 +185,15 @@
       choice.disabled = loading || (!choice.checked && selected.size===selectionLimit);
     }
   }
+  selectDisplayed.onclick=()=>{
+    const choices=bookmarkChoices();
+    if (selectionFilled(choices)) selected.clear();
+    else for (const choice of choices) {
+      if (selected.size===selectionLimit) break;
+      selected.add(Number(choice.dataset.bookmark));
+    }
+    showSelection();
+  };
   function edit(item) {
     editing = item;
     el('editor-title').textContent = item ? '编辑书签' : '新建书签';
@@ -298,6 +327,27 @@
       el('move-error').textContent = error.message==='INVALID_PARAMS' ? '请检查文件夹路径，最多 160 UTF-8 字节。' : '无法移动所选书签。';
     } finally { moveConfirm.disabled = moveCancel.disabled = false; }
   };
+  let removingIds=[];
+  removeSelected.onclick=()=>{
+    removingIds=[...selected];
+    el('remove-description').textContent=`将从书签库删除所选的 ${removingIds.length} 条书签。`;
+    el('remove-error').textContent='';
+    removeDialog.showModal();
+  };
+  removeCancel.onclick=()=>removeDialog.close();
+  removeDialog.oncancel=event=>{ if (removeConfirm.disabled) event.preventDefault(); };
+  removeConfirm.onclick=async ()=>{
+    removeConfirm.disabled=removeCancel.disabled=true;
+    try {
+      const {removed}=await host('bookmarks.removeMany',{ids:removingIds});
+      removeDialog.close();
+      await load();
+      status.textContent=removed ? `已删除 ${removed} 条书签。` : '所选书签已被移除。';
+      search.focus();
+    } catch {
+      el('remove-error').textContent='无法删除所选书签。';
+    } finally { removeConfirm.disabled=removeCancel.disabled=false; }
+  };
   el('fields').onsubmit = async event => {
     event.preventDefault();
     el('save').disabled = true;
@@ -313,7 +363,14 @@
         : error.message === 'INVALID_PARAMS' ? '请检查网址和文件夹路径。' : '无法保存书签。';
     } finally { el('save').disabled = false; }
   };
-  search.oninput = () => { selected.clear(); showSelection(); clearTimeout(timer); timer = setTimeout(load,120); };
+  search.oninput = () => {
+    revision++;
+    selected.clear();
+    loading = more.disabled = true;
+    showSelection();
+    clearTimeout(timer);
+    timer = setTimeout(load,120);
+  };
   more.onclick = () => load(true);
   document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });
   renderPath();

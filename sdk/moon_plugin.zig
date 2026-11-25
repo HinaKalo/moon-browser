@@ -400,6 +400,7 @@ pub const Method = enum {
     @"bookmarks.saveLink",
     @"bookmarks.update",
     @"bookmarks.remove",
+    @"bookmarks.removeMany",
     @"bookmarks.importHtml",
     @"bookmarks.exportHtml",
     @"downloads.list",

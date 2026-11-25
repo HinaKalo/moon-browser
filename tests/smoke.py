@@ -352,8 +352,8 @@ class Fixture(BaseHTTPRequestHandler):
                     '<p id="editor-proof">Original</p><script>'
                     'new MutationObserver(() => { '
                     'const text = document.querySelector("#editor-proof").textContent;'
-                    'if (text === "Lua editor reloaded") fetch("/editor-verified");'
-                    'else if (text === "Old Lua source") fetch("/editor-ready");'
+                    'if (text === "Lua editor reloaded") fetch("/editor-verified",{cache:"no-store"});'
+                    'else if (text === "Old Lua source") fetch("/editor-ready",{cache:"no-store"});'
                     '}).observe(document.querySelector("#editor-proof"), {childList:true});</script>'
                 )
             if name == "filter-allowed":
@@ -1254,6 +1254,40 @@ def run_win32(exe, base, root):
                 (await host('bookmarks.list', {folder:source + ' / 子目录'})).bookmarks.length !== 1)
                 throw Error('visible folder or descendant changed incorrectly');
             if ((await host('bookmarks.move', {ids,folder:destination})).moved !== 0) throw Error('same folder was counted as a move');
+            if (document.getElementById('remove-selected')) {
+                const bulk=document.getElementById('select-displayed'), remove=document.getElementById('remove-selected');
+                const confirmation=document.getElementById('remove-dialog');
+                await wait(()=>choices().length===24&&!bulk.disabled&&!document.getElementById('more').hidden);
+                bulk.click();
+                if (choices().some(choice=>!choice.checked)||remove.disabled) throw Error('select displayed bookmarks failed');
+                bulk.click();
+                if (choices().some(choice=>choice.checked)||!remove.disabled) throw Error('clear displayed selection failed');
+                choices()[0].click();
+                document.getElementById('more').click();
+                await wait(()=>choices().length===25&&!bulk.disabled);
+                choices().at(-1).click();
+                const chosen=choices().filter(choice=>choice.checked).map(choice=>Number(choice.dataset.bookmark));
+                if (chosen.length!==2) throw Error('delete selection was lost across pages');
+                for (const bad of [[],[chosen[0],0],Array(101).fill(chosen[0])]) {
+                    if (await host('bookmarks.removeMany',{ids:bad}).then(()=>true,error=>error.message!=='INVALID_PARAMS'))
+                        throw Error('invalid delete batch accepted');
+                }
+                remove.click();
+                if (!confirmation.open||document.activeElement!==document.getElementById('remove-cancel'))
+                    throw Error('missing cancel-focused delete confirmation');
+                document.getElementById('remove-cancel').click();
+                const kept=(await host('bookmarks.list',{folder:source}));
+                if (confirmation.open||kept.bookmarks.length!==24||kept.next===null) throw Error('cancel or invalid input deleted bookmarks');
+                remove.click();
+                document.getElementById('remove-confirm').click();
+                await wait(()=>!confirmation.open&&document.getElementById('status').textContent==='已删除 2 条书签。');
+                const remaining=(await host('bookmarks.list',{folder:source})).bookmarks;
+                if (remaining.length!==23||remaining.some(item=>chosen.includes(item.id))||
+                    (await host('bookmarks.list',{folder:destination})).bookmarks.length!==2||
+                    (await host('bookmarks.list',{folder:source+' / 子目录'})).bookmarks.length!==1)
+                    throw Error('delete touched the wrong bookmarks');
+                if ((await host('bookmarks.removeMany',{ids:chosen})).removed!==0) throw Error('repeat delete did not return zero');
+            }
             for (let before=null;;) {
                 const batch = await host('bookmarks.list', {query:'bookmark-batch',before});
                 for (const item of batch.bookmarks) await host('bookmarks.remove', {id:item.id});
@@ -2866,6 +2900,8 @@ def run_win32(exe, base, root):
             print("bookmark_system_plugin=ok native_bookmark_toast=ok bookmark_edit=ok",flush=True)
             if 'id="move-selected"' in bookmarks.with_name("bookmarks.html").read_text(encoding="utf-8"):
                 print("bookmark_folders=ok exact_root=ok nested_paths=ok move_across_pages=ok cancel=ok atomic_validation=ok",flush=True)
+            if 'id="remove-selected"' in bookmarks.with_name("bookmarks.html").read_text(encoding="utf-8"):
+                print("bookmark_bulk_remove=ok select_displayed=ok cross_page=ok cancel=ok exact_ids=ok invalid_batch=ok repeated_delete=ok",flush=True)
             if bookmark_transfer:
                 if "编辑后的书签" not in page_export.read_text(encoding="utf-8"):
                     raise RuntimeError("Exporting from the bookmark page did not write its bookmark")

@@ -93,18 +93,30 @@ pub fn update(input: sdk.BookmarkEdit) !void {
 }
 
 pub fn remove(id: u32) !void {
+    if (id==0 or try removeMany(&.{id})==0) return error.NotFound;
+}
+
+fn validSelection(ids: []const u32) bool {
+    return ids.len!=0 and ids.len<=sdk.bookmark_selection_limit and std.mem.indexOfScalar(u32,ids,0)==null;
+}
+
+pub fn removeMany(ids: []const u32) !u32 {
+    if (!validSelection(ids)) return error.InvalidParams;
     const db = try connection();
-    const statement = try db_api.prepare(db,"DELETE FROM bookmarks WHERE id=?1");
+    const sql = "DELETE FROM bookmarks WHERE id IN (" ++ (comptime db_api.parameterList(sdk.bookmark_selection_limit)) ++ ")";
+    const statement = try db_api.prepare(db,sql);
     defer _ = sqlite.sqlite3_finalize(statement);
-    if (sqlite.sqlite3_bind_int64(statement,1,id) != db_api.ok or sqlite.sqlite3_step(statement) != db_api.done)
-        return error.IOError;
-    if (sqlite.sqlite3_changes(db) == 0) return error.NotFound;
-    native.moon_shell_bookmarks_changed();
+    for (ids,1..) |id,index| {
+        if (sqlite.sqlite3_bind_int64(statement,@intCast(index),id)!=db_api.ok) return error.IOError;
+    }
+    if (sqlite.sqlite3_step(statement)!=db_api.done) return error.IOError;
+    const removed: u32 = @intCast(sqlite.sqlite3_changes(db));
+    if (removed!=0) native.moon_shell_bookmarks_changed();
+    return removed;
 }
 
 pub fn move(options: sdk.BookmarkMove) !u32 {
-    if (options.ids.len==0 or options.ids.len>sdk.bookmark_selection_limit or
-        !validLabel(options.folder,160) or std.mem.indexOfScalar(u32,options.ids,0)!=null) return error.InvalidParams;
+    if (!validSelection(options.ids) or !validLabel(options.folder,160)) return error.InvalidParams;
     const db = try connection();
     const sql = "UPDATE bookmarks SET folder=?1 WHERE folder<>?1 AND id IN (" ++ (comptime db_api.parameterList(sdk.bookmark_selection_limit)) ++ ")";
     const statement = try db_api.prepare(db,sql);

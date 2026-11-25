@@ -72,7 +72,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
-        .@"bookmarks.bar.toggle", .@"bookmarks.folders", .@"bookmarks.move" => .@"bookmarks.manage",
+        .@"bookmarks.bar.toggle", .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
         .@"downloads.open" => .@"downloads.open",
@@ -206,7 +206,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     if (context.from_page) switch (method) {
         .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
-        .@"bookmarks.folders", .@"bookmarks.move",
+        .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
         .@"downloads.open" => {},
@@ -585,6 +585,11 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const value = decode(sdk.BookmarkMove,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             const moved = bookmarks.move(value) catch |err| return sdk.failure(output,id,libraryReason(err));
             return sdk.result(output,id,.{ .moved=moved });
+        },
+        .@"bookmarks.removeMany" => {
+            const value = decode(struct { ids: []const u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const removed = bookmarks.removeMany(value.ids) catch |err| return sdk.failure(output,id,libraryReason(err));
+            return sdk.result(output,id,.{ .removed=removed });
         },
         .@"bookmarks.saveActive" => save: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
