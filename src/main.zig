@@ -2939,6 +2939,29 @@ fn clearSiteCookies(panel: u64, owner: []const u8, generation: u64) sdk.SiteData
     return if (site_data.clearCookies(&url)) .started else .unavailable;
 }
 
+export fn moon_site_remove_cookie(panel: u64, id: [*c]const u8, entry: u32, generation: u64, page_revision: u64) c_int {
+    return @intFromEnum(removeSiteCookie(panel,slice(id),.{ .id=entry,.generation=generation,.pageRevision=page_revision }));
+}
+
+fn removeSiteCookie(panel: u64, owner: []const u8, target: sdk.SiteCookieRemoval) sdk.SiteDataClearStart {
+    const permission: sdk.Permission = .@"siteData.cookieClear";
+    if (site_clear_confirming or native.moon_shell_private() or !plugins.hasGrant(owner,.@"siteData.cookieDetails") or
+        sitePanelView(panel,owner,permission)==null) return .unavailable;
+    const entry=site_data.removableCookie(panel,owner,target) orelse return .unavailable;
+    var buffer: [1024]u8 = undefined;
+    const message=std.fmt.bufPrintSentinel(&buffer,"删除 Cookie「{s}」？\n域 {s}\n路径 {s}",
+        .{entry.name,entry.domain,entry.path},0) catch return .unavailable;
+    site_clear_confirming=true;
+    defer site_clear_confirming=false;
+    if (!native.moon_shell_confirm("删除 Cookie？",message.ptr)) return .cancelled;
+    if (!plugins.hasGrant(owner,.@"siteData.cookieDetails")) return .unavailable;
+    const view=sitePanelView(panel,owner,permission) orelse return .unavailable;
+    var url: [4096:0]u8 = @splat(0);
+    native.moon_engine_committed_url(view,&url,url.len);
+    if (!history.validURL(slice(&url))) return .unavailable;
+    return if (site_data.removeCookie(view,panel,owner,target,slice(&url))) .started else .unavailable;
+}
+
 export fn moon_site_cookies_cleared(request: u64) void {
     if (stopped) return;
     const source = site_data.cookieClearSource(request) orelse return;

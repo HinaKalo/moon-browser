@@ -52,6 +52,7 @@ var storage_serial: u64 = 0;
 var cookies: ?cookie_store.Snapshot = null;
 var cookie_page: ?cookie_store.Snapshot = null;
 var cookie_serial: u64 = 0;
+var cookie_removal: ?struct { snapshot: cookie_store.Snapshot, id: u32 } = null;
 var catalog: ?std.json.Parsed(Catalog) = null;
 var catalog_deadline: ?u64 = null;
 var catalog_requested = false;
@@ -76,6 +77,7 @@ fn dropValues() void {
     if (captured) |result| result.deinit();
     captured = null;
     dropCookies();
+    dropCookieRemoval();
     dropStoragePage();
     if (catalog) |result| result.deinit();
     catalog = null;
@@ -104,6 +106,11 @@ pub fn dropCookies() void {
     if (cookies) |*snapshot| snapshot.deinit();
     cookies = null;
     dropCookiePage();
+}
+
+fn dropCookieRemoval() void {
+    if (cookie_removal) |*removal| removal.snapshot.deinit();
+    cookie_removal = null;
 }
 
 fn dropCookiePage() void {
@@ -180,7 +187,7 @@ fn failedRequest() void {
 }
 
 pub fn request(view: *native.MoonView) bool {
-    if (async_mutation != null) return false;
+    if (async_mutation != null or cookie_removal != null) return false;
     startRequest();
     if (!native.moon_engine_inspect_site(view,sequence)) failedRequest();
     return received == .pending;
@@ -290,6 +297,7 @@ const Mutation = struct {
     previous: ?[]const u8 = null,
     replacement: ?[]const u8 = null,
     clear: bool = false,
+    expire_cookie: ?[]const u8 = null,
 };
 
 fn mutate(view: *native.MoonView, change: Mutation) bool {
@@ -307,6 +315,7 @@ fn mutate(view: *native.MoonView, change: Mutation) bool {
 
 pub fn complete(tab: u64, token: u64, json: []const u8) void {
     if (tab != source or token != sequence or received != .pending) return;
+    defer dropCookieRemoval();
     received=.unavailable;
     failure=.invalidResult;
     if (json.len > 2 and json[0] == '"' and json[json.len-1] == '"') {
@@ -332,6 +341,9 @@ pub fn complete(tab: u64, token: u64, json: []const u8) void {
     received=.ready;
     failure=null;
     mutation=result.value.mutation orelse mutation;
+    if (cookie_removal) |*removal| {
+        if (mutation==.removed and !cookie_store.removed(&removal.snapshot,removal.id)) mutation=.failed;
+    }
     deadline=native.moon_clock()+5*60*1000;
 }
 
@@ -356,6 +368,7 @@ pub fn tick(now: u64) void {
     }
     if (received == .pending and now >= deadline) {
         async_mutation = null;
+        dropCookieRemoval();
         received=.unavailable;
         failure=.timedOut;
     } else if (received == .ready and now >= deadline) {
@@ -599,6 +612,28 @@ pub fn cookiePage(tab: u64, id: []const u8, target: sdk.SiteCookieQuery, url: []
     response.entries=snapshot.entries[0..snapshot.len];
     if (snapshot.more) response.next=target.offset+|@as(u32,@intCast(snapshot.len));
     return response;
+}
+
+pub fn removableCookie(tab: u64, owner_id: []const u8, target: sdk.SiteCookieRemoval) ?sdk.SiteCookieEntry {
+    if (!canClearCookies(tab,owner_id,target.generation) or target.pageRevision!=cookie_serial) return null;
+    const snapshot=if (cookie_page) |*page| page else return null;
+    if (target.id>=snapshot.len or !snapshot.entries[target.id].removable) return null;
+    return snapshot.entries[target.id];
+}
+
+pub fn removeCookie(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteCookieRemoval, url: []const u8) bool {
+    _=removableCookie(tab,id,target) orelse return false;
+    var buffer: [1024]u8 = undefined;
+    const header=cookie_store.deletionHeader(&cookie_page.?,url,target.id,&buffer) catch return false;
+    // Move ownership of the inspected page past the ordinary snapshot reset.
+    var snapshot=cookie_page.?;
+    cookie_page=null;
+    if (!mutate(view,.{ .group=.cookies,.expire_cookie=header })) {
+        snapshot.deinit();
+        return false;
+    }
+    cookie_removal=.{ .snapshot=snapshot,.id=target.id };
+    return true;
 }
 
 pub fn cookieValue(alloc: std.mem.Allocator, tab: u64, id: []const u8, target: sdk.SiteCookieItem, url: []const u8) ?[]const u8 {

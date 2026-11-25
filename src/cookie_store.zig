@@ -66,6 +66,22 @@ fn textPrefix(bytes: []const u8, cap: usize) ![]const u8 {
     return bytes[0..len];
 }
 
+fn canRemove(name: []const u8, domain: []const u8, path: []const u8) bool {
+    if (name.len==0 or domain.len==0 or path.len==0 or path[0]!='/' or path[path.len-1]==' ') return false;
+    for (name) |ch| {
+        if (!std.ascii.isAlphanumeric(ch) and std.mem.indexOfScalar(u8,"!#$%&'*+-.^_`|~",ch)==null) return false;
+    }
+    if (domain[0]=='.') {
+        for (domain[1..]) |ch| {
+            if (!std.ascii.isAlphanumeric(ch) and ch!='.' and ch!='-') return false;
+        }
+    }
+    for (path) |ch| {
+        if (ch<0x20 or ch>=0x7f or ch==';') return false;
+    }
+    return true;
+}
+
 pub fn list(url: []const u8, term: []const u8, offset: u32) !Snapshot {
     const conn = try open();
     defer db.close(conn);
@@ -110,11 +126,14 @@ pub fn list(url: []const u8, term: []const u8, offset: u32) !Snapshot {
         };
         const length: usize = @intCast(@max(0,colInt(query,8)));
         snapshot.keys[snapshot.len] = key;
+        const http_only=colInt(query,6)==1;
+        const metadata_shortened=display_size<name.len+domain.len+path.len;
         snapshot.entries[snapshot.len] = .{
             .id=@intCast(snapshot.len),.name=key.name[0..visible_name.len],.domain=key.domain[0..visible_domain.len],
-            .path=key.path[0..visible_path.len],.metadataShortened=display_size < name.len+domain.len+path.len,
+            .path=key.path[0..visible_path.len],.metadataShortened=metadata_shortened,
+            .removable=!http_only and !metadata_shortened and canRemove(name,domain,path),
             .expiresAt=if (colInt(query,5) == 1) null else colInt(query,4),
-            .httpOnly=colInt(query,6) == 1,.secure=colInt(query,7) == 1,.length=length,.shortened=length>value_limit,
+            .httpOnly=http_only,.secure=colInt(query,7) == 1,.length=length,.shortened=length>value_limit,
         };
         snapshot.len += 1;
     }
@@ -126,15 +145,48 @@ pub fn value(snapshot: *const Snapshot, allocator: std.mem.Allocator, url: []con
     const key = snapshot.keys[id];
     const conn = try open();
     defer db.close(conn);
-    const query = try db.prepare(conn,"SELECT value" ++ scope ++
-        " AND rowid=?5 AND name=?6 AND domain=?7 AND path=?8 AND CAST(lastupdated AS TEXT)=?9");
+    const query = try exactRow(conn,url,key);
     defer _ = db.sqlite.sqlite3_finalize(query);
+    if (db.sqlite.sqlite3_step(query) != db.row) return error.NotFound;
+    return allocator.dupe(u8,try textPrefix(try db.columnText(query,0),value_limit));
+}
+
+pub fn deletionHeader(snapshot: *const Snapshot, url: []const u8, id: u32, buffer: []u8) ![]const u8 {
+    if (id>=snapshot.len or !snapshot.entries[id].removable) return error.NotFound;
+    const key=snapshot.keys[id];
+    const conn=try open();
+    defer db.close(conn);
+    const query=try exactRow(conn,url,key);
+    defer _=db.sqlite.sqlite3_finalize(query);
+    if (db.sqlite.sqlite3_step(query)!=db.row or db.sqlite.sqlite3_column_int64(query,1)!=0) return error.NotFound;
+    const secure=snapshot.entries[id].secure;
+    return std.fmt.bufPrint(buffer,"{s}=; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path={s}{s}{s}{s}",.{
+        key.name,key.path,if (key.domain[0]=='.') "; Domain=" else "",
+        if (key.domain[0]=='.') key.domain else "",if (secure) "; Secure" else "",
+    });
+}
+
+pub fn removed(snapshot: *const Snapshot, id: u32) bool {
+    const key=snapshot.keys[id];
+    const conn=open() catch return false;
+    defer db.close(conn);
+    const query=db.prepare(conn,"SELECT 1 FROM Cookie WHERE name=?1 AND domain=?2 AND path=?3") catch return false;
+    defer _=db.sqlite.sqlite3_finalize(query);
+    db.bindText(query,1,key.name) catch return false;
+    db.bindText(query,2,key.domain) catch return false;
+    db.bindText(query,3,key.path) catch return false;
+    return db.sqlite.sqlite3_step(query)==db.done;
+}
+
+fn exactRow(conn: *db.Database, url: []const u8, key: Key) !*db.Statement {
+    const query=try db.prepare(conn,"SELECT value,httponly" ++ scope ++
+        " AND rowid=?5 AND name=?6 AND domain=?7 AND path=?8 AND CAST(lastupdated AS TEXT)=?9");
+    errdefer _=db.sqlite.sqlite3_finalize(query);
     try bindScope(query,url);
     try bindInt(query,5,key.rowid);
     try db.bindText(query,6,key.name);
     try db.bindText(query,7,key.domain);
     try db.bindText(query,8,key.path);
     try db.bindText(query,9,key.updated);
-    if (db.sqlite.sqlite3_step(query) != db.row) return error.NotFound;
-    return allocator.dupe(u8,try textPrefix(try db.columnText(query,0),value_limit));
+    return query;
 }

@@ -311,6 +311,7 @@ int moon_site_database_remove_record(uint64_t panel, const char *owner, unsigned
 void moon_site_cache_result(MoonView *view, uint64_t tab, uint64_t generation, const char *result);
 int moon_site_cache_remove(uint64_t panel, const char *owner, unsigned index, uint64_t generation);
 bool moon_site_data_action(uint64_t panel, const char *id, int action);
+int moon_site_remove_cookie(uint64_t panel, const char *owner, uint32_t entry, uint64_t generation, uint64_t page_revision);
 bool moon_site_data_cookie_url(uint64_t panel, const char *id, char *url, size_t cap);
 bool moon_site_data_update(uint64_t panel, const char *id, bool session, uint32_t entry, uint64_t generation,
     uint64_t page_revision, const char *value, size_t length);

@@ -35,7 +35,8 @@ function Native([string]$Program, [string[]]$Arguments) {
     if ($LASTEXITCODE -ne 0) { throw "$Program failed (exit $LASTEXITCODE)." }
 }
 function Moon([string]$Command) {
-    Native 'ssh' @('-o','BatchMode=yes','-o','ConnectTimeout=10','moon',
+    Native 'ssh' @('-n','-T','-o','BatchMode=yes','-o','ConnectTimeout=10',
+        '-o','ServerAliveInterval=15','-o','ServerAliveCountMax=3','moon',
         "set -eu; export RELHUB_DATA=/var/lib/release-publish; $Command")
 }
 function Check-Release {

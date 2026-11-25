@@ -613,7 +613,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
                 .@"siteData.cookieDetails" => "此插件可在绑定到网页的站点数据面板查看 Cookie 属性及值，包含可能用于登录的 HttpOnly Cookie。",
-                .@"siteData.cookieClear" => "此插件经确认可清除当前站点所属注册域及其子域的 Cookie，包含 HttpOnly Cookie。",
+                .@"siteData.cookieClear" => "此插件经确认可删除选中的普通 Cookie，或清除当前站点所属注册域及其子域的 Cookie。整站清除包含 HttpOnly Cookie。",
                 .@"ui.settings" => "此插件可列出并打开其他已启用插件登记的浏览器设置页面。",
                 .@"window.appearance" => "此插件可以切换浏览器亮色或深色主题，并显示或隐藏当前窗口的标签侧栏。",
                 .@"siteData.cacheWrite" => "此插件经你确认后，可删除当前站点数据面板中指定的 Cache Storage 缓存。",

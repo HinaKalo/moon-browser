@@ -107,7 +107,7 @@
   const clearCookies=el('clear-cookies');
   const storagePager=el('storage-pager'), storagePrev=el('storage-prev'), storageNext=el('storage-next');
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
-  let clearing=false, cookieGeneration, cookieClear=false, cacheWritable=false;
+  let clearing=false, cookieGeneration, cookieClear=false, cookieRemove=false, cacheWritable=false;
   let databasePreview;
   let recordView, recordsAllowed=false, databaseWritable=false;
   let recordRestore;
@@ -277,6 +277,14 @@
       const actions=document.createElement('div');
       actions.className='actions';
       actions.append(show);
+      if (page.cookieDetails && cookieRemove && item.removable) {
+        const remove=document.createElement('button');
+        const target={id:item.id,generation:page.generation,pageRevision:page.pageRevision};
+        remove.textContent='删除';
+        remove.setAttribute('aria-label','删除 '+item.name+'，路径 '+item.path);
+        remove.onclick=() => changeCatalog('siteData.removeCookie',target,remove);
+        actions.append(remove);
+      }
       if (writable && group!=='cookies' && !item.shortened) {
         for (const remove of [false,true]) {
           const button=document.createElement('button');
@@ -705,7 +713,8 @@
       recordsAllowed=current.recordPreview;
       databaseWritable=current.databaseWritable;
       cookieClear=current.cookieClear===true;
-      if (group==='cookies' && current.generation!==storageGeneration) {
+      cookieRemove=current.cookieRemove===true;
+      if (group==='cookies' && current.generation!==storageGeneration && current.mutation!=='removed') {
         storageOffset=0;
         cookieTrail.length=0;
       }
@@ -714,7 +723,7 @@
       el('origin').textContent=current.origin;
       const unavailable=['idle','stale','pending'].includes(current.state);
       el('refresh').disabled=el('inspector').disabled=unavailable;
-      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails + ':' + cookieClear + ':' + cacheWritable + ':' + recordsAllowed + ':' + databaseWritable;
+      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails + ':' + cookieClear + ':' + cookieRemove + ':' + cacheWritable + ':' + recordsAllowed + ':' + databaseWritable;
       if (identity===latest) {
         if (selected==='ready' && ((isCatalog() && (!catalog || catalog.state==='pending')) ||
           (isPagedGroup() && restoreStorage))) {

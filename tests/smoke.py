@@ -63,6 +63,8 @@ class Fixture(BaseHTTPRequestHandler):
     slow_download_release = Event()
     change_site_data_source = Event()
     change_site_data_entry = Event()
+    overwrite_site_cookie = Event()
+    site_cookie_overwritten = Event()
     site_data_entry_changed = Event()
     site_data_catalog_ready = Event()
     drop_site_schema = Event()
@@ -194,8 +196,15 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"ok", "text/plain"
         elif path == "/site-data-navigation":
             action = b"change" if self.change_site_data_source.is_set() else (
-                b"overwrite" if self.change_site_data_entry.is_set() else b"drop-schema" if self.drop_site_schema.is_set() else b"keep")
+                b"overwrite" if self.change_site_data_entry.is_set() else
+                b"overwrite-cookie" if self.overwrite_site_cookie.is_set() else
+                b"drop-schema" if self.drop_site_schema.is_set() else b"keep")
             data, content_type = action, "text/plain"
+        elif path == "/page/site-cookie-overwritten":
+            actual_cookies = self.headers.get("Cookie", "")
+            if "moon-delete-one=site-replacement-cookie" in actual_cookies and "moon-delete-one=root-cookie-sibling" in actual_cookies:
+                self.site_cookie_overwritten.set()
+            data, content_type = b"ok", "text/plain"
         elif path == "/site-schema-dropped":
             self.site_schema_dropped.set()
             data, content_type = b"ok", "text/plain"
@@ -476,8 +485,12 @@ class Fixture(BaseHTTPRequestHandler):
                     'fetch("/site-data-catalog-ready");})().catch(()=>{});'
                     'Object.defineProperty(document,"cookie",{get:()=>"forged=other"});'
                     'Storage.prototype.getItem=()=>"forged";'
-                    'let changed=false,schemaDropped=false;setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
+                    'let changed=false,schemaDropped=false,cookieOverwritten=false;setInterval(async()=>{const r=await fetch("/site-data-navigation",{cache:"no-store"});'
                     'const action=await r.text();if(action==="change")location.replace("/page/site-data-changed");'
+                    'if(action==="overwrite-cookie"&&!cookieOverwritten){cookieOverwritten=true;'
+                    'const access=Object.getOwnPropertyDescriptor(Document.prototype,"cookie");'
+                    'access.set.call(document,"moon-delete-one=site-replacement-cookie; Path=/page");'
+                    'access.get.call(document);fetch("/page/site-cookie-overwritten",{cache:"no-store"});}'
                     'if(action==="drop-schema"&&!schemaDropped){schemaDropped=true;'
                     'indexedDB.deleteDatabase("moon-temporary-schema").onsuccess=()=>fetch("/site-schema-dropped");}'
                     'if(action==="overwrite"&&!changed){changed=true;localStorage.setItem("moon-local","page-change");'
@@ -608,6 +621,8 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_header("Cache-Control","no-store")
         if path == "/page/site-data-contract":
             self.send_header("Set-Cookie", "moon-visible=cookie-value; Path=/")
+            self.send_header("Set-Cookie", "moon-delete-one=root-cookie-sibling; Path=/")
+            self.send_header("Set-Cookie", "moon-delete-one=only-remove-this; Path=/page")
             self.send_header("Set-Cookie", "moon-http-only=private-value; HttpOnly; Path=/")
             self.send_header("Set-Cookie", "moon-http-only=unrelated-value; HttpOnly; Path=/page/site")
             self.send_header("Set-Cookie", "moon-http-only=scoped-value; HttpOnly; Path=/page")
@@ -1796,6 +1811,51 @@ def run_win32(exe, base, root):
             'await wait(()=>page?.next&&page.entries.every(row=>row.path==="/page"),"path matches");'
             'filterCookie("");await wait(()=>findCookie("moon-visible"),"Cookie search reset");'
         ) if "siteData.cookiePage" in page else ""
+        cookie_removal_contract = r'''
+            if(!result.cookieRemove)throw Error('per-cookie removal permission missing');
+            const restricted=await host('siteData.cookiePage',{generation:result.generation,query:'moon-http-only'});
+            const protectedRow=restricted.entries[0];
+            if(protectedRow.removable||await host('siteData.removeCookie',{
+                id:protectedRow.id,generation:result.generation,pageRevision:restricted.pageRevision
+            })!=='unavailable')throw Error('HttpOnly allowed via DOM deletion');
+            filterCookie('moon-delete-one');
+            await wait(()=>page?.entries.length===2&&findCookie('moon-delete-one'),'two paths for cookie name');
+            const original=page.entries.find(item=>item.path==='/page');
+            let selectedCookie={id:original.id,generation:result.generation,pageRevision:page.pageRevision};
+            if(!original.removable||await host('siteData.removeCookie',{...selectedCookie,pageRevision:0})!=='unavailable')
+                throw Error('unbound Cookie removal');
+            const removeOne=()=>el('results').querySelector('[aria-label="删除 moon-delete-one，路径 /page"]:not(:disabled)');
+            await emit({cookieRemoveStage:'cancel'});
+            (await wait(removeOne,'single Cookie remove action')).click();
+            await wait(()=>el('feedback').textContent==='已取消。','cancel single Cookie');
+            if(await host('siteData.cookieValue',selectedCookie)!=='only-remove-this'||
+                (await host('siteData.status')).generation!==selectedCookie.generation)
+                throw Error('cancelled Cookie removal changed data');
+            await emit({cookieRemoveStage:'stale'});
+            (await wait(removeOne,'single Cookie action after cancel')).click();
+            await wait(()=>el('feedback').textContent==='条目已变化，请刷新。','changed Cookie was rejected');
+            if((await host('siteData.status')).generation!==selectedCookie.generation)throw Error('stale Cookie mutated');
+            filterCookie('moon-delete-one');
+            await wait(()=>page?.pageRevision&&page.pageRevision!==selectedCookie.pageRevision&&page.entries.length===2,'refresh overwritten Cookie');
+            selectedCookie={id:page.entries.find(item=>item.path==='/page').id,generation:page.generation,pageRevision:page.pageRevision};
+            if(await host('siteData.cookieValue',selectedCookie)!=='site-replacement-cookie')throw Error('overwritten Cookie was removed');
+            await emit({cookieRemoveStage:'confirm'});
+            (await wait(removeOne,'single Cookie action after refresh')).click();
+            result=await wait(async()=>{
+                const current=await host('siteData.status');
+                if(current.state==='unavailable')throw Error('Cookie mutation unavailable '+JSON.stringify(current));
+                return current.state==='ready'&&current.generation>selectedCookie.generation&&current;
+            },'confirmed Cookie removal');
+            if(result.mutation!=='removed')throw Error('Cookie deletion result '+JSON.stringify(result));
+            await wait(()=>page?.generation===result.generation&&page.entries.length===1,'filtered cookie view after delete');
+            const retained=page.entries[0];
+            if(retained.path!=='/'||await host('siteData.cookieValue',{
+                id:retained.id,generation:page.generation,pageRevision:page.pageRevision
+            })!=='root-cookie-sibling')throw Error('removal affected the other path');
+            if(await host('siteData.removeCookie',selectedCookie)!=='unavailable')throw Error('old Cookie removal accepted');
+            filterCookie('');
+            await wait(()=>findCookie('moon-visible'),'restore Cookie list');
+        ''' if "siteData.removeCookie" in page else ""
         cookie_clear_contract = r'''
             if(!result.cookieClear) throw Error('Cookie cleanup permission or engine support missing');
             const oldCookies={generation:result.generation};
@@ -2019,7 +2079,7 @@ def run_win32(exe, base, root):
             'if(data.state==="unavailable"||data.state==="stale")throw Error("snapshot "+data.state+": "+data.failure);'
             'return data.state==="ready"&&data;},"snapshot ready");'
             f'if(result.origin!=="{base}")throw Error("origin");'
-            + cookie_contract + cookie_paging_contract +
+            + cookie_contract + cookie_paging_contract + cookie_removal_contract +
             'for(const [section,key,secret] of [["cookies","moon-visible","cookie-value"],'
             '["local","moon-local","local-value"],["session","moon-session","session-value"]]){'
             'document.querySelector("[data-group="+section+"]").click();'
@@ -3604,6 +3664,22 @@ def run_win32(exe, base, root):
             wait_for(lambda: read_address() == "extension://moon.site-data-fixture/site-data.html",
                      "The site data contract did not bind its page")
             config = profile / f'extension-{sha256(b"moon.site-data-fixture").hexdigest()}.json'
+            cookie_remove = "siteData.removeCookie" in (site_data.parent / "site-data.html").read_text(encoding="utf-8")
+            if cookie_remove:
+                for stage,button in (("cancel",7),("stale",6),("confirm",6)):
+                    def cookie_remove_dialog():
+                        result = read_settings(config)
+                        if result.get("error"):
+                            raise RuntimeError(f"Single Cookie removal: {result['error']}")
+                        return owned_window("#32770","删除 Cookie？") if result.get("cookieRemoveStage")==stage else None
+                    question=wait_for(cookie_remove_dialog,f"Single Cookie confirmation for {stage} did not open",15)
+                    if stage=="stale":
+                        Fixture.overwrite_site_cookie.set()
+                        if not Fixture.site_cookie_overwritten.wait(8):
+                            raise RuntimeError("Could not replace the selected Cookie during confirmation")
+                        Fixture.overwrite_site_cookie.clear()
+                    user.PostMessageW(question,0x0111,button,0)
+                    wait_for(lambda: not user.IsWindow(question),"The single Cookie confirmation did not close")
             if cookie_clear:
                 for stage,button in (("cancel",7),("confirm",6)):
                     def cookie_dialog():
@@ -3724,6 +3800,8 @@ def run_win32(exe, base, root):
                 print("site_cookie_details=ok httponly_reveal=ok expiry=ok cookie_path_scope=ok stale_cookie_value=ok",flush=True)
                 if "siteData.cookiePage" in (site_data.parent / "site-data.html").read_text(encoding="utf-8"):
                     print("site_cookie_paging=ok full_name_domain_path_search=ok paged_httponly=ok stale_page_rejected=ok path_isolation=ok",flush=True)
+            if cookie_remove:
+                print("site_cookie_remove=ok exact_path=ok same_name_preserved=ok native_cancel=ok stale_cookie_preserved=ok stale_page_rejected=ok httponly_protected=ok",flush=True)
             print("site_data_system_plugin=ok isolated_storage=ok storage_edit=ok storage_remove=ok stale_write_rejected=ok conflict_preserved=ok site_data_navigation_cleanup=ok",flush=True)
             if bulk_storage:
                 print("site_storage_create=ok duplicate_conflict=ok full_group_clear=ok other_group_kept=ok cancel=ok stale_confirmation=ok",flush=True)

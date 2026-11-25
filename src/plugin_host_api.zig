@@ -85,7 +85,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.storagePage", .@"siteData.catalog", .@"siteData.database", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.cookiePage" => .@"siteData.cookieDetails",
-        .@"siteData.clearCookies" => .@"siteData.cookieClear",
+        .@"siteData.clearCookies", .@"siteData.removeCookie" => .@"siteData.cookieClear",
         .@"siteData.update", .@"siteData.create", .@"siteData.clear" => .@"siteData.write",
         .@"siteData.cacheRemove" => .@"siteData.cacheWrite",
         .@"siteData.databaseRecords" => .@"siteData.records",
@@ -220,7 +220,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.clearCookies",
-        .@"siteData.cacheRemove", .@"siteData.database", .@"siteData.storagePage", .@"siteData.cookiePage" => {},
+        .@"siteData.cacheRemove", .@"siteData.database", .@"siteData.storagePage", .@"siteData.cookiePage", .@"siteData.removeCookie" => {},
         .@"siteData.databaseRecords", .@"siteData.clearObjectStore", .@"siteData.removeRecord" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
@@ -811,6 +811,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                 !native.moon_shell_private() and context.grants.contains(.@"siteData.cookieDetails"),
                 context.grants.contains(.@"siteData.cacheWrite"),context.grants.contains(.@"siteData.records"));
             state.databaseWritable = state.state!=.idle and context.grants.contains(.@"siteData.databaseWrite");
+            state.cookieRemove = state.state==.ready and state.cookieDetails and context.grants.contains(.@"siteData.cookieClear");
             state.cookieClear = state.state==.ready and context.grants.contains(.@"siteData.cookieClear") and
                 native.moon_engine_clear_site_cookies_available();
             return sdk.result(output,id,state);
@@ -873,6 +874,14 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             _ = native.moon_site_data_action(context.target_tab_id,owner.ptr,native.MOON_SITE_CATALOG);
             const result = site_data.catalogStatus(context.target_tab_id,context.plugin_id,options.group) orelse return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,result);
+        },
+        .@"siteData.removeCookie" => {
+            if (!context.from_page or !context.grants.contains(.@"siteData.read") or
+                !context.grants.contains(.@"siteData.cookieDetails")) return sdk.failure(output,id,.PermissionDenied);
+            const target = decode(sdk.SiteCookieRemoval,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const outcome = native.moon_site_remove_cookie(context.target_tab_id,owner.ptr,target.id,target.generation,target.pageRevision);
+            return sdk.result(output,id,std.enums.fromInt(sdk.SiteDataClearStart,outcome) orelse .unavailable);
         },
         .@"siteData.clearCookies" => {
             if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);

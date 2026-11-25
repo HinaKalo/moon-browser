@@ -326,6 +326,7 @@ pub const SiteDataStatus = struct {
     state: SiteDataState, origin: []const u8, generation: u64,
     failure: ?SiteDataFailure = null, mutation: ?SiteDataMutation = null, writable: bool = false,
     cookieDetails: bool = false,
+    cookieRemove: bool = false,
     cookieClear: bool = false,
     cacheWritable: bool = false,
     recordPreview: bool = false,
@@ -363,6 +364,7 @@ pub const SiteCookieEntry = struct {
     length: usize,
     shortened: bool,
     metadataShortened: bool,
+    removable: bool = false,
 };
 pub const SiteCookiePage = struct { available: bool, entries: []const SiteCookieEntry, more: bool, generation: u64 };
 pub const SiteCookieQuery = struct { generation: u64, query: []const u8 = "", offset: u32 = 0 };
@@ -375,6 +377,7 @@ pub const SiteCookieSearchPage = struct {
     next: ?u32 = null,
 };
 pub const SiteCookieItem = struct { id: u32, generation: u64, pageRevision: ?u64 = null };
+pub const SiteCookieRemoval = struct { id: u32, generation: u64, pageRevision: u64 };
 pub const SiteDatabase = struct { name: []const u8, version: ?u64, shortened: bool };
 pub const SiteDatabaseQuery = struct { index: u32, generation: u64, refresh: bool = false };
 pub const SiteDatabaseDetailsState = enum { pending, ready, changed, unavailable };
@@ -527,6 +530,7 @@ pub const Method = enum {
     @"siteData.cookieValue",
     @"siteData.cookiePage",
     @"siteData.clearCookies",
+    @"siteData.removeCookie",
     @"siteData.refresh",
     @"siteData.openInspector",
     @"siteData.update",
