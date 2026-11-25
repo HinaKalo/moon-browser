@@ -60,6 +60,8 @@ class Fixture(BaseHTTPRequestHandler):
     seen_filter_proof = Event()
     highlight_selected = Event()
     highlight_reached = Event()
+    highlight_requests = 0
+    highlight_position = ""
     seen_allowed_request = Event()
     filter_control_reports = {}
     filter_probe = False
@@ -203,7 +205,11 @@ class Fixture(BaseHTTPRequestHandler):
         elif path == "/highlight-reached":
             self.highlight_reached.set()
             data, content_type = b"ok", "text/plain"
+        elif path == "/highlight-position":
+            type(self).highlight_position=urlsplit(self.path).query
+            data, content_type = b"ok", "text/plain"
         elif path == "/page/highlight-link":
+            type(self).highlight_requests+=1
             data = ('''<!doctype html><meta charset="utf-8"><title>Moon highlight fixture</title>
 <style>body{margin:0;font:20px sans-serif} #choose{position:fixed;top:0;left:0;padding:12px} #quote{margin:0;padding:8px} .spacer{height:1900px}</style>
 <button id="choose">Select text</button><div class="spacer"></div><p id="quote">''' + HIGHLIGHT_QUOTE + '''</p>
@@ -217,9 +223,23 @@ choose.onclick=()=>{
   getSelection().selectAllChildren(quote);
   fetch('/highlight-selected',{cache:'no-store'});
 };
-addEventListener('scroll',()=>{
-  if(!manual && scrollY>=1000 && quote.getBoundingClientRect().top<innerHeight && quote.getBoundingClientRect().bottom>0)
+let reported=false;
+const reportHighlight=()=>{
+  if(manual || reported)return;
+  const {top,bottom}=quote.getBoundingClientRect();
+  if(scrollY>=1000 && top<innerHeight && bottom>0){
+    reported=true;
     fetch('/highlight-reached',{cache:'no-store'});
+  }
+};
+addEventListener('scroll',reportHighlight);
+addEventListener('load',()=>{
+  reportHighlight();
+  setTimeout(()=>{
+    reportHighlight();
+    if(!manual && !reported)
+      fetch('/highlight-position?'+new URLSearchParams({y:scrollY, top:quote.getBoundingClientRect().top, height:innerHeight}),{cache:'no-store'});
+  },700);
 });
 </script>''').encode()
             content_type = "text/html; charset=utf-8"
@@ -4740,11 +4760,14 @@ def run_win32(exe, base, root):
                     copied_highlight(destination)
                     clipboard_test="ok"
                 # Re-open the same URL in another tab so a saved scroll position cannot satisfy the test.
+                previous_loads=Fixture.highlight_requests
                 invoke("新建标签页")
+                wait_for(lambda: user.IsWindowVisible(home),"New tab for the text fragment did not open")
                 set_control(edit,destination)
                 user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: Fixture.highlight_requests>previous_loads,"The text-fragment tab did not navigate")
                 if not Fixture.highlight_reached.wait(10):
-                    raise RuntimeError("Re-opening the text-fragment link did not scroll to the selection")
+                    raise RuntimeError(f"The text fragment did not scroll. Address: {read_address()!r}. Layout: {Fixture.highlight_position}")
                 print(f"highlight_link=ok native_selection_menu=ok empty_selection_hidden=ok clipboard={clipboard_test} fragment_scroll=ok",flush=True)
 
             groups = native_entries()
