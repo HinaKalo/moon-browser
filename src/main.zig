@@ -1979,7 +1979,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteSettings.zoom" => "允许查看和修改网站缩放比例",
         .@"siteData.cacheWrite" => "允许经确认删除单个站点缓存",
         .@"siteData.records" => "允许查看 IndexedDB 记录预览",
-        .@"siteData.databaseWrite" => "允许经确认清空 IndexedDB 对象仓库",
+        .@"siteData.databaseWrite" => "允许经确认删除 IndexedDB 记录",
         .@"page.source" => "允许查看当前网页源代码",
         .@"page.reader" => "允许提取当前网页正文以打开阅读模式",
         .@"page.save" => "允许通过文件对话框保存当前网页",
@@ -2647,6 +2647,33 @@ export fn moon_site_data_cookie_url(panel: u64, id: [*c]const u8, url: [*c]u8, c
     const view = sitePanelView(panel,slice(id),.@"siteData.cookieDetails") orelse return false;
     native.moon_engine_committed_url(view,url,cap);
     return history.validURL(slice(url));
+}
+
+export fn moon_site_database_remove_record(panel: u64, id: [*c]const u8, index: c_uint, generation: u64,
+    revision: u64, store: c_uint, page_revision: u64, row: c_uint) c_int {
+    return @intFromEnum(removeSiteRecord(panel,slice(id),.{
+        .index=index,.generation=generation,.revision=revision,.store=store,.pageRevision=page_revision,.row=row,
+    }));
+}
+
+fn removeSiteRecord(panel: u64, owner: []const u8, target: sdk.SiteDatabaseRecordTarget) sdk.SiteDataClearStart {
+    const permission: sdk.Permission = .@"siteData.databaseWrite";
+    if (site_clear_confirming or !plugins.hasGrant(owner,.@"siteData.records") or
+        sitePanelView(panel,owner,permission)==null) return .unavailable;
+    const entry = site_data.record(panel,owner,target) orelse return .unavailable;
+    const allocator = std.heap.page_allocator;
+    const names = std.json.Stringify.valueAlloc(allocator,.{ entry.store.database.name,entry.store.name },.{}) catch return .unavailable;
+    defer allocator.free(names);
+    const origin = site_data.status(panel,owner,false,false,false,false).origin;
+    const message = std.fmt.allocPrintSentinel(allocator,"删除 {s} 的一条 IndexedDB 记录？\n数据库和对象仓库：{s}\n主键：{s}",
+        .{origin,names,entry.key},0) catch return .unavailable;
+    defer allocator.free(message);
+    site_clear_confirming = true;
+    defer site_clear_confirming = false;
+    if (!native.moon_shell_confirm("删除 IndexedDB 记录？",message.ptr)) return .cancelled;
+    if (!plugins.hasGrant(owner,.@"siteData.records")) return .unavailable;
+    const view = sitePanelView(panel,owner,permission) orelse return .unavailable;
+    return if (site_data.removeRecord(view,panel,owner,target)) .started else .unavailable;
 }
 
 export fn moon_site_data_update(panel: u64, id: [*c]const u8, session: bool, entry: u32, generation: u64,

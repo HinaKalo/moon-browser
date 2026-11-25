@@ -94,6 +94,7 @@ static const char snapshot_script[] =
         "}catch{mutation='failed';}"
     "}"
     "globalThis.__moonSiteDataRevision=revision;"
+    "globalThis.__moonSiteRecordPage=undefined;"
     "const make=(name,value)=>{const key=name.slice(0,128).toWellFormed(),text=value.slice(0,512).toWellFormed();"
         "return {name:key,value:text,shortened:name!==key||value!==text};};"
     "const storage=(read)=>{try{const store=read(), entries=[];"

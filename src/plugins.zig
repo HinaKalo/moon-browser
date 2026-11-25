@@ -580,7 +580,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"window.appearance" => "此插件可以切换浏览器亮色或深色主题，并显示或隐藏当前窗口的标签侧栏。",
                 .@"siteData.cacheWrite" => "此插件经你确认后，可删除当前站点数据面板中指定的 Cache Storage 缓存。",
                 .@"siteData.records" => "此插件可在当前站点数据面板按需读取 IndexedDB 记录的键和值预览。",
-                .@"siteData.databaseWrite" => "此插件经你确认后，可清空当前站点指定 IndexedDB 对象仓库中的记录。",
+                .@"siteData.databaseWrite" => "此插件经你确认后，可删除当前站点指定的一条 IndexedDB 记录，或清空指定对象仓库。",
                 .@"page.reading" => "此插件可在当前页打开查找栏，并调整页面缩放。",
                 .@"page.reader" => "你从网页打开阅读模式时，此插件的专属页面可以读取该网页提取的正文。",
                 .@"window.fullscreen" => "此插件可在你触发命令时切换浏览器全屏。按 Esc 可以退出全屏。",

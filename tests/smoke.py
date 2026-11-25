@@ -388,6 +388,7 @@ class Fixture(BaseHTTPRequestHandler):
                     'IDBFactory.prototype.databases=async()=>[{name:"forged",version:88}];'
                     'IDBFactory.prototype.open=()=>{throw Error("forged open");};'
                     'IDBObjectStore.prototype.clear=()=>{throw Error("forged clear");};'
+                    'IDBObjectStore.prototype.delete=()=>{throw Error("forged delete");};'
                     'CacheStorage.prototype.keys=async()=>["forged"];'
                     'CacheStorage.prototype.delete=async()=>false;'
                     'fetch("/site-data-catalog-ready");})().catch(()=>{});'
@@ -831,6 +832,7 @@ def run_win32(exe, base, root):
     database_schema = site_data.exists() and "siteData.database" in site_data.with_name("site-data.html").read_text(encoding="utf-8")
     database_records = site_data.exists() and '"siteData.records"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     database_write = site_data.exists() and '"siteData.databaseWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
+    record_remove = database_write and "siteData.removeRecord" in site_data.with_name("site-data.html").read_text(encoding="utf-8")
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
     has_page_save = page_source.exists() and any(
         command["id"]=="save" for command in
@@ -927,6 +929,10 @@ def run_win32(exe, base, root):
             ('const clearDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"object-store-denied",method:"siteData.clearObjectStore",params:{index:0,generation:1,revision:1,store:0}}));'
              'if(JSON.parse(clearDenied).error?.code!==-32001)return;' if database_write else '') +
+            ('const removeRecordDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"remove-record-denied",method:"siteData.removeRecord",'
+             'params:{index:0,generation:1,revision:1,store:0,pageRevision:2,row:0}}));'
+             'if(JSON.parse(removeRecordDenied).error?.code!==-32001)return;' if record_remove else '') +
             ('const readingDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"3",method:"reading.find",params:{}}));'
              'if(JSON.parse(readingDenied).error?.code!==-32601)return;' if reading.exists() else '') +
@@ -1539,6 +1545,40 @@ def run_win32(exe, base, root):
             '.then(()=>false,e=>e.message==="NOT_FOUND");'
             'if(!limit||!stale)throw Error("invalid record scope was accepted");'
         ) if database_records else ""
+        remove_record_contract = r'''
+            const removeQuery = {index:(await inventory('indexedDB')).indexedDB.entries.findIndex(db=>db.name==='moon-inventory'),
+                generation:result.generation};
+            const recordSchemaButton=()=>el('results').querySelector(`button[data-database-index="${removeQuery.index}"]`);
+            (await wait(() => catalog?.generation===removeQuery.generation && recordSchemaButton(),'record removal schema action')).click();
+            const recordSchema=await readSchema(removeQuery);
+            const removalStore=recordSchema.stores.findIndex(store=>store.name==='records');
+            const viewStore=`[data-record-focus="store-${removalStore}"]`;
+            (await wait(()=>el('database-preview')?.querySelector(viewStore),'open record table')).click();
+            await wait(()=>firstKey()==='1','removal first page');
+            const oldRecord={...removeQuery,revision:recordSchema.revision,store:removalStore,pageRevision:recordView.pageRevision,row:0};
+            el('record-preview').querySelector('[data-record-focus=next]').click();
+            await wait(()=>firstKey()==='11','removal second page');
+            const selectedRecord={...oldRecord,pageRevision:recordView.pageRevision};
+            if(await host('siteData.removeRecord',oldRecord)!=='unavailable'||
+               await host('siteData.removeRecord',{...selectedRecord,row:100})!=='unavailable')
+              throw Error('old record page or invalid row accepted');
+            const removeRecord=()=>el('record-preview')?.querySelector('[aria-label="删除记录 11"]');
+            await emit({recordStage:'cancel'});
+            removeRecord().click();
+            await wait(()=>el('feedback').textContent==='已取消。'&&removeRecord(),'cancel record deletion');
+            if((await host('siteData.status')).generation!==removeQuery.generation) throw Error('cancel changed snapshot');
+            await emit({recordStage:'confirm'});
+            removeRecord().click();
+            result=await wait(async()=>{const state=await host('siteData.status');
+                return state.state==='ready'&&state.generation>removeQuery.generation&&state;},'delete record result');
+            if(result.mutation!=='removed'||await host('siteData.removeRecord',selectedRecord)!=='unavailable')
+              throw Error('single record deletion failed '+JSON.stringify(result));
+            await wait(()=>firstKey()==='12'&&recordView.offset===10,'second page was not restored after deletion');
+            if(removeRecord()||recordView.records[1]?.key.text!=='13') throw Error('neighboring rows changed');
+            el('record-preview').querySelector('[data-record-focus=previous]').click();
+            await wait(()=>firstKey()==='1','first page changed during deletion');
+            recordSchemaButton().click();
+        ''' if record_remove else ""
         object_store_contract = r'''
             if (!result.databaseWritable) throw Error('IndexedDB write grant missing');
             const clearQuery = {index:(await inventory('indexedDB')).indexedDB.entries.findIndex(db=>db.name==='moon-inventory'),
@@ -1606,6 +1646,7 @@ def run_win32(exe, base, root):
             'const listed=(await inventory("indexedDB")).indexedDB.entries;'
             'if(listed.some(db=>db.name==="moon-temporary-schema")||!listed.some(db=>db.name==="moon-inventory"&&db.version===3))'
             'throw Error("removed database was recreated or an existing version changed");'
+            + remove_record_contract
             + object_store_contract
         ) if database_schema else ""
         contract = (
@@ -2298,11 +2339,14 @@ def run_win32(exe, base, root):
                 wait_for(lambda: len(records:=read_settings(scripts_file))==2 and records[1]["enabled"],
                          "The imported script did not retain its approved site scope")
                 wait_for(lambda: user.IsWindowEnabled(user.GetDlgItem(tool,106)),"The editor did not resume after approval")
-                Fixture.seen_editor_reload.clear()
                 user.PostMessageW(edit,0x0100,0x74,1)  # F5
-                wait_for(Fixture.seen_editor_reload.is_set,"The original test page did not reload")
-                user.PostMessageW(tool,0x0111,108,0)  # SCRIPT_ERROR
-                wait_for(lambda: error_text in read_control(status),"The editor did not show the latest Lua runtime error")
+                def latest_runtime_error():
+                    if error_text in read_control(status):
+                        return True
+                    user.PostMessageW(tool,0x0111,108,0)  # SCRIPT_ERROR
+                    sleep(0.2)
+                    return False
+                wait_for(latest_runtime_error,"Reload did not produce the imported script's Lua runtime error")
                 for _ in range(18):
                     set_control(status,"")
                     user.PostMessageW(tool,0x0111,108,0)
@@ -3041,6 +3085,16 @@ def run_win32(exe, base, root):
                 signal = config.with_suffix(".signal")
                 signal.write_text('{"schemaReady":true}',encoding="utf-8")
                 signal.replace(config)
+            if record_remove:
+                for stage,button in (("cancel",7),("confirm",6)):
+                    def record_dialog():
+                        result = read_settings(config)
+                        if result.get("error"):
+                            raise RuntimeError(f"IndexedDB record removal: {result['error']}")
+                        return owned_window("#32770","删除 IndexedDB 记录？") if result.get("recordStage")==stage else None
+                    question = wait_for(record_dialog,f"Record confirmation for {stage} did not open",15)
+                    user.PostMessageW(question,0x0111,button,0)
+                    wait_for(lambda: not user.IsWindow(question),"The record confirmation did not close")
             if database_write:
                 for stage,button in (("cancel",7),("confirm",6)):
                     def object_store_dialog():
@@ -3112,6 +3166,8 @@ def run_win32(exe, base, root):
                 print("indexeddb_schema=ok store_and_index_limits=ok compound_key=ok index_flags=ok isolated_open=ok stale_database=ok no_recreation=ok",flush=True)
             if database_records:
                 print("indexeddb_records=ok primary_key_pages=ok preview_limit=ok literal_values=ok cyclic_and_binary=ok empty_store=ok stale_revision=ok",flush=True)
+            if record_remove:
+                print("indexeddb_remove_record=ok native_cancel=ok same_page_restored=ok exact_primary_key=ok stale_page_rejected=ok grant_required=ok",flush=True)
             if database_write:
                 print("indexeddb_clear=ok native_cancel=ok store_only=ok indexes_preserved=ok stale_target_rejected=ok grant_required=ok",flush=True)
             if cache_remove:

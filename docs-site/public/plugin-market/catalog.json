@@ -82,7 +82,7 @@
       "id": "moon.site-data",
       "name": "站点数据",
       "description": "查看 Cookie，编辑本地及会话存储，管理 IndexedDB 对象仓库与站点缓存。",
-      "permission": "查看和编辑当前站点的数据，经确认清空指定对象仓库或删除指定缓存",
+      "permission": "查看和编辑当前站点的数据，经确认删除 IndexedDB 记录或清空仓库，也可删除指定缓存",
       "url": "https://docs.browser.moonl.cloud/site-data.html"
     },
     {

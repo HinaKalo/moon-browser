@@ -1,14 +1,22 @@
 ((request, url, payload, reply) => {
   const expected = JSON.parse(payload);
+  const mutation = expected.clear || expected.remove;
   const sameDocument = () => location.href === url && globalThis.__moonSiteDataRevision === String(expected.revision);
   let finished = false;
   function finish(state, data = {}) {
     if (!finished && sameDocument()) {
-      const result = expected.clear ? { mutation: { ready: 'cleared', changed: 'conflict', unavailable: 'failed' }[state] } : { state, ...data };
+      const result = mutation ? {
+        mutation: { ready: expected.remove ? 'removed' : 'cleared', changed: 'conflict', unavailable: 'failed' }[state]
+      } : { state, ...data };
       reply(request + '\n' + JSON.stringify(result));
     }
     finished = true;
   }
+  if (!sameDocument()) return;
+  const recordPage = expected.records ? {
+    request, name: expected.name, version: expected.version, store: expected.records.store, keys: []
+  } : null;
+  if (recordPage) globalThis.__moonSiteRecordPage = recordPage;
 
   const clip = (text, limit) => text.slice(0, limit).toWellFormed();
   function named(full) {
@@ -122,7 +130,10 @@
           row.advance(skip);
           skip = 0;
         } else {
-          records.push({ key: preview(row.key, 160), value: preview(row.value, 320) });
+          const primaryKey = row.primaryKey;
+          const key = preview(primaryKey, 160);
+          recordPage.keys.push(key.shortened ? undefined : primaryKey);
+          records.push({ key, value: preview(row.value, 320) });
           row.continue();
         }
       } catch {
@@ -131,30 +142,44 @@
     };
   }
 
-  function clearStore(db, change) {
+  function changeStore(db, change) {
     if (!db.objectStoreNames.contains(change.store)) { finish('changed'); return; }
     if (Date.now() >= change.expires) { finish('unavailable'); return; }
+    const page = globalThis.__moonSiteRecordPage;
+    let key;
+    if (expected.remove) {
+      if (!page || page.request !== String(change.pageRevision) || page.name !== expected.name ||
+          page.version !== expected.version || page.store !== change.store ||
+          (key = page.keys[change.row]) === undefined) { finish('changed'); return; }
+    }
     const transaction = db.transaction(change.store, 'readwrite');
     const abort = () => { try { transaction.abort(); } catch {} };
     const deadline = setTimeout(abort, Math.max(0, change.expires - Date.now()));
+    let state = 'ready';
     transaction.onabort = () => { clearTimeout(deadline); finish('unavailable'); };
-    transaction.oncomplete = () => { clearTimeout(deadline); finish('ready'); };
+    transaction.oncomplete = () => { clearTimeout(deadline); finish(state); };
     try {
       const store = transaction.objectStore(change.store);
       // Recheck the document and deadline after any earlier writer releases this store.
-      const probe = store.getKey(0);
+      const probe = store.getKey(expected.remove ? key : 0);
       probe.onsuccess = () => {
         if (!sameDocument() || Date.now() >= change.expires) { abort(); return; }
-        try { store.clear(); } catch { abort(); }
+        if (expected.remove && (probe.result === undefined || page !== globalThis.__moonSiteRecordPage)) {
+          state = 'changed';
+          return;
+        }
+        try {
+          if (expected.remove) store.delete(key);
+          else store.clear();
+        } catch { abort(); }
       };
     } catch { abort(); }
   }
 
-  if (!sameDocument()) return;
   indexedDB.databases().then(databases => {
     if (!sameDocument()) return;
     if (!databases.some(db => db.name === expected.name && db.version === expected.version)) { finish('changed'); return; }
-    if (expected.clear && Date.now() >= expected.clear.expires) { finish('unavailable'); return; }
+    if (mutation && Date.now() >= mutation.expires) { finish('unavailable'); return; }
     const open = indexedDB.open(expected.name);
     open.onupgradeneeded = () => { open.transaction.abort(); finish('changed'); };
     open.onerror = () => finish('unavailable');
@@ -163,7 +188,7 @@
       try {
         if (!sameDocument()) return;
         if (db.version !== expected.version) { finish('changed'); return; }
-        if (expected.clear) clearStore(db, expected.clear);
+        if (mutation) changeStore(db, mutation);
         else if (expected.records) inspectRecords(db, expected.records);
         else finish('ready', inspectStructure(db));
       } catch {

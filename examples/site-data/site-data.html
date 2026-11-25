@@ -100,6 +100,7 @@
   let clearing=false, cookieGeneration, cacheWritable=false;
   let databasePreview;
   let recordView, recordsAllowed=false, databaseWritable=false;
+  let recordRestore;
   let dismissedMutation;
   const isCatalog=() => group==='indexedDB' || group==='cacheStorage';
   async function host(method,params={}) {
@@ -270,7 +271,7 @@
       '当前显示网页可读的 Cookie。可使用开发者工具查看其他 Cookie 属性。') : '') +
       (page.more ? ` 已显示前 ${page.entries.length} 条。` : '');
   }
-  async function changeCatalog(method,target,button) {
+  async function changeCatalog(method,target,button,restore) {
     if (clearing) return;
     const currentGroup=group;
     clearing=true;
@@ -278,7 +279,13 @@
     feedback.textContent='';
     try {
       const outcome=await host(method,target);
-      if (outcome==='started') await update();
+      if (outcome==='started') {
+        if (restore && group===currentGroup) {
+          recordRestore=restore;
+          await restoreRecordView();
+        }
+        await update();
+      }
       else if (group===currentGroup) feedback.textContent=outcome==='cancelled' ? '已取消。' : '条目已变化，请刷新。';
     } catch {
       if (group===currentGroup) feedback.textContent='无法修改所选条目，请刷新后重试。';
@@ -323,6 +330,24 @@
     recordView=selection;
     return fillDatabaseView('siteData.databaseRecords',selection,{index,generation,revision,store,offset},() => recordView===selection);
   }
+  async function restoreRecordView() {
+    const saved=recordRestore;
+    if (!saved || group!=='indexedDB' || catalog?.state!=='ready' || catalog.generation===saved.generation) return;
+    recordRestore=undefined;
+    if (!recordsAllowed) return;
+    const generation=catalog.generation;
+    const index=catalog.indexedDB?.entries.findIndex(db=>!db.shortened&&db.name===saved.name&&db.version===saved.version);
+    if (index===undefined || index<0) return;
+    await toggleDatabase(index,generation);
+    if (databasePreview?.generation!==generation || databasePreview.index!==index || databasePreview.state!=='ready') return;
+    const store=databasePreview.stores.findIndex(item=>!item.shortened&&item.name===saved.store);
+    if (store<0) return;
+    await viewRecords(store,saved.offset);
+    if (saved.offset && recordView?.store===store && recordView.offset===saved.offset &&
+        recordView.state==='ready' && !recordView.records.length)
+      await viewRecords(store,saved.offset-10);
+    if (document.activeElement===document.body) rows.querySelector('[data-record-focus="refresh"]')?.focus();
+  }
   function renderRecordView() {
     const panel=document.createElement('section');
     panel.id='record-preview';
@@ -340,14 +365,15 @@
     if (recordView.records.length) {
       const table=document.createElement('table');
       const header=table.createTHead().insertRow();
-      for (const label of ['主键','值预览']) {
+      const canRemove=databaseWritable && recordView.pageRevision>0;
+      for (const label of canRemove ? ['主键','值预览','操作'] : ['主键','值预览']) {
         const column=document.createElement('th');
         column.scope='col';
         column.textContent=label;
         header.append(column);
       }
       const body=table.createTBody();
-      for (const record of recordView.records) {
+      for (const [index,record] of recordView.records.entries()) {
         const row=body.insertRow();
         for (const value of [record.key,record.value]) {
           const cell=row.insertCell(), text=document.createElement('pre');
@@ -358,6 +384,21 @@
             note.className='caption';
             note.textContent='已截断或以摘要显示';
             cell.append(note);
+          }
+        }
+        if (canRemove) {
+          const actions=row.insertCell();
+          if (!record.key.shortened) {
+            const remove=document.createElement('button');
+            remove.textContent='删除…';
+            remove.setAttribute('aria-label','删除记录 '+record.key.text);
+            const {store,offset,pageRevision}=recordView;
+            const {index:databaseIndex,generation,revision}=databasePreview;
+            const {name,version}=catalog.indexedDB.entries[databaseIndex];
+            const restore={name,version,generation,offset,store:databasePreview.stores[store].name};
+            remove.onclick=()=>changeCatalog('siteData.removeRecord',
+              {index:databaseIndex,generation,revision,store,pageRevision,row:index},remove,restore);
+            actions.append(remove);
           }
         }
       }
@@ -526,6 +567,7 @@
         if (databasePreview?.generation!==value.generation) databasePreview=recordView=undefined;
         catalog=value;
         renderCatalog();
+        await restoreRecordView();
         return;
       }
       if (group==='cookies' && cookieGeneration!==undefined) {
@@ -578,6 +620,7 @@
       }
       latest=identity;
       selected=current.state;
+      if (current.state!=='pending' && current.state!=='ready') recordRestore=undefined;
       request++;
       if (databasePreview?.generation!==current.generation) databasePreview=recordView=undefined;
       if (!recordsAllowed) recordView=undefined;
@@ -595,6 +638,7 @@
   }
   for (const button of buttons) button.onclick=() => {
     group=button.dataset.group;
+    recordRestore=undefined;
     for (const other of buttons) other.setAttribute('aria-pressed',String(other===button));
     clear();
     details.textContent='';

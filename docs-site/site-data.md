@@ -16,6 +16,8 @@
 
 从 0.1.0-preview.65 起，在仓库旁选择「清空记录…」。系统确认框显示网页来源、数据库和对象仓库。确认后，浏览器在一个 IndexedDB 事务中移除此仓库的所有记录，包括预览上限之后的记录。数据库版本、索引和其他仓库保留。
 
+从 0.1.0-preview.71 起，记录预览中可逐条删除。确认框显示网页来源、仓库和完整主键。删除后仍在当前记录页，若该页已空则返回上一页。主键以摘要显示或被截断时，记录行不显示删除按钮。
+
 从 0.1.0-preview.51 起，可在 Cache Storage 列表选择「删除缓存」。系统确认框会显示来源和缓存名称。确认后移除该缓存及其中的响应，面板自动刷新。其他缓存和站点数据保留原样。
 
 刷新会重新读取绑定网页。网页导航、崩溃或关闭后，旧快照随即失效。快照仅在内存中保留，五分钟后过期。可通过插件菜单停用系统插件或撤销「允许查看站点数据」。
@@ -35,6 +37,8 @@ Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限�
 `siteData.databaseRecords({ index, generation, revision, store, offset?, refresh? })` 同时需要 `siteData.read` 和 `siteData.records`。使用结构响应的 `revision`，以及 `stores` 列表中从 0 开始的仓库下标。偏移量默认为 0，支持 0 至 190 之间的 10 的倍数。返回 `{ state, offset, records, next, capped }`。每条记录的 `key` 和 `value` 都包含 `text` 与 `shortened`。使用 `next` 继续翻页，`capped` 表示仍有记录超过预览上限。首次读取或手动刷新可传 `refresh: true`，查询进度时省略。原网页导航、重新读取结构或撤销权限会使旧记录预览失效。
 
 `siteData.clearObjectStore({ index, generation, revision, store })` 需要 `siteData.read` 和 `siteData.databaseWrite`。`siteData.status` 返回 `databaseWritable`，表示面板具备写入授权。使用数据库结构响应的下标和 `revision` 请求确认。收到 `started` 后通过 `siteData.status` 等待新快照，`mutation` 为 `cleared`、`conflict` 或 `failed`。旧快照、已截断的仓库名称和确认期间切换网页的操作会被拒绝。
+
+`siteData.removeRecord({ index, generation, revision, store, pageRevision, row })` 还需要 `siteData.records`。传入当前记录页响应的 `pageRevision`，以及从 0 开始的行下标 `row`。浏览器用原记录的类型化主键执行删除。翻页、刷新或切换网页后，旧行会失效。收到 `started` 后通过 `siteData.status` 等待新快照，`mutation` 为 `removed`、`conflict` 或 `failed`。
 
 编辑还需要独立的 `siteData.write` 权限，并从当前显示且已绑定的面板调用 `siteData.update`。参数为 `{ group, id, generation, value }`。字符串表示替换值，`null` 表示删除。提交后通过 `siteData.status` 等待新一代快照，`mutation` 会返回 `saved`、`removed`、`conflict` 或 `failed`。浏览到其他文档、旧快照或截断条目均不能继续提交修改。
 

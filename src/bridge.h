@@ -266,6 +266,8 @@ bool moon_site_database_records(uint64_t panel, const char *owner, unsigned inde
 void moon_site_database_result(MoonView *view, uint64_t tab, uint64_t request, const char *result);
 int moon_site_database_clear(uint64_t panel, const char *owner, unsigned index, uint64_t generation,
     uint64_t revision, unsigned store);
+int moon_site_database_remove_record(uint64_t panel, const char *owner, unsigned index, uint64_t generation,
+    uint64_t revision, unsigned store, uint64_t page_revision, unsigned row);
 void moon_site_cache_result(MoonView *view, uint64_t tab, uint64_t generation, const char *result);
 int moon_site_cache_remove(uint64_t panel, const char *owner, unsigned index, uint64_t generation);
 bool moon_site_data_action(uint64_t panel, const char *id, int action);

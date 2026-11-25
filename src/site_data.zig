@@ -439,10 +439,37 @@ pub fn objectStore(tab: u64, id: []const u8, target: sdk.SiteDatabaseStoreTarget
 
 pub fn clearObjectStore(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteDatabaseStoreTarget) bool {
     const store = objectStore(tab,id,target) orelse return false;
-    const payload = databasePayload(.{
+    return startDatabaseMutation(view,.{
         .name=store.database.name,.version=store.database.version.?,.revision=sequence,
         .clear=.{ .store=store.name,.expires=native.moon_wall_ms()+3500 },
-    }) catch return false;
+    });
+}
+
+const Record = struct { store: ObjectStore, key: []const u8 };
+
+pub fn record(tab: u64, id: []const u8, target: sdk.SiteDatabaseRecordTarget) ?Record {
+    const store = objectStore(tab,id,.{
+        .index=target.index,.generation=target.generation,.revision=target.revision,.store=target.store,
+    }) orelse return null;
+    const page = record_page orelse return null;
+    if (page.store!=target.store or page.token!=target.pageRevision) return null;
+    const result = page.result orelse return null;
+    if (result.value.state!=.ready or target.row>=result.value.records.len) return null;
+    const key = result.value.records[target.row].key;
+    return if (key.shortened) null else .{ .store=store,.key=key.text };
+}
+
+pub fn removeRecord(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteDatabaseRecordTarget) bool {
+    const entry = record(tab,id,target) orelse return false;
+    const store = entry.store;
+    return startDatabaseMutation(view,.{
+        .name=store.database.name,.version=store.database.version.?,.revision=sequence,
+        .remove=.{ .store=store.name,.pageRevision=target.pageRevision,.row=target.row,.expires=native.moon_wall_ms()+3500 },
+    });
+}
+
+fn startDatabaseMutation(view: *native.MoonView, query: anytype) bool {
+    const payload = databasePayload(query) catch return false;
     defer allocator.free(payload);
     database_serial += 1;
     startRequest();
@@ -475,7 +502,7 @@ pub fn databaseRecords(query: sdk.SiteDatabaseRecordsQuery) sdk.SiteDatabaseReco
     if (preview.store!=query.store or preview.offset!=query.offset or preview.deadline!=null)
         return .{ .offset=query.offset,.state=.pending };
     const result = preview.result orelse return .{ .offset=query.offset,.state=.unavailable };
-    return .{ .offset=query.offset,.state=result.value.state,.records=result.value.records,
+    return .{ .offset=query.offset,.state=result.value.state,.records=result.value.records,.pageRevision=preview.token,
         .next=result.value.next,.capped=result.value.capped };
 }
 

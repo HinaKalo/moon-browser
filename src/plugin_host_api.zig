@@ -84,7 +84,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteData.update", .@"siteData.create", .@"siteData.clear" => .@"siteData.write",
         .@"siteData.cacheRemove" => .@"siteData.cacheWrite",
         .@"siteData.databaseRecords" => .@"siteData.records",
-        .@"siteData.clearObjectStore" => .@"siteData.databaseWrite",
+        .@"siteData.clearObjectStore", .@"siteData.removeRecord" => .@"siteData.databaseWrite",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"reading.open", .@"reading.article", .@"reading.read", .@"reading.returnToPage" => .@"page.reader",
         .@"window.toggleFullscreen" => .@"window.fullscreen",
@@ -214,7 +214,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.cacheRemove", .@"siteData.database" => {},
-        .@"siteData.databaseRecords", .@"siteData.clearObjectStore" => {},
+        .@"siteData.databaseRecords", .@"siteData.clearObjectStore", .@"siteData.removeRecord" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
@@ -786,6 +786,15 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const target = decode(sdk.SiteDatabaseStoreTarget,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             const outcome = native.moon_site_database_clear(context.target_tab_id,owner.ptr,target.index,target.generation,target.revision,target.store);
+            return sdk.result(output,id,std.enums.fromInt(sdk.SiteDataClearStart,outcome) orelse .unavailable);
+        },
+        .@"siteData.removeRecord" => {
+            if (!context.from_page or !context.grants.contains(.@"siteData.read") or !context.grants.contains(.@"siteData.records"))
+                return sdk.failure(output,id,.PermissionDenied);
+            const target = decode(sdk.SiteDatabaseRecordTarget,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const outcome = native.moon_site_database_remove_record(context.target_tab_id,owner.ptr,target.index,target.generation,
+                target.revision,target.store,target.pageRevision,target.row);
             return sdk.result(output,id,std.enums.fromInt(sdk.SiteDataClearStart,outcome) orelse .unavailable);
         },
         .@"siteData.update" => {

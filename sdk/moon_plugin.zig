@@ -313,11 +313,14 @@ pub const SiteDatabaseRecordsQuery = struct {
     index: u32, generation: u64, revision: u64, store: u32, offset: u16 = 0, refresh: bool = false,
 };
 pub const SiteDatabaseStoreTarget = struct { index: u32, generation: u64, revision: u64, store: u32 };
+pub const SiteDatabaseRecordTarget = struct {
+    index: u32, generation: u64, revision: u64, store: u32, pageRevision: u64, row: u32,
+};
 pub const SiteRecordPreview = struct { text: []const u8, shortened: bool };
 pub const SiteRecord = struct { key: SiteRecordPreview, value: SiteRecordPreview };
 pub const SiteDatabaseRecords = struct {
     state: SiteDatabaseDetailsState, offset: u16, records: []const SiteRecord = &.{},
-    next: ?u16 = null, capped: bool = false,
+    next: ?u16 = null, capped: bool = false, pageRevision: u64 = 0,
 };
 pub const site_record_page_size = 10;
 pub const site_record_preview_limit = 200;
@@ -423,6 +426,7 @@ pub const Method = enum {
     @"siteData.database",
     @"siteData.databaseRecords",
     @"siteData.clearObjectStore",
+    @"siteData.removeRecord",
     @"siteData.value",
     @"siteData.cookieDetails",
     @"siteData.cookieValue",
