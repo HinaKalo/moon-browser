@@ -12,10 +12,14 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params != .object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
-    const Action = enum { pin, mute, duplicate, copyAddress, closeOthers, closeBelow, openLink, copyLink, reorder,
+    const Action = enum { search, pin, mute, duplicate, copyAddress, closeOthers, closeBelow, openLink, copyLink, reorder,
         groupCreate, groups, groupRemove };
     const operation = std.meta.stringToEnum(Action,action) orelse return error.InvalidCommand;
     const message = switch (operation) {
+        .search => search: {
+            _ = try client.call(.@"tabs.openSearch",.{});
+            break :search null;
+        },
         .pin => try organize(&client,.@"tabs.togglePinned"),
         .mute => try organize(&client,.@"tabs.toggleMuted"),
         .duplicate => try organize(&client,.@"tabs.duplicate"),

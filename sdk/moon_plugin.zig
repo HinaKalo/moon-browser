@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const api_version = 2;
 pub const frame_limit = 32 * 1024;
-pub const command_limit = 12;
+pub const command_limit = 13;
 pub const request_limit = 24;
 pub const interactive_request_limit = 256;
 pub const lua_source_limit = 16 * 1024;
@@ -61,6 +61,7 @@ pub const Shortcut = enum {
     @"Ctrl+Shift+R",
     @"Ctrl+B",
     @"Ctrl+Shift+L",
+    @"Ctrl+Shift+A",
     F9,
 };
 pub const Theme = enum { light, dark };
@@ -401,6 +402,7 @@ pub const Method = enum {
     @"tabs.togglePinned",
     @"tabs.toggleMuted",
     @"tabs.duplicate",
+    @"tabs.openSearch",
     @"tabs.copyAddress",
     @"tabs.openLink",
     @"tabs.copyLink",

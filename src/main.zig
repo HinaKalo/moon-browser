@@ -1667,7 +1667,10 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             tab.loading = false;
             tab.loaded = false;
             if (tab.view) |view| native.moon_engine_show(view, false);
-            if (smoke != .off) log("process_terminated tab={d}", .{id});
+            if (smoke != .off) {
+                log("process_terminated tab={d}", .{id});
+                log("process_termination_reason={s} stage={s}", .{slice(detail),@tagName(smoke)});
+            }
         },
         native.MOON_UNSAFE => {
             tab.unsafe_history = true;
@@ -1757,6 +1760,16 @@ export fn moon_tab_label(index: usize) [*:0]const u8 {
     if (tab.title[0] != 0) return &tab.title;
     if (tab.url[0] != 0) return &tab.url;
     return "新标签页";
+}
+export fn moon_tab_url(index: usize) [*:0]const u8 {
+    return if (index<count) &tabs[index].url else "";
+}
+export fn moon_tab_index(id: u64) usize {
+    return tabIndex(id) orelse count;
+}
+export fn moon_tabs_open_search(source: u64) bool {
+    if (stopped or count==0 or tabs[active].id!=source) return false;
+    return native.moon_shell_tab_search();
 }
 export fn moon_tab_flags(index: usize) c_uint {
     if (index >= count) return 0;

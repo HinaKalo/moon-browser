@@ -834,7 +834,7 @@ fn sameChord(left: Hotkey, right: Hotkey) bool {
 fn hotkeyReserved(key: Hotkey) bool {
     const text = std.mem.sliceTo(&key.text,0);
     if (std.meta.stringToEnum(sdk.Shortcut,text)) |shortcut| {
-        if (shortcut!=.@"Ctrl+Shift+C") return true;
+        if (shortcut!=.@"Ctrl+Shift+C" and shortcut!=.@"Ctrl+Shift+A") return true;
     }
     if (key.mods!=0x0006) return false;
     return switch (key.key) {
@@ -991,6 +991,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
             else => null,
         },
         ctrl_shift => switch (vk) {
+            'A' => .@"Ctrl+Shift+A",
             'B' => .@"Ctrl+Shift+B",
             'C' => .@"Ctrl+Shift+C",
             'I' => .F12,
@@ -1044,10 +1045,11 @@ pub fn browserShortcut(mods: c_uint, vk: c_uint, repeated: bool, snapshot: ?Snap
                 !plugin.grants.contains(.@"window.fullscreen"))) continue;
             if (key==.@"Ctrl+Shift+R" and (!plugin.grants.contains(.@"page.inspect") or
                 (!plugin.bundled and !canContribute(plugin)))) continue;
+            if (key==.@"Ctrl+Shift+A" and !plugin.grants.contains(.@"tabs.manage")) continue;
             const appearance = key==.@"Ctrl+B" or key==.@"Ctrl+Shift+L";
             if (appearance and (!plugin.grants.contains(.@"window.appearance") or
                 (!plugin.bundled and !canContribute(plugin)))) continue;
-            if (!repeated or (!appearance and key!=.F9 and key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C" and key!=.@"Ctrl+S" and key!=.@"Ctrl+Shift+R"))
+            if (!repeated or (!appearance and key!=.F9 and key!=.F11 and key!=.F12 and key!=.@"Ctrl+Shift+C" and key!=.@"Ctrl+S" and key!=.@"Ctrl+Shift+R" and key!=.@"Ctrl+Shift+A"))
                 runShortcut(index,command_index,snapshot,repeated);
             return true;
         }

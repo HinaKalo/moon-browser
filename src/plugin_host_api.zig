@@ -90,7 +90,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.reorder" => .@"tabs.organize",
         .@"tabs.groups.open", .@"tabs.groups.create", .@"tabs.groups.removeTab", .@"tabs.groups.list",
         .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve" => .@"tabs.groups",
-        .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup" => .@"tabs.manage",
+        .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup", .@"tabs.openSearch" => .@"tabs.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
         .@"search.getConfig", .@"search.setConfig" => .@"search.manage",
@@ -238,7 +238,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"popups.open", .@"popups.status", .@"siteSettings.autoplay.get", .@"downloads.clearCompleted", .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink",
         .@"siteSettings.sound.get", .@"siteSettings.sound.toggle",
         .@"tabs.closed.list", .@"tabs.closed.clear", .@"privacy.status", .@"privacy.openPrivateWindow",
-        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"search.getConfig",
+        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openSearch", .@"search.getConfig",
         .@"tabs.session.status", .@"tabs.session.restore", .@"tabs.session.forget" => {
             if (!noParams(params)) return sdk.failure(output, id, .InvalidParams);
         },
@@ -812,6 +812,10 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             };
             const outcome = native.moon_tabs_organize(context.target_tab_id,@intFromEnum(operation));
             return sdk.result(output,id,@as(sdk.TabOrganization,@enumFromInt(outcome)));
+        },
+        .@"tabs.openSearch" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            return sdk.result(output,id,native.moon_tabs_open_search(context.target_tab_id));
         },
         .@"tabs.reorder" => {
             const drop = context.drop orelse return sdk.failure(output,id,.PermissionDenied);

@@ -114,6 +114,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `tabs.togglePinned` / `tabs.toggleMuted` | `tabs.organize` | 在用户命令中传入 `{}`，切换触发该命令的标签的固定或静音状态。参见[固定与静音标签](./tab-tools)。 |
 | `tabs.reorder` | `tabs.organize` | 从 `tabDrop` 命令传入 `{}`，按用户指定的位置移动标签。结果为 `moved`、`unavailable` 或 `saveFailed`。参见[标签排序](./command-contributions#标签排序)。 |
 | `tabs.duplicate` / `tabs.copyAddress` / `tabs.closeGroup` | `tabs.manage` | 从用户命令复制标签、复制网址或选择范围批量关闭标签。参见[标签管理](./tab-tools)。 |
+| `tabs.openSearch` | `tabs.manage` | 用户命令传入 `{}`，打开当前窗口的原生标签搜索面板。返回是否打开。 |
 | `tabs.openLink` / `tabs.copyLink` | `tabs.manage` | 从对应的 `linkMenu` 命令传入 `{}`。前者返回 `opened` 或 `limitReached`，后者返回 `copied` 或 `clipboardBusy`。失效的链接上下文返回 `unavailable`。 |
 | `tabs.groups.create` / `tabs.groups.removeTab` / `tabs.groups.open` | `tabs.groups` | 从用户命令传入 `{}`，创建标签组、移出标签或打开组管理页。参见[标签组 API](./tab-tools#标签组-api)。 |
 | `tabs.groups.list` / `tabs.groups.assign` / `tabs.groups.update` / `tabs.groups.dissolve` | `tabs.groups` | 在活动插件页面查看组，移动命令绑定的标签，更新组或解散组。参见[标签组 API](./tab-tools#标签组-api)。 |

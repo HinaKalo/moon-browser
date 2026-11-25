@@ -292,7 +292,15 @@ static void failed(WKPageRef page, WKNavigationRef nav, WKErrorRef error, WKType
 }
 static void changed(const void *client) { emit(client, MOON_CHANGED, NULL); }
 static void terminated(WKPageRef page, WKProcessTerminationReason reason, const void *client) {
-    emit(client, MOON_TERMINATED, NULL);
+    const char *detail;
+    switch (reason) {
+        case kWKProcessTerminationReasonExceededMemoryLimit: detail="memory_limit"; break;
+        case kWKProcessTerminationReasonExceededCPULimit: detail="cpu_limit"; break;
+        case kWKProcessTerminationReasonRequestedByClient: detail="client_request"; break;
+        case kWKProcessTerminationReasonCrash: detail="crash"; break;
+        default: detail="unknown"; break;
+    }
+    emit(client, MOON_TERMINATED, detail);
 }
 static void rendering(WKPageRef page, WKPageRenderingProgressEvents events, WKTypeRef user, const void *client) {
     if (events & WKPageRenderingProgressEventFirstVisuallyNonEmptyLayout)

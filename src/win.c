@@ -20,6 +20,8 @@
 #include <wchar.h>
 
 static HWND frame, content, address, home_edit, palette, palette_input, palette_list;
+static HWND palette_previous_focus;
+static bool palette_tabs;
 static HWND fullscreen_exit;
 static WINDOWPLACEMENT fullscreen_placement;
 static LONG_PTR fullscreen_style;
@@ -1135,29 +1137,54 @@ static void palette_row(const wchar_t *name,LPARAM data) {
 }
 static void filter_palette(void) {
     if (!palette_list || !palette_input) return;
-    wchar_t query[4096], name[512];
+    wchar_t query[4096], name[4096];
     GetWindowTextW(palette_input,query,ARRAYSIZE(query));
     bool url_like=wcspbrk(query,L"./:")!=NULL;
     SendMessageW(palette_list,WM_SETREDRAW,FALSE,0);
     SendMessageW(palette_list,LB_RESETCONTENT,0,0);
-    if (url_like) palette_row(L"\u6253\u5f00\u6216\u641c\u7d22\u8f93\u5165\u5185\u5bb9",-2);
-    for(size_t i=0;i<moon_action_count(false);++i) {
-        if (moon_utf16(moon_action_label(i,false),name,ARRAYSIZE(name)) && (!*query || StrStrIW(name,query)))
-            palette_row(name,(LPARAM)i);
+    if (palette_tabs) {
+        wchar_t url[4096];
+        for (size_t i=0;i<moon_tab_count();++i) {
+            if (!moon_utf16(moon_tab_label(i),name,ARRAYSIZE(name))) continue;
+            if (!*query || StrStrIW(name,query) ||
+                (moon_utf16(moon_tab_url(i),url,ARRAYSIZE(url)) && StrStrIW(url,query)))
+                palette_row(name,(LPARAM)moon_tab_id(i));
+        }
+        if (!SendMessageW(palette_list,LB_GETCOUNT,0,0)) palette_row(L"没有匹配的标签页",0);
+    } else {
+        if (url_like) palette_row(L"打开或搜索输入内容",-2);
+        for (size_t i=0;i<moon_action_count(false);++i) {
+            if (moon_utf16(moon_action_label(i,false),name,ARRAYSIZE(name)) && (!*query || StrStrIW(name,query)))
+                palette_row(name,(LPARAM)i);
+        }
+        for (size_t i=0;i<moon_tab_count();++i) {
+            if (moon_utf16(moon_tab_label(i),name,ARRAYSIZE(name)) && (!*query || StrStrIW(name,query)))
+                palette_row(name,PALETTE_TAB_OFFSET+(LPARAM)i);
+        }
+        if (*query && !url_like) palette_row(L"打开或搜索输入内容",-2);
     }
-    for(size_t i=0;i<moon_tab_count();++i) {
-        if (moon_utf16(moon_tab_label(i),name,ARRAYSIZE(name)) && (!*query || StrStrIW(name,query)))
-            palette_row(name,PALETTE_TAB_OFFSET+(LPARAM)i);
-    }
-    if (*query && !url_like) palette_row(L"\u6253\u5f00\u6216\u641c\u7d22\u8f93\u5165\u5185\u5bb9",-2);
     SendMessageW(palette_list,LB_SETCURSEL,0,0);
     SendMessageW(palette_list,WM_SETREDRAW,TRUE,0);
     InvalidateRect(palette_list,NULL,TRUE);
+}
+static void close_palette(bool restore_focus) {
+    HWND previous=palette_previous_focus;
+    DestroyWindow(palette);
+    if (restore_focus && IsWindow(previous) && IsWindowVisible(previous)) SetFocus(previous);
 }
 static void run_palette(void) {
     LRESULT row=SendMessageW(palette_list,LB_GETCURSEL,0,0);
     if (row==LB_ERR) return;
     LRESULT action=SendMessageW(palette_list,LB_GETITEMDATA,(WPARAM)row,0);
+    if (palette_tabs) {
+        if (action<=0) return;
+        const size_t index=moon_tab_index((uint64_t)action);
+        if (index>=moon_tab_count()) { filter_palette(); return; }
+        const bool was_current=index==moon_active_index();
+        close_palette(was_current);
+        moon_command(MOON_SELECT,index,NULL);
+        return;
+    }
     wchar_t query[4096];
     char value[16384];
     GetWindowTextW(palette_input,query,ARRAYSIZE(query));
@@ -1165,6 +1192,56 @@ static void run_palette(void) {
     if (action==-2 && moon_utf8(query,value,sizeof(value))) moon_command(MOON_ADDRESS,0,value);
     else if (action>=PALETTE_TAB_OFFSET) moon_command(MOON_SELECT,(uint64_t)(action-PALETTE_TAB_OFFSET),NULL);
     else if (action>=0) moon_action_run((size_t)action,false);
+}
+static LRESULT CALLBACK tab_search_list(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp,UINT_PTR id,DWORD_PTR ref) {
+    if (msg==WM_LBUTTONUP) {
+        LRESULT hit=SendMessageW(hwnd,LB_ITEMFROMPOINT,0,lp);
+        RECT row;
+        POINT at={(short)LOWORD(lp),(short)HIWORD(lp)};
+        if (!HIWORD(hit) && LOWORD(hit)==SendMessageW(hwnd,LB_GETCURSEL,0,0) &&
+            SendMessageW(hwnd,LB_GETITEMRECT,LOWORD(hit),(LPARAM)&row)!=LB_ERR && PtInRect(&row,at)) {
+            LRESULT result=DefSubclassProc(hwnd,msg,wp,lp);
+            if (IsWindow(hwnd)) run_palette();
+            return result;
+        }
+    }
+    if (msg==WM_NCDESTROY) RemoveWindowSubclass(hwnd,tab_search_list,id);
+    return DefSubclassProc(hwnd,msg,wp,lp);
+}
+static void paint_tab_search_row(const DRAWITEMSTRUCT *item) {
+    if (item->itemID==(UINT)-1) return;
+    HDC dc=item->hDC;
+    RECT bounds=item->rcItem;
+    const uint64_t token=(uint64_t)item->itemData;
+    const bool selected=token && (item->itemState&ODS_SELECTED);
+    SetBkColor(dc,rgb(selected?theme->soft:theme->panel));
+    ExtTextOutW(dc,0,0,ETO_OPAQUE,&bounds,L"",0,NULL);
+    SetBkMode(dc,TRANSPARENT);
+    HGDIOBJ font=SelectObject(dc,edit_font);
+    const size_t index=moon_tab_index(token);
+    wchar_t title[4096], url[4096];
+    bounds.left+=px(10);
+    bounds.right-=px(10);
+    if (index<moon_tab_count() && moon_utf16(moon_tab_label(index),title,ARRAYSIZE(title))) {
+        const UINT format=DT_SINGLELINE|DT_VCENTER|DT_END_ELLIPSIS|DT_NOPREFIX;
+        if (moon_utf16(moon_tab_url(index),url,ARRAYSIZE(url)) && *url && wcscmp(title,url)!=0) {
+            RECT line=bounds;
+            line.top+=px(2);
+            line.bottom=line.top+px(21);
+            SetTextColor(dc,rgb(theme->text));
+            DrawTextW(dc,title,-1,&line,format);
+            bounds.top=line.bottom;
+            SetTextColor(dc,rgb(theme->muted));
+            DrawTextW(dc,url,-1,&bounds,format);
+        } else {
+            SetTextColor(dc,rgb(theme->text));
+            DrawTextW(dc,title,-1,&bounds,format);
+        }
+    } else if (!token) {
+        SetTextColor(dc,rgb(theme->muted));
+        DrawTextW(dc,L"没有匹配的标签页",-1,&bounds,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+    }
+    SelectObject(dc,font);
 }
 static LRESULT CALLBACK palette_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
     if (msg==WM_COMMAND) {
@@ -1175,12 +1252,36 @@ static LRESULT CALLBACK palette_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) 
     if (msg==WM_SIZE) {
         RECT r;
         GetClientRect(hwnd,&r);
-        if (palette_input) MoveWindow(palette_input,px(12),px(12),r.right-px(24),px(27),TRUE);
-        if (palette_list) MoveWindow(palette_list,px(12),px(47),r.right-px(24),r.bottom-px(59),TRUE);
+        const int header=palette_tabs?px(34):0;
+        if (palette_input) MoveWindow(palette_input,px(12),px(12)+header,r.right-px(24),px(27),TRUE);
+        if (palette_list) MoveWindow(palette_list,px(12),px(47)+header,r.right-px(24),r.bottom-px(59)-header,TRUE);
         return 0;
+    }
+    if (palette_tabs && msg==WM_ACTIVATE && LOWORD(wp)==WA_INACTIVE) PostMessageW(hwnd,WM_CLOSE,0,0);
+    if (palette_tabs && msg==WM_PAINT) {
+        PAINTSTRUCT paint;
+        RECT area;
+        HDC dc=BeginPaint(hwnd,&paint);
+        GetClientRect(hwnd,&area);
+        SetBkColor(dc,rgb(theme->panel));
+        ExtTextOutW(dc,0,0,ETO_OPAQUE,&area,L"",0,NULL);
+        SetBkMode(dc,TRANSPARENT);
+        SetTextColor(dc,rgb(theme->text));
+        HGDIOBJ font=SelectObject(dc,edit_font);
+        area.left=px(12);
+        area.bottom=px(46);
+        DrawTextW(dc,L"搜索打开的标签",-1,&area,DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX);
+        SelectObject(dc,font);
+        EndPaint(hwnd,&paint);
+        return 0;
+    }
+    if (palette_tabs && msg==WM_DRAWITEM && wp==PALETTE_LIST) {
+        paint_tab_search_row((const DRAWITEMSTRUCT *)lp);
+        return TRUE;
     }
     if (msg==WM_DESTROY) {
         palette=NULL; palette_input=NULL; palette_list=NULL;
+        palette_previous_focus=NULL; palette_tabs=false;
         return 0;
     }
     if (msg==WM_CTLCOLOREDIT || msg==WM_CTLCOLORLISTBOX) {
@@ -1190,34 +1291,64 @@ static LRESULT CALLBACK palette_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) 
     }
     return DefWindowProcW(hwnd,msg,wp,lp);
 }
-static void open_palette(void) {
-    if (palette) { SetFocus(palette_input); return; }
+static bool open_palette_mode(bool tabs_only) {
+    HWND foreground=GetForegroundWindow();
+    const bool activate=!tabs_only || (foreground && (foreground==frame || foreground==palette));
+    if (palette && palette_tabs==tabs_only) {
+        if (activate) SetFocus(palette_input);
+        return true;
+    }
+    if (palette) close_palette(true);
     RECT owner;
     GetWindowRect(frame,&owner);
     int width=px(client_width()<740?450:540);
+    int height=px(312), x=owner.left+(owner.right-owner.left-width)/2, y=owner.top+px(62);
+    if (tabs_only) {
+        MONITORINFO monitor={.cbSize=sizeof(monitor)};
+        if (GetMonitorInfoW(MonitorFromWindow(frame,MONITOR_DEFAULTTONEAREST),&monitor)) {
+            const RECT work=monitor.rcWork;
+            width=min(px(440),work.right-work.left);
+            height=min(px(376),work.bottom-work.top);
+            x=max(work.left,min(owner.right-px(136)-width,work.right-width));
+            y=max(work.top,min(owner.top+px(48),work.bottom-height));
+        }
+        if (activate) palette_previous_focus=GetFocus();
+    }
+    palette_tabs=tabs_only;
     HINSTANCE instance=GetModuleHandleW(NULL);
-    palette=CreateWindowExW(WS_EX_TOOLWINDOW,L"MoonPalette",L"\u547d\u4ee4\u9762\u677f",
-        WS_POPUP|WS_CAPTION|WS_SYSMENU|WS_CLIPCHILDREN,
-        owner.left+(owner.right-owner.left-width)/2,owner.top+px(62),width,px(312),frame,NULL,instance,NULL);
-    if (!palette) return;
+    palette=CreateWindowExW(WS_EX_TOOLWINDOW,L"MoonPalette",tabs_only?L"搜索打开的标签":L"命令面板",
+        WS_POPUP|WS_CLIPCHILDREN|(tabs_only?WS_BORDER:WS_CAPTION|WS_SYSMENU),
+        x,y,width,height,frame,NULL,instance,NULL);
+    if (!palette) { palette_previous_focus=NULL; palette_tabs=false; return false; }
     palette_input=CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",NULL,WS_CHILD|WS_VISIBLE|WS_TABSTOP|ES_AUTOHSCROLL,
         0,0,0,0,palette,(HMENU)PALETTE_INPUT,instance,NULL);
-    palette_list=CreateWindowExW(WS_EX_CLIENTEDGE,L"LISTBOX",NULL,
-        WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_TABSTOP|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,
+    palette_list=CreateWindowExW(tabs_only?0:WS_EX_CLIENTEDGE,L"LISTBOX",NULL,
+        WS_CHILD|WS_VISIBLE|WS_VSCROLL|WS_TABSTOP|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT|
+        (tabs_only?LBS_OWNERDRAWFIXED|LBS_HASSTRINGS:0),
         0,0,0,0,palette,(HMENU)PALETTE_LIST,instance,NULL);
-    if (!palette_input || !palette_list) { DestroyWindow(palette); return; }
+    if (!palette_input || !palette_list) { close_palette(tabs_only); return false; }
     SendMessageW(palette_input,WM_SETFONT,(WPARAM)edit_font,TRUE);
     SendMessageW(palette_list,WM_SETFONT,(WPARAM)edit_font,TRUE);
     SendMessageW(palette_input,EM_SETLIMITTEXT,4095,0);
-    SendMessageW(palette_input,EM_SETCUEBANNER,TRUE,(LPARAM)L"\u641c\u7d22\u6807\u7b7e\u9875\u3001\u547d\u4ee4\uff0c\u6216\u8f93\u5165\u7f51\u5740");
+    SendMessageW(palette_input,EM_SETCUEBANNER,TRUE,(LPARAM)(tabs_only?L"搜索标题或网址":L"搜索标签页、命令，或输入网址"));
+    if (tabs_only) {
+        SendMessageW(palette_list,LB_SETITEMHEIGHT,0,px(46));
+        SetWindowSubclass(palette_list,tab_search_list,1,0);
+    }
     SendMessageW(palette,WM_SIZE,0,0);
     filter_palette();
-    ShowWindow(palette,SW_SHOW);
-    SetFocus(palette_input);
+    ShowWindow(palette,activate?SW_SHOW:SW_SHOWNOACTIVATE);
+    if (activate) SetFocus(palette_input);
+    return true;
+}
+static void open_palette(void) { open_palette_mode(false); }
+bool moon_shell_tab_search(void) {
+    moon_suggest_hide();
+    return open_palette_mode(true);
 }
 static bool palette_key(const MSG *msg) {
     switch(msg->wParam) {
-        case VK_ESCAPE: DestroyWindow(palette); return true;
+        case VK_ESCAPE: close_palette(palette_tabs); return true;
         case VK_RETURN: run_palette(); return true;
         case VK_UP: case VK_DOWN: {
             LRESULT selected=SendMessageW(palette_list,LB_GETCURSEL,0,0);
@@ -1720,8 +1851,8 @@ static bool keyboard(MSG *msg) {
     if (alt && msg->wParam == VK_RIGHT) { moon_command(MOON_FORWARD,0,NULL); return true; }
     if (modifiers==MOD_ALT && msg->wParam=='I' && !moon_ime_composing(msg->hwnd))
         return repeated || site_menu(frame);
-    const bool devtools_chord=modifiers==(MOD_CONTROL|MOD_SHIFT) && (msg->wParam=='I' || msg->wParam=='C');
-    if (in_content && !in_page && msg->wParam!=VK_F11 && msg->wParam!=VK_F12 && !devtools_chord) return false;
+    const bool shell_chord=modifiers==(MOD_CONTROL|MOD_SHIFT) && (msg->wParam=='I' || msg->wParam=='C' || msg->wParam=='A');
+    if (in_content && !in_page && msg->wParam!=VK_F11 && msg->wParam!=VK_F12 && !shell_chord) return false;
     if ((ctrl || alt || msg->wParam==VK_F9 || msg->wParam==VK_F11 || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
         moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
     return false;

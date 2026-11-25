@@ -24,6 +24,8 @@ PAYLOAD = b"Moon Browser download fixture\n"
 _pcm = bytes(44100)
 AUTOPLAY_AUDIO = struct.pack("<4sI4s4sIHHIIHH4sI",b"RIFF",36+len(_pcm),b"WAVE",b"fmt ",16,
                              1,2,44100,176400,4,16,b"data",len(_pcm))+_pcm
+# Generated AAC-LC 440 Hz track for WebKit's MP4 decoder, with no video.
+AUTOPLAY_AUDIO_MP4 = Path(__file__).with_name("autoplay-audible.m4a")
 # Generated black 32x32 H.264 baseline video, one second at 10 fps, without audio.
 AUTOPLAY_VIDEO = Path(__file__).with_name("autoplay-silent.mp4")
 CHECKS = (
@@ -80,6 +82,12 @@ class Fixture(BaseHTTPRequestHandler):
     reload_asset_requests = []
     reload_asset_observed = []
     closed_submissions = 0
+
+    def do_HEAD(self):
+        if urlsplit(self.path).path in ("/autoplay.wav", "/autoplay.mp4", "/autoplay.m4a"):
+            self.do_GET()
+        else:
+            self.send_error(501)
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
@@ -202,8 +210,13 @@ class Fixture(BaseHTTPRequestHandler):
         elif path.startswith("/autoplay-report/"):
             type(self).autoplay_reports[path.removeprefix("/autoplay-report/")] = urlsplit(self.path).query
             data, content_type = b"ok", "text/plain"
-        elif path in ("/autoplay.wav","/autoplay.mp4"):
-            data, content_type = (AUTOPLAY_AUDIO,"audio/wav") if path.endswith(".wav") else (AUTOPLAY_VIDEO.read_bytes(),"video/mp4")
+        elif path in ("/autoplay.wav", "/autoplay.mp4", "/autoplay.m4a"):
+            if path.endswith(".wav"):
+                data, content_type = AUTOPLAY_AUDIO, "audio/wav"
+            elif path.endswith(".m4a"):
+                data, content_type = AUTOPLAY_AUDIO_MP4.read_bytes(), "audio/mp4"
+            else:
+                data, content_type = AUTOPLAY_VIDEO.read_bytes(), "video/mp4"
             first, last = 0, len(data)-1
             requested = re.fullmatch(r"bytes=(\d+)-(\d*)",self.headers.get("Range",""))
             if requested:
@@ -223,11 +236,13 @@ class Fixture(BaseHTTPRequestHandler):
             if requested:
                 self.send_header("Content-Range",f"bytes {first}-{last}/{len(data)}")
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
             return
         elif path == "/autoplay-redirect":
             self.send_response(302)
-            self.send_header("Location",f"http://127.0.0.1:{self.server.server_port}/page/autoplay-redirected")
+            retry = "-retry" if urlsplit(self.path).query == "retry" else ""
+            self.send_header("Location",f"http://127.0.0.1:{self.server.server_port}/page/autoplay-redirected{retry}")
             self.end_headers()
             return
         elif path.startswith("/reading-layout/"):
@@ -275,9 +290,10 @@ class Fixture(BaseHTTPRequestHandler):
                 extension = "mp4" if media=="video" else "wav"
                 source = f"/autoplay.{extension}?{token}"
                 if token.endswith("-retry"):
-                    contents = AUTOPLAY_VIDEO.read_bytes() if silent else AUTOPLAY_AUDIO
-                    mime = "video/mp4" if silent else "audio/wav"
-                    source = f"data:{mime};base64,{b64encode(contents).decode('ascii')}"
+                    if silent:
+                        source = f"data:video/mp4;base64,{b64encode(AUTOPLAY_VIDEO.read_bytes()).decode('ascii')}"
+                    else:
+                        source = f"/autoplay.m4a?{token}"
                 demo = (f'<{media} controls src="{source}"></{media}><script>'
                         f'const element=document.querySelector("{media}");'
                         f'const result={json.dumps(token)};element.muted={json.dumps(silent)};'
@@ -2900,11 +2916,11 @@ def run_win32(exe, base, root):
             print("popup_policy=ok default_block=ok open_once=ok user_clicked_link=ok saved_origin_exception=ok block_and_reset=ok allow_confirmation=ok",flush=True)
             if autoplay_settings:
                 def playback(origin, stage, url=None):
-                    # A media decoder stall is inconclusive. A fresh URL keeps late reports separate.
-                    attempts = (stage,stage+"-retry") if url is None else (stage,)
+                    # Retry inconclusive media results in a fresh document with another source.
+                    attempts = (stage,stage+"-retry")
                     outcome = None
                     for probe in attempts:
-                        address = url or origin + "/page/autoplay-" + probe
+                        address = origin + "/page/autoplay-" + probe if url is None else url + ("?retry" if probe!=stage else "")
                         set_control(edit,address)
                         user.PostMessageW(edit,0x0100,0x0D,1)
                         try:
@@ -2914,7 +2930,7 @@ def run_win32(exe, base, root):
                             if probe == attempts[-1]:
                                 raise
                             continue
-                        if not outcome.startswith("timeout-"):
+                        if not outcome.startswith("timeout-") and outcome!="NotSupportedError":
                             if url is None:
                                 wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(address,)),
                                          f"Autoplay probe did not finish navigating: {probe}",15)
@@ -3787,9 +3803,41 @@ def run_win32(exe, base, root):
                     wait_for(lambda: read_address()==outside,"Session restore did not reactivate the ungrouped tab")
                 if "管理标签组" not in tab_menu(2):
                     raise RuntimeError("The group header was lost")
-                click(px(110),px(148+37*2))
-                click(px(110),px(148+37*3))
-                wait_for(lambda: read_address()==first_grouped,"Clicking the group header did not reveal its first tab")
+                tab_manifest=json.loads(tab_tools.with_name("plugin.json").read_text(encoding="utf-8"))
+                if any(command["id"]=="search" for command in tab_manifest["contributes"]["commands"]):
+                    invoke("搜索打开的标签")
+                    search_window=wait_for(lambda: owned_window("MoonPalette","搜索打开的标签"),"Tab search did not open")
+                    query=user.GetDlgItem(search_window,1003)
+                    results=user.GetDlgItem(search_window,1004)
+                    set_control(query,"不存在的标签测试")
+                    if user.SendMessageW(results,0x0199,0,0)!=0:  # LB_GETITEMDATA
+                        raise RuntimeError("An empty tab search still selected a tab")
+                    user.PostMessageW(query,0x0100,0x0D,1)
+                    sleep(0.15)
+                    if not user.IsWindow(search_window) or read_address()!=outside:
+                        raise RuntimeError("Enter on an empty search navigated the current tab")
+                    user.PostMessageW(query,0x0100,0x1B,1)
+                    wait_for(lambda: not user.IsWindow(search_window),"Escape did not dismiss tab search")
+                    invoke("搜索打开的标签")
+                    search_window=wait_for(lambda: owned_window("MoonPalette","搜索打开的标签"),"Could not reopen tab search")
+                    query=user.GetDlgItem(search_window,1003)
+                    results=user.GetDlgItem(search_window,1004)
+                    set_control(query,"MOON FIXTURE GROUP-FIRST")
+                    if user.SendMessageW(results,0x018B,0,0)!=1 or user.SendMessageW(results,0x0199,0,0)<=0:
+                        raise RuntimeError("Tab search did not match the title case-insensitively")
+                    set_control(query,urlsplit(first_grouped).path)
+                    if user.SendMessageW(results,0x018B,0,0)!=1 or user.SendMessageW(results,0x0199,0,0)<=0:
+                        raise RuntimeError("Tab search did not match the URL of a collapsed tab")
+                    user.PostMessageW(query,0x0100,0x0D,1)
+                    wait_for(lambda: not user.IsWindow(search_window) and read_address()==first_grouped,
+                             "Selecting a search result did not activate the collapsed tab")
+                    if "移出标签组" not in tab_menu(3):
+                        raise RuntimeError("Selecting a search result did not expand its group")
+                    print("tab_search_system_plugin=ok command=ok empty_result=ok escape=ok title=ok url=ok keyboard_selection=ok collapsed_group=ok",flush=True)
+                else:
+                    click(px(110),px(148+37*2))
+                    click(px(110),px(148+37*3))
+                    wait_for(lambda: read_address()==first_grouped,"Clicking the group header did not reveal its first tab")
                 tab_menu(3,"移出标签组")
                 sleep(0.35)
                 if read_address()!=first_grouped or "移出标签组" in tab_menu(4):

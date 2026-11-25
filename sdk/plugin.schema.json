@@ -29,7 +29,7 @@
         "commands": {
           "type": "array",
           "minItems": 1,
-          "maxItems": 12,
+          "maxItems": 13,
           "contains": { "required": ["tabDrop"], "properties": { "tabDrop": { "const": true } } },
           "minContains": 0,
           "maxContains": 1,
@@ -57,7 +57,7 @@
               "linkMenu": { "enum": ["open", "copy", "bookmark"] },
               "inspectElementMenu": { "type": "string", "minLength": 1, "maxLength": 255 },
               "tabDrop": { "type": "boolean", "default": false },
-              "shortcut": { "enum": ["Ctrl+H", "F9", "F11", "F12", "Ctrl+Shift+C", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+Shift+T", "Ctrl+Shift+Delete", "Ctrl+Shift+M", "Ctrl+Shift+N", "Ctrl+U", "Ctrl+S", "Ctrl+Shift+B", "Ctrl+Shift+R", "Ctrl+B", "Ctrl+Shift+L"] }
+              "shortcut": { "enum": ["Ctrl+H", "F9", "F11", "F12", "Ctrl+Shift+C", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+Shift+T", "Ctrl+Shift+Delete", "Ctrl+Shift+M", "Ctrl+Shift+N", "Ctrl+U", "Ctrl+S", "Ctrl+Shift+B", "Ctrl+Shift+R", "Ctrl+B", "Ctrl+Shift+L", "Ctrl+Shift+A"] }
             }
           }
         }
