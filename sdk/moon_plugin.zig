@@ -398,7 +398,13 @@ pub const SiteCookieEntry = struct {
     removable: bool = false,
 };
 pub const SiteCookiePage = struct { available: bool, entries: []const SiteCookieEntry, more: bool, generation: u64 };
-pub const SiteCookieQuery = struct { generation: u64, query: []const u8 = "", offset: u32 = 0 };
+pub const SiteCookieQuery = struct {
+    generation: u64,
+    query: []const u8 = "",
+    offset: u32 = 0,
+    sort: enum { name, domain, path, expires, size } = .name,
+    descending: bool = false,
+};
 pub const SiteCookieSearchPage = struct {
     available: bool,
     generation: u64,

@@ -592,7 +592,7 @@ pub fn status(tab: u64, id: []const u8, writable: bool, cookie_details: bool, ca
 
 pub fn cookieDetails(tab: u64, id: []const u8, generation: u64, url: []const u8) ?sdk.SiteCookiePage {
     if (!owns(tab,id) or received != .ready or generation != sequence) return null;
-    if (cookies == null) cookies = cookie_store.list(url,"",0) catch
+    if (cookies == null) cookies = cookie_store.list(url,.{ .generation=generation }) catch
         return .{ .available=false,.entries=&.{},.more=false,.generation=sequence };
     if (cookies) |*snapshot| return .{
         .available=true,.entries=snapshot.entries[0..snapshot.len],.more=snapshot.more,.generation=sequence,
@@ -604,7 +604,7 @@ pub fn cookiePage(tab: u64, id: []const u8, target: sdk.SiteCookieQuery, url: []
     if (!owns(tab,id) or received != .ready or target.generation != sequence) return null;
     dropCookiePage();
     var response: sdk.SiteCookieSearchPage = .{ .available=false,.generation=sequence,.offset=target.offset };
-    cookie_page = cookie_store.list(url,target.query,target.offset) catch return response;
+    cookie_page = cookie_store.list(url,target) catch return response;
     cookie_serial+=1;
     const snapshot = &cookie_page.?;
     response.available=true;

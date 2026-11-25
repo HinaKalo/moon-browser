@@ -82,17 +82,26 @@ fn canRemove(name: []const u8, domain: []const u8, path: []const u8) bool {
     return true;
 }
 
-pub fn list(url: []const u8, term: []const u8, offset: u32) !Snapshot {
+pub fn list(url: []const u8, options: sdk.SiteCookieQuery) !Snapshot {
     const conn = try open();
     defer db.close(conn);
-    const query = try db.prepare(conn,"SELECT rowid,name,domain,path,expires,session,httponly,secure," ++
+    const order = switch (options.sort) {
+        .name => "name",
+        .domain => "domain",
+        .path => "path",
+        .expires => "CASE WHEN session=1 THEN 1 ELSE 0 END, expires",
+        .size => "length(CAST(value AS BLOB))",
+    };
+    var sql: [1024]u8 = undefined;
+    const statement = try std.fmt.bufPrintSentinel(&sql,"SELECT rowid,name,domain,path,expires,session,httponly,secure," ++
         "length(CAST(value AS BLOB)),CAST(lastupdated AS TEXT)" ++ scope ++
         " AND (?5='' OR instr(lower(name),lower(?5))>0 OR instr(lower(domain),lower(?5))>0 OR instr(lower(path),lower(?5))>0)" ++
-        " ORDER BY name,domain,path LIMIT 33 OFFSET ?6");
+        " ORDER BY {s} {s},name,domain,path,rowid LIMIT 33 OFFSET ?6",.{order,if (options.descending) "DESC" else "ASC"},0);
+    const query = try db.prepare(conn,statement);
     defer _ = db.sqlite.sqlite3_finalize(query);
     try bindScope(query,url);
-    try db.bindText(query,5,term);
-    try bindInt(query,6,offset);
+    try db.bindText(query,5,options.query);
+    try bindInt(query,6,options.offset);
     var snapshot: Snapshot = .{ .arena=std.heap.ArenaAllocator.init(std.heap.page_allocator) };
     errdefer snapshot.deinit();
     const allocator = snapshot.arena.allocator();

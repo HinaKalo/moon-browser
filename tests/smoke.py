@@ -1933,6 +1933,31 @@ def run_win32(exe, base, root):
             'show.click();await wait(()=>!hidden.hidden&&hidden.textContent==="private-value","reveal HttpOnly value");'
             'show.click();if(!hidden.hidden||hidden.textContent)throw Error("HttpOnly value remains in DOM");'
         ) if "siteData.cookieDetails" in manifest["permissions"] else ""
+        cookie_sort_contract = r'''
+            const previousOrder=page;
+            const previousRow={id:page.entries[0].id,generation:page.generation,pageRevision:page.pageRevision};
+            el("cookie-direction").click();
+            await wait(()=>page?.entries[0]?.name==="zz-cookie-37"&&page.next,"Cookie descending order before pagination");
+            if(page.pageRevision===previousOrder.pageRevision||
+               await host("siteData.cookieValue",previousRow).then(()=>true,e=>e.message!=="NOT_FOUND"))
+                throw Error("An old Cookie entry survived sorting");
+            const boundary=page.entries.at(-1).name;
+            el("storage-next").click();
+            await wait(()=>page?.offset>0&&page.entries.length,"Sorted Cookie second page");
+            if(page.entries[0].name>boundary)throw Error("Cookie sort changed at the page boundary");
+            el("cookie-sort").value="expires";
+            el("cookie-sort").dispatchEvent(new Event("change"));
+            await wait(()=>page?.offset===0&&page.entries[0]?.name==="moon-persistent","Cookie sort reset paging and put expiry before sessions");
+            let sessionSeen=false;
+            for (const item of page.entries) {
+                if(item.expiresAt===null) sessionSeen=true;
+                else if(sessionSeen)throw Error("Dated Cookie followed session Cookies");
+            }
+            el("cookie-sort").value="name";
+            el("cookie-direction").click();
+            await wait(()=>page?.offset===0&&page.entries.some(item=>item.name==="moon-visible")&&
+                !page.entries.some(item=>item.name==="zz-cookie-37"),"Cookie sort reset");
+        ''' if 'id="cookie-sort"' in page else ""
         cookie_paging_contract = (
             'const findCookie=name=>[...el("results").querySelectorAll("li")].find(row=>row.querySelector("code").textContent===name);'
             'const filterCookie=query=>{el("search").value=query;el("search").dispatchEvent(new Event("input"));};'
@@ -2223,7 +2248,7 @@ def run_win32(exe, base, root):
             'if(data.state==="unavailable"||data.state==="stale")throw Error("snapshot "+data.state+": "+data.failure);'
             'return data.state==="ready"&&data;},"snapshot ready");'
             f'if(result.origin!=="{base}")throw Error("origin");'
-            + cookie_contract + cookie_paging_contract + cookie_removal_contract +
+            + cookie_contract + cookie_sort_contract + cookie_paging_contract + cookie_removal_contract +
             'for(const [section,key,secret] of [["cookies","moon-visible","cookie-value"],'
             '["local","moon-local","local-value"],["session","moon-session","session-value"]]){'
             'document.querySelector("[data-group="+section+"]").click();'
@@ -4572,10 +4597,11 @@ def run_win32(exe, base, root):
             click(px(285),px(24))
             wait_for(lambda: read_address()==before and Fixture.closed_loaded.get("closed-first",0)>back_count,
                      "Restored tab lost its Back entry")
+            forward_visits=len(history_rows("SELECT id FROM visits WHERE url=?",(after,)))
             click(px(319),px(24))
             wait_for(lambda: read_address()==after and Fixture.closed_loaded.get("closed-second",0)>previous+1,
                      "Restored tab lost its Forward entry")
-            wait_for(lambda: len(history_rows("SELECT id FROM visits WHERE url=?",(after,)))>=2,
+            wait_for(lambda: len(history_rows("SELECT id FROM visits WHERE url=?",(after,)))>forward_visits,
                      "The restored forward page did not finish")
             close_first()
             closed_page("closed-item")

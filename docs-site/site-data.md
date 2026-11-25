@@ -8,6 +8,8 @@
 
 从 0.1.0-preview.84 起，普通窗口的 Cookie 列表可删除选中的网页可写 Cookie。确认框会显示名称、域和路径。同名、不同路径的 Cookie 可分别处理。HttpOnly Cookie 可按需查看，整站清除时一并移除。
 
+从 0.1.0-preview.93 起，普通窗口可按名称、域、路径、到期时间或大小排序。支持升序和降序，排序覆盖全部筛选结果，再按页显示。按到期时间排序时，会话 Cookie 始终排在有到期时间的条目之后。
+
 从 0.1.0-preview.73 起，在普通窗口的 Cookie 页可选「清除站点 Cookie…」。确认后，WebKit 清除同一注册域及其子域的 Cookie，包含 HttpOnly Cookie 和其他路径下的 Cookie。其他站点和 Local Storage、Session Storage、IndexedDB、Cache Storage 保留。清除登录 Cookie 后可能需要重新登录。
 
 从 0.1.0-preview.40 起，在 Local Storage 或 Session Storage 可选择「新增条目」和「清空此类」。新增同名条目会报告冲突。清空时，系统对话框会显示来源和类别。确认会移除该类别中的全部条目，包含筛选结果之外和其他页的条目。
@@ -37,6 +39,8 @@
 Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限。`siteData.status` 的 `cookieDetails` 字段表示该窗口允许尝试读取。当前活动且已绑定的面板调用 `siteData.cookieDetails({ generation })`，返回 `{ available, entries, more, generation }`。条目包含 `id`、`name`、`domain`、`path`、`expiresAt`、`httpOnly`、`secure`、`length`、`shortened` 和 `metadataShortened`。`expiresAt` 是 Unix 毫秒时间戳，会话 Cookie 传 `null`。`available: false` 时可调用 `siteData.list({ group: "cookies" })` 显示网页可读的 Cookie。通过 `siteData.cookieValue({ id, generation })` 单独读取一个预览值。面板切换到其他标签、网页导航、权限撤销或 Cookie 更新后，旧条目无法继续读取。
 
 `siteData.cookiePage({ generation, query?, offset? })` 同样需要 `siteData.read` 和 `siteData.cookieDetails`。仅在当前活动且绑定原网页的面板中可用。可按名称、域和路径做子串匹配，ASCII 大小写等同，`query` 最多 512 UTF-8 字节，`offset` 默认 0。返回 `{ available, generation, offset, pageRevision, entries, next }`。每页条数受预览字节上限限制，继续翻页时传入 `next`。读取单条值调用 `siteData.cookieValue({ id, generation, pageRevision })`。新查询、翻页、刷新、切换到其他标签和原网页导航均会使旧页失效。
+
+分页查询还接受 `sort` 和 `descending`。有效排序字段为 `name`、`domain`、`path`、`expires` 和 `size`，默认按名称升序。更换排序时从 `offset: 0` 重新读取，上一页的 `pageRevision` 随之失效。
 
 `siteData.removeCookie({ id, generation, pageRevision })` 需要 `siteData.read`、`siteData.cookieDetails` 和 `siteData.cookieClear`。当前快照可操作时，`siteData.status` 返回 `cookieRemove: true`，普通 Cookie 条目可用 `removable` 判断是否可删。使用当前分页的条目 ID。用户确认后，WebKit 通过已绑定页面按名称、域和路径删除。返回 `started` 后轮询 `siteData.status`，新的 `generation` 中 `mutation: "removed"` 表示已确认删除，`mutation: "failed"` 表示删除未确认。
 
