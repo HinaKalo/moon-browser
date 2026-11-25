@@ -870,8 +870,9 @@ def run_win32(exe, base, root):
     appearance = exe.parent / "plugins" / "appearance" / "MoonAppearance.exe"
     browser_settings = exe.parent / "plugins" / "settings" / "MoonSettings.exe"
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
-    history_selection = history.exists() and 'id="remove-selected"' in (
-        history.parent / "history.html").read_text(encoding="utf-8")
+    history_page = (history.parent / "history.html").read_text(encoding="utf-8") if history.exists() else ""
+    history_selection = 'id="remove-selected"' in history_page
+    history_sites = 'id="by-site"' in history_page
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
     bookmark_transfer = bookmarks.exists() and '"bookmarks.transfer"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
@@ -1133,7 +1134,7 @@ def run_win32(exe, base, root):
                            (["siteSettings.sound"] if sound_settings else []),
             "contributes": {"commands": [{"id": "open", "label": "History fixture"}]},
         }), encoding="utf-8")
-        bundled_page = (history.parent / "history.html").read_text(encoding="utf-8")
+        bundled_page = history_page
         selection_contract = r'''
             const list = async (query = {}) => {
                 const rows = [];
@@ -1199,6 +1200,56 @@ def run_win32(exe, base, root):
             if ((await call('history.removeMany', {ids: selected})).result?.removed !== 0) throw Error('retry stale removal');
             setRange('all');
         ''' if history_selection else ''
+        sites_contract = r'''
+            const siteQuery = {query: 'history-sites-'};
+            const firstSites = (await call('history.sites',siteQuery)).result;
+            const nextSites = (await call('history.sites',{...siteQuery,cursor:firstSites.next})).result;
+            const allSites = [...firstSites.sites,...nextSites.sites];
+            const baseSite = 'https://group.history.test';
+            if (firstSites.sites.length !== 30 || nextSites.next !== null || allSites.length !== 35 ||
+                new Set(allSites.map(site=>site.origin)).size !== 35 ||
+                allSites[0].origin !== baseSite+':8443' || allSites.find(site=>site.origin===baseSite)?.visits !== 3 ||
+                allSites.find(site=>site.origin==='http://group.history.test')?.visits !== 1)
+                throw Error('history site grouping or cursor');
+            if ((await call('history.sites',{cursor:{before:5,through:4}})).error?.code !== -32602 ||
+                (await call('history.list',{origin:'file:///invalid'})).error?.code !== -32602)
+                throw Error('invalid history site filter');
+            const scoped = (await call('history.list',{...siteQuery,origin:baseSite+'/ignored',through:firstSites.through})).result;
+            if (scoped.visits.length !== 3 || scoped.visits.some(visit=>new URL(visit.url).origin!==baseSite) ||
+                (await call('history.list',{...siteQuery,origin:baseSite,through:row.id})).result.visits.length)
+                throw Error('site-specific history response');
+            const bySite = document.getElementById('by-site');
+            const siteQueryInput = document.getElementById('query');
+            const siteRange = document.getElementById('range');
+            const activeSites = () => [...document.querySelectorAll('#site-results button[data-origin]')];
+            siteQueryInput.value = siteQuery.query;
+            bySite.click();
+            await waitFor(()=>bySite.getAttribute('aria-pressed')==='true' && activeSites().length===30);
+            document.getElementById('more').click();
+            await waitFor(()=>activeSites().length===35);
+            const olderSite = activeSites().at(-1);
+            olderSite.click();
+            await waitFor(()=>document.getElementById('site-name').textContent===olderSite.dataset.origin &&
+                              document.querySelectorAll('#results li').length===1);
+            document.getElementById('site-back').click();
+            await waitFor(()=>activeSites().length===35 && document.activeElement===olderSite);
+            siteRange.value = 'yesterday';
+            siteRange.dispatchEvent(new Event('change'));
+            const recent = await waitFor(()=>activeSites().length===1 && activeSites()[0]);
+            if (recent.dataset.origin!==baseSite || !recent.innerText.includes('1 次访问'))
+                throw Error('site view date filter');
+            recent.click();
+            await waitFor(()=>document.querySelectorAll('#results li').length===1 &&
+                              document.getElementById('site-name').textContent===baseSite);
+            if (!document.querySelector('#results li').innerText.includes('history-sites-yesterday'))
+                throw Error('incorrect site visit');
+            document.getElementById('site-back').click();
+            await waitFor(()=>activeSites().length===1 && document.activeElement===activeSites()[0]);
+            if (siteQueryInput.value!==siteQuery.query || siteRange.value!=='yesterday')
+                throw Error('site view lost filters navigating back');
+            siteRange.value = 'all';
+            document.getElementById('by-date').click();
+        ''' if history_sites else ''
         contract = (
             '<script>(async()=>{'
             'const api=window.webkit.messageHandlers;let id=0;'
@@ -1228,6 +1279,7 @@ def run_win32(exe, base, root):
             'if(excluded.result?.visits?.length!==0)throw new Error("cursor");'
             'if((await call("tabs.getActive")).error?.code!==-32601)throw new Error("scope");'
             + selection_contract +
+            sites_contract +
             'const search=document.getElementById("query");'
             'search.value="HISTORY-contract";search.dispatchEvent(new Event("input"));'
             'const link=await waitFor(()=>document.querySelector("#results li a[href$=\'/page/history-contract\']"));'
@@ -2889,6 +2941,20 @@ def run_win32(exe, base, root):
                         (f"history-selection-{label}", base + "/page/history-selection-" + label,
                          int(visited.timestamp()*1000)) for label, visited in samples
                     ))
+            if history_sites:
+                now = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+                site_rows = [(f"site-{i:02}", f"https://site-{i:02}.history.test/article", now) for i in range(32)]
+                site_rows += [
+                    ("first", "https://group.history.test/article", now),
+                    ("yesterday", "https://GROUP.history.test:443/older", now - timedelta(days=1)),
+                    ("latest", "https://group.history.test/news", now),
+                    ("http", "http://group.history.test/news", now),
+                    ("alternate-port", "https://group.history.test:8443/news", now),
+                ]
+                with closing(sqlite3.connect(database, timeout=0.5)) as db, db:
+                    db.executemany("INSERT INTO visits(title,url,visited_at) VALUES (?,?,?)", (
+                        ("history-sites-"+label, url, int(visited.timestamp()*1000)) for label,url,visited in site_rows
+                    ))
             config = profile / f'extension-{sha256(b"moon.history-fixture").hexdigest()}.json'
             set_control(edit, "extension://moon.history-fixture/history.html")
             user.PostMessageW(edit, 0x0100, 0x0D, 1)
@@ -2903,6 +2969,8 @@ def run_win32(exe, base, root):
             print("history_system_plugin=ok history_page_contract=ok", flush=True)
             if history_selection:
                 print("history_selection=ok local_time_ranges=ok paging=ok cancel=ok exact_removal=ok invalid_batch_atomic=ok", flush=True)
+            if history_sites:
+                print("history_sites=ok fast_switch=ok exact_origin=ok counts=ok pagination=ok filter_retained=ok", flush=True)
         def navigate_reading(url):
             set_control(edit,url)
             user.PostMessageW(edit,0x0100,0x0D,1)

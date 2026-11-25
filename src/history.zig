@@ -1,6 +1,7 @@
 const std = @import("std");
 const native = @import("native");
 const sdk = @import("moon_plugin");
+const origins = @import("popup_policy.zig");
 
 const db_api = @import("profile_db.zig");
 const sqlite = &db_api.sqlite;
@@ -75,23 +76,33 @@ pub fn updateTitle(id: u32, url: []const u8, title: []const u8) void {
     _ = sqlite.sqlite3_step(statement);
 }
 
-pub fn list(allocator: std.mem.Allocator, options: sdk.HistorySearch, buffer: *[30]sdk.HistoryVisit) !sdk.HistoryPage {
-    if (options.query.len > 256) return error.InvalidParams;
-    const from = if (options.from) |time| std.math.cast(i64,time) orelse return error.InvalidParams else std.math.minInt(i64);
-    const until = if (options.until) |time| std.math.cast(i64,time) orelse return error.InvalidParams else -1;
+const no_cursor = @as(i64,std.math.maxInt(u32))+1;
+
+fn search(query: []const u8, start: ?u64, stop: ?u64, before: i64) !*db_api.Statement {
+    if (query.len > 256) return error.InvalidParams;
+    const from = if (start) |time| std.math.cast(i64,time) orelse return error.InvalidParams else std.math.minInt(i64);
+    const until = if (stop) |time| std.math.cast(i64,time) orelse return error.InvalidParams else -1;
     if (until>=0 and from>=until) return error.InvalidParams;
     const db = try connection();
     const statement = try prepare(db,
         \\SELECT id,title,url,visited_at FROM visits
         \\WHERE id > 0 AND id < ?1 AND (instr(lower(title),lower(?2)) OR instr(lower(url),lower(?2)))
         \\  AND visited_at >= ?3 AND (?4 < 0 OR visited_at < ?4)
-        \\ORDER BY id DESC LIMIT 31
+        \\ORDER BY id DESC
     );
-    defer _ = sqlite.sqlite3_finalize(statement);
-    const end: i64 = if (options.before) |visit| visit else @as(i64,std.math.maxInt(u32))+1;
-    if (sqlite.sqlite3_bind_int64(statement,1,end) != ok or sqlite.sqlite3_bind_int64(statement,3,from)!=ok or
+    errdefer _ = sqlite.sqlite3_finalize(statement);
+    if (sqlite.sqlite3_bind_int64(statement,1,before) != ok or sqlite.sqlite3_bind_int64(statement,3,from)!=ok or
         sqlite.sqlite3_bind_int64(statement,4,until)!=ok) return error.IOError;
-    try bindText(statement,2,options.query);
+    try bindText(statement,2,query);
+    return statement;
+}
+
+pub fn list(allocator: std.mem.Allocator, options: sdk.HistorySearch, buffer: *[30]sdk.HistoryVisit) !sdk.HistoryPage {
+    const filter_origin = if (options.origin) |origin| origins.origin(origin) orelse return error.InvalidParams else null;
+    const upper: i64 = if (options.before) |visit| visit else no_cursor;
+    const through: i64 = if (options.through) |visit| @as(i64,visit)+1 else no_cursor;
+    const statement = try search(options.query,options.from,options.until,@min(upper,through));
+    defer _ = sqlite.sqlite3_finalize(statement);
     var remaining: usize = 24*1024;
     var length: usize = 0;
     var before: ?u32 = null;
@@ -102,6 +113,10 @@ pub fn list(allocator: std.mem.Allocator, options: sdk.HistorySearch, buffer: *[
         const title = try columnText(statement,1);
         const url = try columnText(statement,2);
         if (title.len > 511 or !validURL(url)) continue;
+        if (filter_origin) |wanted| {
+            const current = origins.origin(url) orelse continue;
+            if (!std.mem.eql(u8,std.mem.sliceTo(&wanted,0),std.mem.sliceTo(&current,0))) continue;
+        }
         const max_bytes = 2*url.len + 6*title.len + 100;
         if (length == buffer.len or max_bytes > remaining) {
             before = buffer[length-1].id;
@@ -117,6 +132,53 @@ pub fn list(allocator: std.mem.Allocator, options: sdk.HistorySearch, buffer: *[
         remaining -= max_bytes;
     }
     return .{ .visits=buffer[0..length],.next=before };
+}
+
+pub fn sites(allocator: std.mem.Allocator, options: sdk.HistorySiteSearch, buffer: *[30]sdk.HistorySite) !sdk.HistorySitePage {
+    if (options.cursor) |cursor| {
+        if (cursor.before==0 or cursor.before>cursor.through) return error.InvalidParams;
+    }
+    const before: i64 = if (options.cursor) |cursor| cursor.before else no_cursor;
+    const through: i64 = if (options.cursor) |cursor| @as(i64,cursor.through)+1 else no_cursor;
+    const statement = try search(options.query,options.from,options.until,through);
+    defer _ = sqlite.sqlite3_finalize(statement);
+    const Entry = struct { newest: u32, count: u32, visited_at: u64 };
+    var grouped: std.AutoArrayHashMapUnmanaged(origins.Origin,Entry) = .empty;
+    defer grouped.deinit(allocator);
+    var newest: ?u32 = if (options.cursor) |cursor| cursor.through else null;
+    while (true) {
+        const result = sqlite.sqlite3_step(statement);
+        if (result==done) break;
+        if (result!=row) return error.IOError;
+        const origin = origins.origin(try columnText(statement,2)) orelse continue;
+        const id: u32 = @intCast(sqlite.sqlite3_column_int64(statement,0));
+        if (newest==null) newest=id;
+        if (grouped.getPtr(origin)) |entry| {
+            entry.count+=1;
+        } else {
+            try grouped.put(allocator,origin,.{
+                .newest=id,.count=1,.visited_at=@intCast(@max(0,sqlite.sqlite3_column_int64(statement,3))),
+            });
+        }
+    }
+    var count: usize = 0;
+    var last: u32 = 0;
+    var next: ?sdk.HistorySiteCursor = null;
+    for (grouped.keys(),grouped.values()) |*origin,entry| {
+        if (entry.newest>=before) continue;
+        if (count==buffer.len) {
+            next=.{ .before=last,.through=newest.? };
+            break;
+        }
+        buffer[count]=.{
+            .origin=try allocator.dupe(u8,std.mem.sliceTo(origin,0)),
+            .visits=entry.count,
+            .lastVisitedAt=entry.visited_at,
+        };
+        last=entry.newest;
+        count+=1;
+    }
+    return .{ .sites=buffer[0..count],.through=newest,.next=next };
 }
 
 pub fn remove(id: u32) !void {

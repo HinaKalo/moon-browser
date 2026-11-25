@@ -42,6 +42,9 @@
   button:hover:not(:disabled) { background: var(--hover); }
   button:disabled { opacity: .55; cursor: default; }
   :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .views { display: flex; gap: 4px; margin-bottom: 14px; width: fit-content; padding: 3px; border: 1px solid var(--line); border-radius: 10px; }
+  .views button { border-color: transparent; background: transparent; padding: 5px 12px; }
+  .views button[aria-pressed=true] { background: var(--surface); border-color: var(--line); color: var(--accent); font-weight: 600; }
   #status, #feedback, #selection-count { color: var(--quiet); }
   #status:empty, #feedback:empty, #selection-count:empty { display: none; }
   #selection { align-items: center; margin-top: 12px; }
@@ -60,6 +63,13 @@
   .details small { color: var(--quiet); }
   li button { border-color: transparent; margin-right: 7px; color: var(--quiet); }
   #more { margin-top: 16px; }
+  .site-heading { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  [hidden] { display: none !important; }
+  .site-heading h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  #site-results { margin-top: 16px; }
+  .site-row { width: 100%; display: flex; align-items: center; gap: 14px; padding: 12px 14px; margin: 0; border: 0; text-align: left; color: var(--text); }
+  .site-row .details { flex: 1; }
+  .site-row small, .site-arrow { color: var(--quiet); }
   dialog { color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; width: min(400px, 90%); padding: 20px; }
   dialog::backdrop { background: #161a3360; }
   dialog h2 { margin-top: 0; font-size: 18px; }
@@ -69,6 +79,10 @@
 </style>
 <main>
   <h1>历史记录</h1>
+  <div class="views" role="group" aria-label="浏览历史视图">
+    <button type="button" id="by-date" aria-pressed="true">按日期</button>
+    <button type="button" id="by-site" aria-pressed="false">按网站</button>
+  </div>
   <div class="toolbar">
     <input id="query" type="search" placeholder="搜索标题或网址" aria-label="搜索历史记录" maxlength="64" autocomplete="off">
     <select id="range" aria-label="访问时间">
@@ -79,6 +93,10 @@
     </select>
     <button id="clear" disabled>清空记录</button>
   </div>
+  <div class="site-heading" id="site-heading" hidden>
+    <button type="button" id="site-back">返回网站列表</button>
+    <h2 id="site-name" tabindex="-1"></h2>
+  </div>
   <div class="toolbar" id="selection" hidden>
     <button type="button" id="select-displayed">选择已显示记录</button>
     <button type="button" id="remove-selected" disabled>移除所选…</button>
@@ -87,6 +105,7 @@
   <p id="status" role="status">正在读取历史记录…</p>
   <p id="feedback" role="status"></p>
   <div id="results"></div>
+  <ul id="site-results" aria-label="访问过的网站" hidden></ul>
   <button id="more" hidden>加载更多</button>
   <dialog id="confirm-clear" aria-labelledby="confirm-title">
     <h2 id="confirm-title">清空浏览历史？</h2>
@@ -112,6 +131,11 @@
   const removeSelected = document.getElementById('remove-selected');
   const selectionCount = document.getElementById('selection-count');
   const feedback = document.getElementById('feedback');
+  const byDateButton = document.getElementById('by-date');
+  const bySiteButton = document.getElementById('by-site');
+  const siteResults = document.getElementById('site-results');
+  const siteHeading = document.getElementById('site-heading');
+  const siteName = document.getElementById('site-name');
   const selectionLimit = 100;
   const selected = new Set();
   const dateFormat = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'long' });
@@ -123,6 +147,10 @@
   let range = {};
   let removal = null;
   let loading = false;
+  let bySite = false;
+  let currentSite = null;
+  let sitesThrough = null;
+  let siteOverview = null;
 
   async function host(method, params = {}) {
     const id = 'history:' + ++sequence;
@@ -142,7 +170,7 @@
   }
 
   function updateSelection() {
-    const choices = results.querySelectorAll('input[data-visit]');
+    const choices = results.hidden ? [] : results.querySelectorAll('input[data-visit]');
     selection.hidden = choices.length === 0;
     selectDisplayed.textContent = selected.size ? '取消选择' : '选择已显示记录';
     selectDisplayed.disabled = loading;
@@ -153,6 +181,46 @@
       choice.checked = selected.has(Number(choice.dataset.visit));
       choice.disabled = loading || (!choice.checked && selected.size === selectionLimit);
     }
+  }
+
+  function renderView() {
+    byDateButton.setAttribute('aria-pressed', String(!bySite));
+    bySiteButton.setAttribute('aria-pressed', String(bySite));
+    results.hidden = bySite && !currentSite;
+    siteResults.hidden = !results.hidden;
+    siteHeading.hidden = !currentSite;
+    siteName.textContent = currentSite || '';
+  }
+
+  function appendSite(site) {
+    const row = document.createElement('li');
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'site-row';
+    open.dataset.origin = site.origin;
+    const details = document.createElement('span');
+    details.className = 'details';
+    const origin = document.createElement('strong');
+    origin.textContent = site.origin;
+    origin.title = site.origin;
+    const summary = document.createElement('small');
+    const recent = new Date(site.lastVisitedAt);
+    summary.textContent = site.visits + ' 次访问 · 最近 ' + dateFormat.format(recent) + ' ' + timeFormat.format(recent);
+    details.append(origin, summary);
+    const arrow = document.createElement('span');
+    arrow.className = 'site-arrow';
+    arrow.setAttribute('aria-hidden', 'true');
+    arrow.textContent = '›';
+    open.append(details, arrow);
+    open.onclick = async () => {
+      currentSite = site.origin;
+      results.replaceChildren();
+      renderView();
+      await load();
+      if (currentSite === site.origin) siteName.focus();
+    };
+    row.append(open);
+    siteResults.append(row);
   }
 
   function append(visit) {
@@ -199,6 +267,7 @@
       remove.disabled = true;
       try {
         await host('history.remove', { id: visit.id });
+        siteOverview = null;
         const following = item.nextElementSibling?.dataset.visit;
         await load();
         (results.querySelector('li[data-visit="' + following + '"] a') ?? query).focus();
@@ -214,42 +283,88 @@
   let loadVersion = 0;
   async function load(appendMore = false) {
     const version = ++loadVersion;
+    const showSites = bySite && !currentSite;
+    const list = showSites ? siteResults : results;
     loading = true;
-    results.setAttribute('aria-busy', 'true');
+    list.setAttribute('aria-busy', 'true');
     if (!appendMore) selected.clear();
     updateSelection();
     more.disabled = true;
     try {
       const text = query.value.trim();
       if (!appendMore) range = timeRange();
-      const page = await host('history.list', { query: text, before: appendMore ? cursor : null, ...range });
+      const page = showSites ?
+        await host('history.sites', { query: text, cursor: appendMore ? cursor : null, ...range }) :
+        await host('history.list', {
+          query: text, before: appendMore ? cursor : null, origin: currentSite, through: currentSite ? sitesThrough : null, ...range
+        });
       if (version !== loadVersion) return;
       if (!appendMore) {
-        results.replaceChildren();
+        list.replaceChildren();
         lastGroup = null;
       }
-      page.visits.forEach(append);
+      if (showSites) {
+        sitesThrough = page.through;
+        page.sites.forEach(appendSite);
+        siteOverview = { filter: JSON.stringify([text, range]), cursor: page.next, through: page.through };
+      } else {
+        page.visits.forEach(append);
+      }
       cursor = page.next;
       more.hidden = cursor === null;
-      if (results.children.length) status.textContent = '';
-      else status.textContent = text || rangeInput.value !== 'all' ? '没有匹配的浏览记录。' : '浏览过的网页会显示在这里。';
-      if (!appendMore && !text && rangeInput.value === 'all') clear.disabled = page.visits.length === 0;
+      if (list.children.length) status.textContent = '';
+      else status.textContent = text || currentSite || rangeInput.value !== 'all' ? '没有匹配的浏览记录。' : '浏览过的网页会显示在这里。';
+      if (!appendMore && !text && !currentSite && rangeInput.value === 'all') clear.disabled = list.children.length === 0;
     } catch (error) {
       if (version !== loadVersion) return;
       clear.disabled = true;
       more.hidden = true;
-      results.replaceChildren();
+      list.replaceChildren();
+      if (showSites) siteOverview = null;
       selected.clear();
       status.textContent = error.message === 'PERMISSION_DENIED' ? '请在插件菜单允许管理浏览历史。' : '无法读取历史记录。';
     } finally {
+      if (version === loadVersion || list.hidden) list.removeAttribute('aria-busy');
       if (version === loadVersion) {
         loading = false;
-        results.removeAttribute('aria-busy');
         more.disabled = false;
         updateSelection();
       }
     }
   }
+  async function changeView(sites) {
+    const previousSite = currentSite;
+    if (bySite === sites && !currentSite) return;
+    const restore = sites && previousSite && siteOverview?.filter === JSON.stringify([query.value.trim(), timeRange()]);
+    bySite = sites;
+    currentSite = null;
+    results.replaceChildren();
+    status.textContent = '';
+    feedback.textContent = '';
+    clearTimeout(searchTimer);
+    renderView();
+    if (restore) {
+      ++loadVersion;
+      loading = false;
+      selected.clear();
+      cursor = siteOverview.cursor;
+      sitesThrough = siteOverview.through;
+      more.hidden = cursor === null;
+      more.disabled = false;
+      updateSelection();
+    } else {
+      siteResults.replaceChildren();
+      siteOverview = sitesThrough = null;
+      await load();
+    }
+    if (sites && previousSite && !currentSite) {
+      const previous = [...siteResults.querySelectorAll('button')].find(item => item.dataset.origin === previousSite);
+      (previous ?? bySiteButton).focus();
+    }
+  }
+  byDateButton.onclick = () => changeView(false);
+  bySiteButton.onclick = () => changeView(true);
+  document.getElementById('site-back').onclick = () => changeView(true);
   query.addEventListener('input', () => {
     feedback.textContent = '';
     selected.clear();
@@ -289,11 +404,16 @@
     try {
       if (removal) {
         const { removed } = await host('history.removeMany', { ids: removal });
+        siteOverview = null;
         feedback.textContent = removed ? `已移除 ${removed} 条记录。` : '所选记录已不存在。';
       } else {
         await host('history.clear');
         query.value = '';
         rangeInput.value = 'all';
+        currentSite = null;
+        sitesThrough = null;
+        siteOverview = null;
+        renderView();
       }
       confirm.close();
       await load();

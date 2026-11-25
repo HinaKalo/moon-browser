@@ -238,9 +238,25 @@ pub const HardReloadResult = enum(c_int) { started, unavailable, edited, resubmi
 pub const InspectorPlacement = enum(c_int) { docked, window, preferred };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
 pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
-pub const HistorySearch = struct { query: []const u8 = "", before: ?u32 = null, from: ?u64 = null, until: ?u64 = null };
+pub const HistorySearch = struct {
+    query: []const u8 = "",
+    before: ?u32 = null,
+    from: ?u64 = null,
+    until: ?u64 = null,
+    origin: ?[]const u8 = null,
+    through: ?u32 = null,
+};
 pub const history_selection_limit = 100;
 pub const HistoryPage = struct { visits: []const HistoryVisit, next: ?u32 };
+pub const HistorySiteCursor = struct { before: u32, through: u32 };
+pub const HistorySiteSearch = struct {
+    query: []const u8 = "",
+    from: ?u64 = null,
+    until: ?u64 = null,
+    cursor: ?HistorySiteCursor = null,
+};
+pub const HistorySite = struct { origin: []const u8, visits: u32, lastVisitedAt: u64 };
+pub const HistorySitePage = struct { sites: []const HistorySite, through: ?u32, next: ?HistorySiteCursor };
 pub const BookmarkInput = struct { title: []const u8, url: []const u8, folder: []const u8 = "" };
 pub const BookmarkEdit = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 = "" };
 pub const Bookmark = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 };
@@ -410,6 +426,7 @@ pub const Method = enum {
     @"ui.settings.list",
     @"ui.settings.open",
     @"history.list",
+    @"history.sites",
     @"history.remove",
     @"history.removeMany",
     @"history.clear",
