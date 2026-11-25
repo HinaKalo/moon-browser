@@ -64,8 +64,9 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteSettings.zoom.get` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ query?, offset? }`。返回 `{ currentOrigin, currentPercent, levels, rules, previous, next }`。分页偏移为空时表示该方向没有更多页面。 |
 | `siteSettings.zoom.set` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ origin, percent }`，比例取自 `levels`。返回规范化后的规则。设为 100 会删除该来源的例外。 |
 | `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
-| `history.list` | `history.manage` | 传入 `{ query?, before? }`。返回 `{ visits, next }`，每条访问记录为 `{ id, title, url, visitedAt }`。时间为 Unix 毫秒。使用 `next` 作为下一页的 `before`。 |
+| `history.list` | `history.manage` | 传入 `{ query?, before?, from?, until? }`。`from` 含边界，`until` 不含边界，均使用 Unix 毫秒。返回 `{ visits, next }`，每条为 `{ id, title, url, visitedAt }`。翻页时将 `next` 作为 `before`，沿用原有筛选条件。 |
 | `history.remove` | `history.manage` | 传入 `{ id }` 移除单条记录，成功返回 `null`。 |
+| `history.removeMany` | `history.manage` | 传入 `{ ids }`，在一次操作中移除 1 至 100 个访问 ID。返回 `{ removed }`，计入实际移除的记录。 |
 | `history.clear` | `history.manage` | 清空当前配置文件的浏览历史，成功返回 `null`。 |
 | `network.filter.status` | `network.filter` | 返回 `{ preferred, active, exceptions }`，分别表示该插件是否被选中、规则是否已加载、已暂停的域名。 |
 | `network.filter.setSite` | `network.filter` | 当前规则插件可传入 `{ host, enabled }`。`false` 暂停该域名及其子域名，`true` 恢复，成功返回 `null`。 |

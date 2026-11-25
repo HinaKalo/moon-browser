@@ -75,17 +75,22 @@ pub fn updateTitle(id: u32, url: []const u8, title: []const u8) void {
     _ = sqlite.sqlite3_step(statement);
 }
 
-pub fn list(allocator: std.mem.Allocator, options: sdk.HistoryQuery, buffer: *[30]sdk.HistoryVisit) !sdk.HistoryPage {
+pub fn list(allocator: std.mem.Allocator, options: sdk.HistorySearch, buffer: *[30]sdk.HistoryVisit) !sdk.HistoryPage {
     if (options.query.len > 256) return error.InvalidParams;
+    const from = if (options.from) |time| std.math.cast(i64,time) orelse return error.InvalidParams else std.math.minInt(i64);
+    const until = if (options.until) |time| std.math.cast(i64,time) orelse return error.InvalidParams else -1;
+    if (until>=0 and from>=until) return error.InvalidParams;
     const db = try connection();
     const statement = try prepare(db,
         \\SELECT id,title,url,visited_at FROM visits
         \\WHERE id > 0 AND id < ?1 AND (instr(lower(title),lower(?2)) OR instr(lower(url),lower(?2)))
+        \\  AND visited_at >= ?3 AND (?4 < 0 OR visited_at < ?4)
         \\ORDER BY id DESC LIMIT 31
     );
     defer _ = sqlite.sqlite3_finalize(statement);
     const end: i64 = if (options.before) |visit| visit else @as(i64,std.math.maxInt(u32))+1;
-    if (sqlite.sqlite3_bind_int64(statement,1,end) != ok) return error.IOError;
+    if (sqlite.sqlite3_bind_int64(statement,1,end) != ok or sqlite.sqlite3_bind_int64(statement,3,from)!=ok or
+        sqlite.sqlite3_bind_int64(statement,4,until)!=ok) return error.IOError;
     try bindText(statement,2,options.query);
     var remaining: usize = 24*1024;
     var length: usize = 0;
@@ -120,6 +125,29 @@ pub fn remove(id: u32) !void {
     defer _ = sqlite.sqlite3_finalize(statement);
     if (sqlite.sqlite3_bind_int64(statement,1,id) != ok or sqlite.sqlite3_step(statement) != done) return error.IOError;
     if (sqlite.sqlite3_changes(db) == 0) return error.NotFound;
+}
+
+pub fn removeMany(ids: []const u32) !u32 {
+    if (ids.len==0 or ids.len>sdk.history_selection_limit or std.mem.indexOfScalar(u32,ids,0)!=null) return error.InvalidParams;
+    const db = try connection();
+    const sql = comptime query: {
+        const prefix = "DELETE FROM visits WHERE id IN (";
+        var text: [prefix.len+2*sdk.history_selection_limit:0]u8 = @splat(0);
+        @memcpy(text[0..prefix.len],prefix);
+        for (0..sdk.history_selection_limit) |index| {
+            const at = prefix.len+2*index;
+            text[at] = '?';
+            text[at+1] = if (index+1==sdk.history_selection_limit) ')' else ',';
+        }
+        break :query text;
+    };
+    const statement = try prepare(db,&sql);
+    defer _ = sqlite.sqlite3_finalize(statement);
+    for (ids,1..) |id,index| {
+        if (sqlite.sqlite3_bind_int64(statement,@intCast(index),id)!=ok) return error.IOError;
+    }
+    if (sqlite.sqlite3_step(statement)!=done) return error.IOError;
+    return @intCast(sqlite.sqlite3_changes(db));
 }
 
 pub fn clear() !void {

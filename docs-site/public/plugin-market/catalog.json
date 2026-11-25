@@ -109,7 +109,7 @@
     {
       "id": "moon.history",
       "name": "历史记录",
-      "description": "搜索、打开和移除最近的浏览记录，支持按日期浏览。",
+      "description": "按日期和关键词筛选访问记录，支持多选移除。",
       "permission": "管理浏览历史",
       "url": "https://docs.browser.moonl.cloud/history.html"
     },

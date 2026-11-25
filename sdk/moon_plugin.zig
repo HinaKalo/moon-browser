@@ -199,6 +199,8 @@ pub const HardReloadResult = enum(c_int) { started, unavailable, edited, resubmi
 pub const InspectorPlacement = enum { docked, window };
 pub const HistoryVisit = struct { id: u32, title: []const u8, url: []const u8, visitedAt: u64 };
 pub const HistoryQuery = struct { query: []const u8 = "", before: ?u32 = null };
+pub const HistorySearch = struct { query: []const u8 = "", before: ?u32 = null, from: ?u64 = null, until: ?u64 = null };
+pub const history_selection_limit = 100;
 pub const HistoryPage = struct { visits: []const HistoryVisit, next: ?u32 };
 pub const BookmarkInput = struct { title: []const u8, url: []const u8, folder: []const u8 = "" };
 pub const BookmarkEdit = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 = "" };
@@ -346,6 +348,7 @@ pub const Method = enum {
     @"ui.openPage",
     @"history.list",
     @"history.remove",
+    @"history.removeMany",
     @"history.clear",
     @"network.filter.status",
     @"network.filter.setSite",

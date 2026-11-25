@@ -68,7 +68,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => .@"siteSettings.autoplay",
         .@"siteSettings.sound.get", .@"siteSettings.sound.set", .@"siteSettings.sound.toggle" => .@"siteSettings.sound",
         .@"siteSettings.zoom.get", .@"siteSettings.zoom.set" => .@"siteSettings.zoom",
-        .@"history.list", .@"history.remove", .@"history.clear" => .@"history.manage",
+        .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.bar.toggle" => .@"bookmarks.manage",
@@ -201,7 +201,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     if (object.contains("result") or object.contains("error")) return sdk.failure(output, id, .InvalidRequest);
     const method = std.meta.stringToEnum(sdk.Method, method_name) orelse return sdk.failure(output, id, .MethodNotFound);
     if (context.from_page) switch (method) {
-        .@"history.list", .@"history.remove", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
+        .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
@@ -483,7 +483,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             break :open sdk.result(output,id,native.moon_plugin_open_page(owner.ptr));
         },
         .@"history.list" => list: {
-            const options = decode(sdk.HistoryQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const options = decode(sdk.HistorySearch,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             var rows: [30]sdk.HistoryVisit = undefined;
             const page = history.list(allocator,options,&rows) catch |err| return sdk.failure(output,id,if (err == error.InvalidParams) .InvalidParams else .InternalError);
             break :list sdk.result(output,id,page);
@@ -492,6 +492,12 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             history.remove(value.id) catch |err| return sdk.failure(output,id,if (err == error.NotFound) .NotFound else .InternalError);
             break :remove sdk.result(output,id,null);
+        },
+        .@"history.removeMany" => remove: {
+            const value = decode(struct { ids: []const u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const removed = history.removeMany(value.ids) catch |err|
+                return sdk.failure(output,id,if (err==error.InvalidParams) .InvalidParams else .InternalError);
+            break :remove sdk.result(output,id,.{ .removed=removed });
         },
         .@"history.clear" => clear: {
             history.clear() catch return sdk.failure(output,id,.InternalError);

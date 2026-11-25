@@ -2,6 +2,7 @@
 import argparse
 from base64 import b64encode
 from contextlib import closing
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from hashlib import sha256
 import json
@@ -805,6 +806,8 @@ def run_win32(exe, base, root):
     inspect_menu = devtools_commands.get("elements",{}).get("inspectElementMenu")
     appearance = exe.parent / "plugins" / "appearance" / "MoonAppearance.exe"
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
+    history_selection = history.exists() and 'id="remove-selected"' in (
+        history.parent / "history.html").read_text(encoding="utf-8")
     blocker = exe.parent / "plugins" / "blocker" / "MoonBlocker.exe"
     bookmarks = exe.parent / "plugins" / "bookmarks" / "MoonBookmarks.exe"
     bookmark_transfer = bookmarks.exists() and '"bookmarks.transfer"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
@@ -896,6 +899,9 @@ def run_win32(exe, base, root):
             + ('const denied=await window.webkit.messageHandlers.moonHost.postMessage('
                'JSON.stringify({jsonrpc:"2.0",id:"1",method:"history.list",params:{}}));'
                'if(JSON.parse(denied).error?.code!==-32001)return;' if history.exists() else '') +
+            ('const bulkDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"history-denied",method:"history.removeMany",params:{ids:[1]}}));'
+             'if(JSON.parse(bulkDenied).error?.code!==-32001)return;' if history_selection else '') +
             ('const siteDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"2",method:"siteData.status",params:{}}));'
              'if(JSON.parse(siteDenied).error?.code!==-32001)return;' if site_data.exists() else '') +
@@ -1016,6 +1022,71 @@ def run_win32(exe, base, root):
             "contributes": {"commands": [{"id": "open", "label": "History fixture"}]},
         }), encoding="utf-8")
         bundled_page = (history.parent / "history.html").read_text(encoding="utf-8")
+        selection_contract = r'''
+            const list = async (query = {}) => {
+                const rows = [];
+                let before = null;
+                do {
+                    const {result} = await call('history.list', {...query, before});
+                    rows.push(...result.visits);
+                    before = result.next;
+                } while (before !== null);
+                return rows;
+            };
+            const boundary = row.visitedAt;
+            const matching = {query: 'history-contract'};
+            if ((await list({...matching, from: boundary, until: boundary + 1})).length !== 1 ||
+                (await list({...matching, until: boundary})).length !== 0 ||
+                (await call('history.list', {from: boundary, until: boundary})).error?.code !== -32602)
+                throw Error('visit time bounds');
+            if ((await call('history.removeMany', {ids: [row.id, 0]})).error?.code !== -32602 ||
+                (await call('history.removeMany', {ids: Array(101).fill(row.id)})).error?.code !== -32602 ||
+                (await list(matching)).length !== 1) throw Error('invalid batch changed history');
+            const elements = id => document.getElementById(id);
+            const setRange = value => {
+                elements('range').value = value;
+                elements('range').dispatchEvent(new Event('change'));
+            };
+            const choices = () => [...document.querySelectorAll('#results li input[data-visit]')];
+            const selectionQuery = {query: 'history-selection'};
+            const beforeSelection = await list(selectionQuery);
+            if (beforeSelection.length !== 36) throw Error('seeded selection records');
+            elements('query').value = selectionQuery.query;
+            setRange('yesterday');
+            await waitFor(() => choices().length === 1 && choices()[0].closest('li').innerText.includes('history-selection-yesterday'));
+            setRange('week');
+            await waitFor(() => choices().length === 30 && !elements('more').hidden);
+            elements('more').click();
+            await waitFor(() => choices().length === 35 && elements('more').hidden);
+            setRange('today');
+            await waitFor(() => choices().length === 30 && !elements('more').hidden);
+            elements('select-displayed').click();
+            if (choices().filter(choice => choice.checked).length !== 30) throw Error('select displayed records');
+            elements('select-displayed').click();
+            if (choices().some(choice => choice.checked)) throw Error('clear selection');
+            choices()[0].click();
+            elements('more').click();
+            await waitFor(() => choices().length === 34 && elements('more').hidden);
+            choices().at(-1).click();
+            const selected = choices().filter(choice => choice.checked).map(choice => Number(choice.dataset.visit));
+            if (selected.length !== 2) throw Error('selection lost across pages');
+            const batch = elements('remove-selected');
+            const selectedDialog = elements('confirm-clear');
+            batch.click();
+            if (!selectedDialog.open) throw Error('batch dialog');
+            elements('cancel').click();
+            if (selectedDialog.open || (await list(selectionQuery)).length !== 36) throw Error('batch cancel');
+            batch.click();
+            elements('confirm').click();
+            await waitFor(() => !selectedDialog.open);
+            await waitFor(() => elements('remove-selected').disabled);
+            if (elements('range').value !== 'today') throw Error('selection removal changed filter');
+            const remaining = (await list(selectionQuery)).map(visit => visit.id);
+            const expected = beforeSelection.map(visit => visit.id).filter(id => !selected.includes(id));
+            if (JSON.stringify(remaining) !== JSON.stringify(expected)) throw Error('batch removed the wrong records');
+            if ((await call('history.removeMany', {ids: selected})).result?.removed !== 0) throw Error('retry stale removal');
+            setRange('all');
+        ''' if history_selection else ''
         contract = (
             '<script>(async()=>{'
             'const api=window.webkit.messageHandlers;let id=0;'
@@ -1041,6 +1112,7 @@ def run_win32(exe, base, root):
             'const excluded=await call("history.list",{query:"history-contract",before:row.id});'
             'if(excluded.result?.visits?.length!==0)throw new Error("cursor");'
             'if((await call("tabs.getActive")).error?.code!==-32601)throw new Error("scope");'
+            + selection_contract +
             'const search=document.getElementById("query");'
             'search.value="HISTORY-contract";search.dispatchEvent(new Event("input"));'
             'const link=await waitFor(()=>document.querySelector("#results li a[href$=\'/page/history-contract\']"));'
@@ -2382,6 +2454,16 @@ def run_win32(exe, base, root):
             invoke("历史记录")
             wait_for(lambda: read_address() == "extension://moon.history/history.html",
                      "The history executable did not open its bundled page")
+            if history_selection:
+                noon = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+                samples = [(f"{index:02}", noon) for index in range(34)] + [
+                    ("yesterday", noon - timedelta(days=1)), ("older", noon - timedelta(days=9)),
+                ]
+                with closing(sqlite3.connect(database, timeout=0.5)) as db, db:
+                    db.executemany("INSERT INTO visits(title,url,visited_at) VALUES (?,?,?)", (
+                        (f"history-selection-{label}", base + "/page/history-selection-" + label,
+                         int(visited.timestamp()*1000)) for label, visited in samples
+                    ))
             config = profile / f'extension-{sha256(b"moon.history-fixture").hexdigest()}.json'
             set_control(edit, "extension://moon.history-fixture/history.html")
             user.PostMessageW(edit, 0x0100, 0x0D, 1)
@@ -2394,6 +2476,8 @@ def run_win32(exe, base, root):
             if history_rows("SELECT count(*) FROM visits") != [(0,)]:
                 raise RuntimeError("Clearing history left visits in the database")
             print("history_system_plugin=ok history_page_contract=ok", flush=True)
+            if history_selection:
+                print("history_selection=ok local_time_ranges=ok paging=ok cancel=ok exact_removal=ok invalid_batch_atomic=ok", flush=True)
         def navigate_reading(url):
             set_control(edit,url)
             user.PostMessageW(edit,0x0100,0x0D,1)
