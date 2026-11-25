@@ -332,10 +332,12 @@ addEventListener('load',()=>{
             data = ('<!doctype html><title>Website notification test</title><button id="request">Notify</button><script>'
                     f'const stage={stage};'
                     'const report=(kind,value)=>fetch("/notification-report/"+stage+"/"+kind+"?"+value);'
-                    'report("initial",Notification.permission);'
-                    'request.onclick=async()=>{const state=await Notification.requestPermission();report("request",state);'
+                    'requestAnimationFrame(()=>requestAnimationFrame(()=>report("initial",Notification.permission)));'
+                    'request.onclick=async()=>{report("clicked","yes");try{'
+                    'const state=await Notification.requestPermission();report("request",state);'
                     'if(state==="granted"){const notice=new Notification("Moon test",{body:"Native notification"});'
-                    'notice.onshow=()=>report("show","yes");notice.onclose=()=>report("close","yes");}};'
+                    'notice.onshow=()=>report("show","yes");notice.onclose=()=>report("close","yes");}'
+                    '}catch(error){report("request-error",error.name);}};'
                     '</script>').encode()
             content_type = "text/html"
         elif path in ("/autoplay.wav", "/autoplay.mp4", "/autoplay.m4a", "/media-control.wav", "/media-control.mp4"):
@@ -4205,8 +4207,19 @@ def run_win32(exe, base, root):
                     wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(address,)),
                              f"{stage} notification document did not finish")
 
+                def request_notification(stage):
+                    for _ in range(3):
+                        foreground_click(content,px(30),px(20))
+                        try:
+                            wait_for(lambda: Fixture.notification_reports.get(stage+"/clicked")=="yes",
+                                     f"{stage} notification button missed the click",1.5)
+                        except RuntimeError:
+                            continue
+                        return
+                    raise RuntimeError(f"{stage} notification button missed all clicks: {Fixture.notification_reports}")
+
                 notification_page(base,"allow",("default",))
-                foreground_click(content,px(30),px(20))
+                request_notification("allow")
                 question=wait_for(lambda: owned_window("#32770","允许网站通知？"),
                                   "WebKit did not prompt for permission")
                 yes=user.GetDlgItem(question,6)
@@ -4253,14 +4266,17 @@ def run_win32(exe, base, root):
 
                 notification_setting("block",[{"origin":base,"mode":"block"}])
                 notification_page(base,"blocked",("default","denied"))
-                foreground_click(content,px(30),px(20))
-                wait_for(lambda: Fixture.notification_reports.get("blocked/request")=="denied",
-                         "Explicit block rule did not reject permission")
+                request_notification("blocked")
+                outcome=wait_for(lambda: Fixture.notification_reports.get("blocked/request") or
+                                 Fixture.notification_reports.get("blocked/request-error"),
+                                 "Explicit block rule did not return a permission result")
+                if outcome!="denied":
+                    raise RuntimeError(f"Explicit block rule returned {outcome!r}")
                 if owned_window("#32770","允许网站通知？") or "blocked/show" in Fixture.notification_reports:
                     raise RuntimeError("A blocked origin could prompt or display a notification")
                 notification_setting("ask",[])
                 notification_page(base,"reset",("default",))
-                foreground_click(content,px(30),px(20))
+                request_notification("reset")
                 question=wait_for(lambda: owned_window("#32770","允许网站通知？"),
                                   "Resetting notifications did not restore the permission prompt")
                 user.SendMessageW(question,0x0111,7,0)
