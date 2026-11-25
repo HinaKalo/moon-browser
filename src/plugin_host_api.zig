@@ -968,10 +968,14 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const config = decode(sdk.SearchConfig,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             return sdk.result(output,id,search.save(allocator,config,params.?));
         },
-        .@"tabs.session.status" => sdk.result(output,id,session.status()),
+        .@"tabs.session.status" => {
+            var pages: session.PageViews = undefined;
+            return sdk.result(output,id,session.status(&pages));
+        },
         .@"tabs.session.setPreferences" => {
             if (!context.user_command and !context.from_page) return sdk.failure(output,id,.PermissionDenied);
             const preferences = decode(sdk.SessionPreferences,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (!session.validPreferences(preferences)) return sdk.failure(output,id,.InvalidParams);
             return sdk.result(output,id,session.configure(allocator,preferences,params.?));
         },
         .@"tabs.session.restore" => {

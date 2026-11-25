@@ -4341,13 +4341,40 @@ def run_win32(exe, base, root):
                 {"id":"moon.session-fixture","enabled":True,"tabs_read":False,"tabs_session_manage":True},
             ]),encoding="utf-8")
             page = session_plugin.with_name("session.html").read_text(encoding="utf-8")
+            has_custom_startup = 'id="save-startup"' in page
+            startup_urls = [base + "/page/session-first",base + "/page/session-second"]
+            startup_contract = f'const urls={json.dumps(startup_urls)};' + r'''
+                await wait(()=>!startupControls.disabled);
+                const signal=JSON.parse(await settings.postMessage(JSON.stringify({op:'read'}))).value;
+                if (signal?.phase==='custom') {
+                    const invalid=await Promise.all([
+                        [],['file:///C:/Windows'],[urls[0],urls[0]],Array(9).fill(urls[0]),['https://user@example.com'],
+                    ].map(startupPages=>host('tabs.session.setPreferences',{startupMode:'pages',startupPages})
+                        .then(()=>false,error=>error.message==='INVALID_PARAMS')));
+                    const before=await host('tabs.session.status');
+                    if (!invalid.every(Boolean)||before.startupMode!=='restore'||before.startupPages.length) throw Error('invalid startup preferences changed state');
+                    el('custom-pages').click();
+                    if (el('startup-pages').hidden) throw Error('startup list did not expand');
+                    addresses.value=urls.join('\n');
+                    el('save-startup').click();
+                    await wait(async()=>{const current=await host('tabs.session.status');
+                        return !startupControls.disabled&&current.startupMode==='pages'&&!current.autoRestore&&JSON.stringify(current.startupPages)===JSON.stringify(urls);});
+                    await emit({custom:true}); return;
+                }
+                if (modes.value!=='newTab') throw Error('new tab was not the default');
+                el('auto').click();el('save-startup').click();
+                await wait(async()=>!startupControls.disabled&&(await host('tabs.session.status')).startupMode==='restore');
+                if (!await host('tabs.session.setPreferences',{autoRestore:true})) throw Error('v2 autoRestore setting was rejected');
+            ''' if has_custom_startup else (
+                'await wait(()=>!automatic.disabled);if(automatic.checked)throw Error("startup enabled by default");'
+                'automatic.click();await wait(async()=>!automatic.disabled&&(await host("tabs.session.status")).autoRestore);'
+            )
             contract = (
                 '<script>(async()=>{const settings=window.webkit.messageHandlers.moonSettings;'
                 'const emit=value=>settings.postMessage(JSON.stringify({op:"write",value}));'
                 'const wait=async(check)=>{for(let i=0;i<120;i++){if(await check())return;'
                 'await new Promise(r=>setTimeout(r,40));}throw Error("session settings timeout");};'
-                'try{await wait(()=>!automatic.disabled);if(automatic.checked)throw Error("startup enabled by default");'
-                'automatic.click();await wait(async()=>!automatic.disabled&&(await host("tabs.session.status")).autoRestore);'
+                'try{' + startup_contract +
                 'if(forget.disabled)throw Error("saved checkpoint cannot be cleared after restore");'
                 'forget.click();confirm.querySelector("[value=cancel]").click();'
                 'await wait(async()=>!confirm.open&&(await host("tabs.session.status")).alreadyRestored);'
@@ -4447,6 +4474,38 @@ def run_win32(exe, base, root):
                      "The previous session was unavailable after explicit startup")
             print("last_session=ok safe_checkpoint=ok selected_restore=ok no_duplicate=ok lazy_load=ok "
                   "auto_startup=ok private_excluded=ok external_url_priority=ok forget_confirmation=ok",flush=True)
+            if has_custom_startup:
+                signal = preference_report.with_suffix(".signal")
+                signal.write_text('{"phase":"custom"}',encoding="utf-8")
+                signal.replace(preference_report)
+                set_control(edit,"extension://moon.session-fixture/session.html")
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                result = wait_for(lambda: (value:=read_settings(preference_report)) and (value.get("custom") or value.get("error")) and value,
+                                  "The custom startup preferences did not save")
+                if not result.get("custom"):
+                    raise RuntimeError(f"Custom startup preferences: {result}")
+                initial = counts()
+                proc,frame = restart_session("--gdi")
+                edit = user.GetDlgItem(frame,1001)
+                wait_for(lambda: read_address()==first_url and counts()[0]>initial[0],"The first configured startup page did not load")
+                if counts()[1:]!=initial[1:]:
+                    raise RuntimeError("Custom startup loaded the background page or a pinned page")
+                click(px(110),px(222))
+                wait_for(lambda: read_address()==selected_url and counts()[1]>initial[1],"The next configured startup page did not load on selection")
+                initial = counts()
+                proc,frame = restart_session("--private","--gdi")
+                home = user.GetDlgItem(frame,1002)
+                wait_for(lambda: user.IsWindowVisible(home),"Private startup did not show a new tab")
+                if counts()!=initial:
+                    raise RuntimeError("Private startup opened one of the regular browser's pages")
+                external_hits = Fixture.closed_loaded.get("session-external",0)
+                proc,frame = restart_session("--gdi",external)
+                edit = user.GetDlgItem(frame,1001)
+                wait_for(lambda: read_address()==external and Fixture.closed_loaded.get("session-external",0)>external_hits,
+                         "The explicit address did not override configured startup pages")
+                if counts()!=initial:
+                    raise RuntimeError("Explicit startup also opened a configured startup page")
+                print("custom_startup=ok settings_validation=ok legacy_restore=ok ordered_lazy_tabs=ok private_excluded=ok external_url_priority=ok",flush=True)
         if has_default_browser:
             # An unregistered build uses the plugin's installation hint. No settings or defaults change.
             invoke("设置为默认浏览器")

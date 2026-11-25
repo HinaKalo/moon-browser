@@ -1465,8 +1465,21 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     } else if (first_url) |initial| {
         var buffer: [4096]u8 = undefined;
         if (normalize(initial, &buffer)) |url| navigate(&tabs[active], url);
-    } else if (last_session.automatic()) {
-        _ = resumeLastSession();
+    } else if (plugins.systemEnabled(.@"tabs.session.manage")) {
+        switch (last_session.mode()) {
+            .newTab => {},
+            .restore => _ = resumeLastSession(),
+            .pages => {
+                var buffer: last_session.PageViews = undefined;
+                const pages = last_session.pages(&buffer);
+                for (pages[1..]) |url| {
+                    var address: [4096:0]u8 = @splat(0);
+                    _ = copy(&address,url);
+                    if (!addBackgroundTab(address,@splat(0))) break;
+                }
+                navigate(&tabs[active],pages[0]);
+            },
+        }
     }
     return true;
 }

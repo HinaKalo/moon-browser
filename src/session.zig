@@ -15,7 +15,13 @@ pub const Snapshot = struct {
 
 const allocator = std.heap.page_allocator;
 var file: [4096:0]u8 = @splat(0);
-var preferences: sdk.SessionPreferences = .{};
+const page_limit = 1024;
+const pages_budget = 3072;
+pub const PageViews = [sdk.session_startup_limit][]const u8;
+var startup_mode: sdk.SessionStartupMode = .newTab;
+var startup_pages: [sdk.session_startup_limit][page_limit]u8 = undefined;
+var startup_lengths: [sdk.session_startup_limit]usize = @splat(0);
+var startup_count: usize = 0;
 var restored = false;
 
 pub fn init(profile: []const u8) void {
@@ -27,18 +33,54 @@ pub fn init(profile: []const u8) void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const value = settings.read(arena.allocator(),owner) catch return;
-    preferences = std.json.parseFromValueLeaky(sdk.SessionPreferences,arena.allocator(),value,.{}) catch .{};
+    const input = std.json.parseFromValueLeaky(sdk.SessionPreferences,arena.allocator(),value,.{}) catch return;
+    if (validPreferences(input)) applyPreferences(input);
 }
 
-pub fn automatic() bool {
-    return preferences.autoRestore;
+fn requestedMode(input: sdk.SessionPreferences) sdk.SessionStartupMode {
+    return input.startupMode orelse if (input.autoRestore) .restore else .newTab;
 }
 
 pub fn configure(alloc: std.mem.Allocator, input: sdk.SessionPreferences, value: std.json.Value) bool {
     if (file[0]==0) return false;
     settings.write(alloc,owner,value) catch return false;
-    preferences = input;
+    applyPreferences(input);
     return true;
+}
+
+pub fn validPreferences(input: sdk.SessionPreferences) bool {
+    if (input.startupPages.len>sdk.session_startup_limit or
+        (requestedMode(input)==.pages and input.startupPages.len==0)) return false;
+    var remaining: usize = pages_budget;
+    for (input.startupPages,0..) |url,index| {
+        if (url.len>page_limit or url.len>remaining or !history.validURL(url) or
+            std.mem.indexOfAny(u8,url," \"\\")!=null) return false;
+        const uri = std.Uri.parse(url) catch return false;
+        const host = uri.host orelse return false;
+        if (host.percent_encoded.len==0) return false;
+        for (input.startupPages[0..index]) |prior| if (std.mem.eql(u8,prior,url)) return false;
+        remaining -= url.len;
+    }
+    return true;
+}
+
+fn applyPreferences(input: sdk.SessionPreferences) void {
+    startup_mode = requestedMode(input);
+    startup_count = input.startupPages.len;
+    for (input.startupPages,0..) |url,index| {
+        @memcpy(startup_pages[index][0..url.len],url);
+        startup_lengths[index] = url.len;
+    }
+}
+
+pub fn mode() sdk.SessionStartupMode {
+    return startup_mode;
+}
+
+pub fn pages(buffer: *PageViews) []const []const u8 {
+    for (buffer[0..startup_count],0..) |*url,index|
+        url.* = startup_pages[index][0..startup_lengths[index]];
+    return buffer[0..startup_count];
 }
 
 pub fn read() ?std.json.Parsed(Snapshot) {
@@ -97,10 +139,13 @@ pub fn read() ?std.json.Parsed(Snapshot) {
     return parsed;
 }
 
-pub fn status() sdk.SessionStatus {
-    const snapshot = read() orelse return .{ .autoRestore=preferences.autoRestore,.tabs=0,.alreadyRestored=restored };
+pub fn status(buffer: *PageViews) sdk.SessionStatus {
+    var state: sdk.SessionStatus = .{ .autoRestore=startup_mode==.restore,.tabs=0,.alreadyRestored=restored,
+        .startupMode=startup_mode,.startupPages=pages(buffer) };
+    const snapshot = read() orelse return state;
     defer snapshot.deinit();
-    return .{ .autoRestore=preferences.autoRestore,.tabs=snapshot.value.tabs.len,.alreadyRestored=false };
+    state.tabs = snapshot.value.tabs.len;
+    return state;
 }
 
 pub fn markRestored() void {

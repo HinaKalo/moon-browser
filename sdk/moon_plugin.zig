@@ -144,8 +144,20 @@ pub const Tab = struct { id: []const u8, title: []const u8, url: []const u8 };
 pub const TabChange = struct { tabId: ?[]const u8 };
 pub const ClosedTab = struct { id: u32, title: []const u8, origin: []const u8 };
 pub const ReopenClosedTab = enum(c_int) { reopened, notFound, tabLimit, unavailable };
-pub const SessionPreferences = struct { autoRestore: bool = false };
-pub const SessionStatus = struct { autoRestore: bool, tabs: usize, alreadyRestored: bool };
+pub const SessionStartupMode = enum { newTab, restore, pages };
+pub const session_startup_limit = 8;
+pub const SessionPreferences = struct {
+    autoRestore: bool = false,
+    startupMode: ?SessionStartupMode = null,
+    startupPages: []const []const u8 = &.{},
+};
+pub const SessionStatus = struct {
+    autoRestore: bool,
+    tabs: usize,
+    alreadyRestored: bool,
+    startupMode: SessionStartupMode = .newTab,
+    startupPages: []const []const u8 = &.{},
+};
 pub const SessionRestore = enum(c_int) { restored, empty, tabLimit, unavailable };
 pub const TabOperation = enum(c_int) { pin, mute, duplicate, copyAddress };
 pub const TabOrganization = enum(c_int) {

@@ -23,6 +23,11 @@
   section { padding:17px 0; border-top:1px solid var(--line); }
   label,.actions { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
   input { accent-color:var(--accent); }
+  fieldset { border:0; margin:0; padding:0; min-width:0; }
+  fieldset > label { margin:8px 0; }
+  #startup-pages label { margin-top:12px; }
+  textarea { box-sizing:border-box; width:100%; margin-top:6px; padding:8px 10px; resize:vertical; font:inherit;
+    color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; }
   button {
     font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line);
     padding:8px 12px; border-radius:8px; cursor:pointer;
@@ -38,8 +43,19 @@
   <h1>启动与会话</h1>
   <section>
     <h2>启动时</h2>
-    <label><input type="checkbox" id="auto" disabled>自动恢复上次会话</label>
-    <p>仅加载恢复后选中的标签，其余网页在切换到时加载。</p>
+    <form id="startup">
+      <fieldset id="startup-controls" aria-label="启动时" disabled>
+        <label><input type="radio" name="mode" value="newTab" id="new-tab" checked>打开新标签页</label>
+        <label><input type="radio" name="mode" value="restore" id="auto">恢复上次会话</label>
+        <label><input type="radio" name="mode" value="pages" id="custom-pages">打开指定网页</label>
+        <div id="startup-pages" hidden>
+          <label for="addresses">启动网址</label>
+          <textarea id="addresses" rows="4" maxlength="3080" spellcheck="false" aria-describedby="addresses-hint" placeholder="https://example.com"></textarea>
+          <p id="addresses-hint">每行一个完整 HTTP 或 HTTPS 网址，最多八个。第一个网页立即加载，其余在切换时加载。</p>
+        </div>
+        <button class="primary" id="save-startup">保存启动设置</button>
+      </fieldset>
+    </form>
   </section>
   <section>
     <h2>上次会话</h2>
@@ -63,7 +79,8 @@
 </dialog>
 <script>
   const el=id=>document.getElementById(id);
-  const automatic=el('auto'), restore=el('restore'), forget=el('forget'), feedback=el('feedback'), confirm=el('confirm');
+  const startup=el('startup'), startupControls=el('startup-controls'), modes=startup.elements.mode, addresses=el('addresses');
+  const restore=el('restore'), forget=el('forget'), feedback=el('feedback'), confirm=el('confirm');
   let sequence=0, state;
   async function host(method,params={}) {
     const id=String(++sequence);
@@ -72,26 +89,36 @@
     if (reply.id!==id || reply.error) throw Error(reply.error?.message || 'INVALID_RESPONSE');
     return reply.result;
   }
-  function show() {
-    automatic.disabled=!state;
+  function show(syncPreferences) {
+    startupControls.disabled=!state;
     restore.disabled=!state?.tabs;
     forget.disabled=!(state?.tabs || state?.alreadyRestored);
     if (!state) { el('count').textContent='无法读取会话，请检查插件权限。'; return; }
-    automatic.checked=state.autoRestore;
+    if (syncPreferences) {
+      modes.value=state.startupMode ?? (state.autoRestore ? 'restore' : 'newTab');
+      addresses.value=(state.startupPages ?? []).join('\n');
+      startup.onchange();
+    }
     el('count').textContent=state.alreadyRestored?'本窗口已恢复上次会话。':
       state.tabs?'有 '+state.tabs+' 个网页可恢复。':'没有可恢复的上次会话。';
   }
-  async function refresh() {
+  async function refresh(syncPreferences=false) {
     try { state=await host('tabs.session.status'); } catch { state=undefined; }
-    show();
+    show(syncPreferences);
   }
-  automatic.onchange=async () => {
-    automatic.disabled=true;
+  startup.onchange=()=>{ el('startup-pages').hidden=modes.value!=='pages'; };
+  startup.onsubmit=async event => {
+    event.preventDefault();
+    const startupMode=modes.value;
+    const startupPages=addresses.value.split('\n').map(line=>line.trim()).filter(Boolean);
+    startupControls.disabled=true;
     try {
-      if (!await host('tabs.session.setPreferences',{autoRestore:automatic.checked})) throw Error();
+      if (!await host('tabs.session.setPreferences',{startupMode,startupPages})) throw Error();
       feedback.textContent='已保存。';
-    } catch { feedback.textContent='无法保存启动设置。'; }
-    await refresh();
+      await refresh(true);
+    } catch (error) {
+      feedback.textContent=error.message==='INVALID_PARAMS' ? '请输入最多八个不同的完整 HTTP 或 HTTPS 网址，或选择其他启动方式。' : '无法保存启动设置。';
+    } finally { startupControls.disabled=!state; }
   };
   restore.onclick=async () => {
     restore.disabled=true;
@@ -112,6 +139,6 @@
     } catch { feedback.textContent='无法清除已保存的会话。'; }
     await refresh();
   };
-  refresh();
+  refresh(true);
 </script>
 </html>

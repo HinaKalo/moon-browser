@@ -1,7 +1,7 @@
 {
   "id": "moon.session",
   "name": "上次会话",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "apiVersion": 2,
   "runtime": "native",
   "entry": "MoonSession.exe",

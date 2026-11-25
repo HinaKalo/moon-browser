@@ -18,8 +18,8 @@
     {
       "id": "moon.session",
       "name": "上次会话",
-      "description": "恢复上次会话，配置启动恢复，或打开 Windows 默认浏览器设置。",
-      "permission": "保存和恢复会话，打开系统默认应用设置",
+      "description": "恢复上次会话，选择启动时打开的网页，或打开 Windows 默认浏览器设置。",
+      "permission": "保存和恢复会话，管理启动设置，打开系统默认应用设置",
       "url": "https://docs.browser.moonl.cloud/session.html"
     },
     {
