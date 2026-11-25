@@ -11,7 +11,8 @@ enum MoonCommand {
     MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_OPEN_PLUGINS, MOON_UPDATES,
     MOON_PLUGIN_SETTINGS, MOON_MARKET,
     MOON_TAB_PIN, MOON_TAB_MUTE, MOON_TAB_CLOSE_TARGET, MOON_TAB_DUPLICATE, MOON_TAB_COPY_ADDRESS,
-    MOON_TAB_CLOSE_OTHERS, MOON_TAB_CLOSE_BELOW, MOON_TAB_GROUP_NEW, MOON_TAB_GROUP_PANEL, MOON_TAB_GROUP_REMOVE
+    MOON_TAB_CLOSE_OTHERS, MOON_TAB_CLOSE_BELOW, MOON_TAB_GROUP_NEW, MOON_TAB_GROUP_PANEL, MOON_TAB_GROUP_REMOVE,
+    MOON_TAB_CLOSE_SELECTED
 };
 enum MoonEngineEvent {
     MOON_STARTED = 1, MOON_COMMITTED, MOON_FINISHED, MOON_FAILED, MOON_CHANGED,
@@ -235,10 +236,15 @@ size_t moon_tab_index(uint64_t tab);
 bool moon_tabs_open_search(uint64_t source);
 unsigned moon_tab_flags(size_t index);
 uint64_t moon_tab_id(size_t index);
+bool moon_tab_selection_pick(size_t index, bool range);
+bool moon_tab_selection_clear(void);
+uint64_t moon_tab_selection_epoch(void);
+size_t moon_tab_selection_count(void);
 enum {
     MOON_TAB_DORMANT = 1, MOON_TAB_FAILED = 2, MOON_TAB_LOADING = 4, MOON_TAB_PINNED = 8,
     MOON_TAB_MUTED = 16, MOON_TAB_CAN_PIN = 32, MOON_TAB_CAN_MUTE = 64,
-    MOON_TAB_CAN_DUPLICATE = 128, MOON_TAB_CAN_COPY_ADDRESS = 256, MOON_TAB_HAS_SITE = 512, MOON_TAB_SITE_MUTED = 1024
+    MOON_TAB_CAN_DUPLICATE = 128, MOON_TAB_CAN_COPY_ADDRESS = 256, MOON_TAB_HAS_SITE = 512, MOON_TAB_SITE_MUTED = 1024,
+    MOON_TAB_SELECTED = 2048
 };
 enum { MOON_TAB_ORGANIZE = 1, MOON_TAB_MANAGE = 2, MOON_TAB_GROUPS = 4 };
 unsigned moon_tab_tools_permissions(void);
@@ -336,7 +342,7 @@ bool moon_plugin_action_site_menu(size_t index, size_t command);
 typedef struct { uint64_t tab_id, navigation; bool site_muted, tab_muted; char origin[320]; } MoonSiteContext;
 bool moon_site_context(MoonSiteContext *site);
 void moon_site_menu_run(const MoonSiteContext *site, size_t index, size_t command);
-enum MoonLinkMenu { MOON_LINK_OPEN = 1, MOON_LINK_COPY, MOON_LINK_BOOKMARK, MOON_LINK_MENU_STRIDE = 13 };
+enum MoonLinkMenu { MOON_LINK_OPEN = 1, MOON_LINK_COPY, MOON_LINK_BOOKMARK, MOON_LINK_MENU_STRIDE = 14 };
 enum { MOON_PLUGIN_LIMIT = 64, MOON_PLUGIN_MENU_PERMISSION_LIMIT = 42 };
 typedef struct { uint64_t tab_id, navigation; char url[4096], label[512]; } MoonLinkContext;
 bool moon_link_capture(MoonLinkContext *link, uint64_t tab);
@@ -392,6 +398,7 @@ int moon_session_restore(uint64_t source);
 int moon_tabs_organize(uint64_t tab, int operation);
 typedef struct MoonTabCloseResult { uint32_t closed, kept; } MoonTabCloseResult;
 bool moon_tabs_close_group(uint64_t tab, bool below, MoonTabCloseResult *result);
+bool moon_tabs_close_selection(uint64_t epoch, MoonTabCloseResult *result);
 enum { MOON_ERASE_SITE = 1, MOON_ERASE_CACHE = 2 };
 unsigned moon_engine_erase_data(unsigned requested);
 void moon_privacy_engine_done(unsigned category);

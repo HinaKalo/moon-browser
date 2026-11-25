@@ -31,6 +31,7 @@ pub const Context = struct {
     plugin_id: []const u8,
     target_tab_id: u64,
     target_navigation: u64 = 0,
+    selection_epoch: u64 = 0,
     tab: ?*const Snapshot,
     consent: userscripts.Consent,
     from_page: bool = false,
@@ -1102,8 +1103,11 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const options = decode(struct { scope: sdk.TabCloseScope },allocator,params) catch
                 return sdk.failure(output,id,.InvalidParams);
             var counts: native.MoonTabCloseResult = undefined;
-            if (!native.moon_tabs_close_group(context.target_tab_id,options.scope==.below,&counts))
-                return sdk.result(output,id,null);
+            const closed = switch (options.scope) {
+                .selected => native.moon_tabs_close_selection(context.selection_epoch,&counts),
+                .others, .below => native.moon_tabs_close_group(context.target_tab_id,options.scope==.below,&counts),
+            };
+            if (!closed) return sdk.result(output,id,null);
             return sdk.result(output,id,sdk.TabCloseResult{ .closed=counts.closed,.kept=counts.kept });
         },
         .@"tabs.groups.open", .@"tabs.groups.create", .@"tabs.groups.removeTab" => {

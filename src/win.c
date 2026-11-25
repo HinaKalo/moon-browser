@@ -553,7 +553,10 @@ static void paint_sidebar(Canvas c,int height) {
     text_at(c,L"\u641c\u7d22\u6216\u8f93\u5165\u7f51\u5740",x+33,50,147,34,theme->text,false);
     fill(c,x+w-57,57,49,20,theme->frame,4);
     text_at(c,L"Ctrl K",x+w-57,57,49,20,theme->muted,true);
-    text_at(c,L"\u6807\u7b7e\u9875",x+8,92,130,30,theme->muted,false);
+    const size_t selection_count=moon_tab_selection_count();
+    wchar_t selection_label[32];
+    if (selection_count) swprintf(selection_label,ARRAYSIZE(selection_label),L"已选择 %u 个标签",(unsigned)selection_count);
+    text_at(c,selection_count?selection_label:L"\u6807\u7b7e\u9875",x+8,92,130,30,selection_count?theme->accent:theme->muted,false);
     icon_button(c,L"+",x+w-32,92,30,29,true);
     fill(c,x,125,w,1,theme->line,0);
     size_t count=sidebar_count, capacity=tab_capacity();
@@ -576,11 +579,14 @@ static void paint_sidebar(Canvas c,int height) {
             continue;
         }
         unsigned flags=moon_tab_flags(tab);
+        const bool multi_selected=(flags&MOON_TAB_SELECTED)!=0;
         const bool dragged=tab_drag.active && moon_tab_id(tab)==tab_drag.source;
         const int indent=row->group?12:0;
-        if (selected || hot || dragged) fill(c,x+indent,y,w-indent,ROW-3,dragged?theme->soft:selected?theme->panel:theme->hover,7);
+        if (selected || hot || dragged || multi_selected)
+            fill(c,x+indent,y,w-indent,ROW-3,dragged||multi_selected?theme->soft:selected?theme->panel:theme->hover,7);
         if (row->group) fill(c,x+5,y,2,ROW-2,group_color(row->color),1);
         if (selected) fill(c,x+indent,y+6,3,ROW-15,theme->accent,2);
+        if (multi_selected) fill(c,x+w-5,y+8,2,ROW-19,theme->accent,2);
         unsigned tone=(flags&MOON_TAB_FAILED)?theme->danger:(flags&MOON_TAB_DORMANT)?theme->muted:(flags&MOON_TAB_LOADING)?theme->loading:theme->accent;
         fill(c,x+indent+11,y+8,18,18,selected?theme->soft:theme->field,5);
         if (flags&MOON_TAB_PINNED) {
@@ -593,7 +599,7 @@ static void paint_sidebar(Canvas c,int height) {
         wchar_t label[512];
         if (!moon_utf16(moon_tab_label(tab),label,ARRAYSIZE(label))) wcscpy(label,L"\u6807\u7b7e\u9875");
         const bool audio_muted=flags&(MOON_TAB_MUTED|MOON_TAB_SITE_MUTED);
-        text_at(c,label,x+indent+38,y,w-indent-71-(audio_muted?20:0),ROW-3,selected?theme->text:theme->muted,false);
+        text_at(c,label,x+indent+38,y,w-indent-71-(audio_muted?20:0),ROW-3,selected||multi_selected?theme->text:theme->muted,false);
         if (audio_muted)
             text_at(c,L"\xd83d\xdd07",x+w-51,y+3,20,ROW-9,theme->muted,true);
         if ((selected || hot) && !(flags&MOON_TAB_PINNED)) icon_button(c,L"\xd7",x+w-29,y+3,25,ROW-9,true);
@@ -1443,6 +1449,19 @@ static void tab_context_menu(HWND hwnd, POINT screen) {
         if (command) moon_command((int)command,id,NULL);
         return;
     }
+    const uint64_t selection=(flags&MOON_TAB_SELECTED)?moon_tab_selection_epoch():0;
+    if (selection && (tab_tools&MOON_TAB_MANAGE)) {
+        enum { CANCEL_SELECTION = 1 };
+        wchar_t close_label[48];
+        swprintf(close_label,ARRAYSIZE(close_label),L"关闭所选标签（%u）",(unsigned)moon_tab_selection_count());
+        AppendMenuW(popup,MF_STRING,MOON_TAB_CLOSE_SELECTED,close_label);
+        AppendMenuW(popup,MF_STRING,CANCEL_SELECTION,L"取消选择");
+        const UINT command=TrackPopupMenuEx(popup,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON,screen.x,screen.y,hwnd,NULL);
+        DestroyMenu(popup);
+        if (command==CANCEL_SELECTION && selection==moon_tab_selection_epoch()) moon_tab_selection_clear();
+        if (command==MOON_TAB_CLOSE_SELECTED) moon_command((int)command,selection,NULL);
+        return;
+    }
     if (tab_tools&MOON_TAB_ORGANIZE) {
         AppendMenuW(popup,MF_STRING|((flags&MOON_TAB_CAN_PIN)?0:MF_GRAYED),MOON_TAB_PIN,
             (flags&MOON_TAB_PINNED)?L"取消固定标签":L"固定标签");
@@ -1484,6 +1503,7 @@ static void start_tab_drag(POINT pixel) {
     if (point.x>=SIDEBAR-26 && !(moon_tab_flags(index)&MOON_TAB_PINNED)) return;
     SetCapture(frame);
     if (GetCapture()!=frame) return;
+    moon_tab_selection_clear();
     tab_drag.source=source;
     tab_drag.start=pixel;
     tab_drag.pointer=point;
@@ -1549,7 +1569,7 @@ static void scroll_tab_drag(void) {
     InvalidateRect(frame,NULL,FALSE);
 }
 
-static void click(HWND hwnd,int psx,int psy) {
+static void click(HWND hwnd,int psx,int psy,WPARAM buttons) {
     int x=MulDiv(psx,96,dpi), y=MulDiv(psy,96,dpi);
     int width=client_width(), height=client_height(), left=pane_left();
     if (y<TOP) {
@@ -1576,6 +1596,7 @@ static void click(HWND hwnd,int psx,int psy) {
             if (row && row->header) moon_group_toggle(row->group);
             else if (row) {
                 const size_t index=row->tab;
+                if ((buttons&(MK_CONTROL|MK_SHIFT)) && moon_tab_selection_pick(index,(buttons&MK_SHIFT)!=0)) return;
                 const bool close=x>=SIDEBAR-26 && !(moon_tab_flags(index)&MOON_TAB_PINNED);
                 moon_command(close ? MOON_CLOSE : MOON_SELECT,index,NULL);
             }
@@ -1775,7 +1796,8 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
             InvalidateRect(hwnd,NULL,FALSE);
             return 0;
         case WM_LBUTTONDOWN:
-            start_tab_drag((POINT){(short)LOWORD(lp),(short)HIWORD(lp)});
+            if (wp&(MK_CONTROL|MK_SHIFT)) ignore_tab_release=false;
+            else start_tab_drag((POINT){(short)LOWORD(lp),(short)HIWORD(lp)});
             return 0;
         case WM_LBUTTONUP: {
             const POINT pixel={(short)LOWORD(lp),(short)HIWORD(lp)};
@@ -1788,7 +1810,7 @@ static LRESULT CALLBACK frame_message(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp) {
                 if (drop.anchor) moon_tab_drop_run(&drop);
                 else if (select) moon_command(MOON_SELECT,sidebar_row_at(point.y)->tab,NULL);
             } else if (!fullscreen && !ignore_tab_release) {
-                click(hwnd,pixel.x,pixel.y);
+                click(hwnd,pixel.x,pixel.y,wp);
             }
             ignore_tab_release=false;
             return 0;
@@ -1873,6 +1895,7 @@ static bool keyboard(MSG *msg) {
         if (!repeated) moon_shell_leave_fullscreen();
         return true;
     }
+    if (!modifiers && msg->wParam==VK_ESCAPE && !moon_ime_composing(msg->hwnd) && moon_tab_selection_clear()) return true;
     const bool in_address=msg->hwnd==address || msg->hwnd==home_edit;
     if (in_address && !modifiers && !moon_ime_composing(msg->hwnd) && moon_suggest_key(msg->hwnd,msg->wParam)) return true;
     if (in_address && msg->wParam==VK_RETURN && !ctrl && !alt && !moon_ime_composing(msg->hwnd)) {

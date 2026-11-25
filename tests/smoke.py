@@ -628,7 +628,8 @@ addEventListener('load',()=>{
                     'addEventListener("load",report);</script>'
                 )
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
-                        "pinned-first", "pinned-second", "session-first", "session-second", "session-pinned", "session-private",
+                        "pinned-first", "pinned-second", "selection-a", "selection-b",
+                        "session-first", "session-second", "session-pinned", "session-private",
                         "session-external", "order-last", "order-edge", "group-first", "group-second", "group-outside",
                         "shell-cold", "shell-warm", "shell-plain", "address-visited", "address-saved", "bookmark-bar-live"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
@@ -4903,6 +4904,8 @@ def run_win32(exe, base, root):
             if tab_tools.exists():
                 expected["标签与页面"].update({"切换当前标签的固定状态","切换当前标签的静音状态",
                                                  "复制当前标签","复制当前标签网址","关闭其他标签","关闭下方标签"})
+                if '"closeSelected"' in tab_tools_manifest:
+                    expected["标签与页面"].add("关闭所选标签")
             if tab_groups:
                 expected["标签与页面"].update({"新建标签组","管理标签组","移出当前标签组"})
             if search_plugin.exists():
@@ -4994,11 +4997,11 @@ def run_win32(exe, base, root):
                 restarted = subprocess.Popen([str(exe),"--gdi"],env=preview_env(root))
                 return restarted,browser_frame(restarted)
 
-            def tab_menu(row, choose=None):
+            def tab_menu(row, choose=None, before_choose=None):
                 point = wt.POINT(px(100),px(148+37*row))
                 user.ClientToScreen(frame,ctypes.byref(point))
                 coords = ((point.y & 0xFFFF)<<16) | (point.x & 0xFFFF)
-                return native_entries(lambda: user.PostMessageW(frame,0x007B,frame,coords),choose)
+                return native_entries(lambda: user.PostMessageW(frame,0x007B,frame,coords),choose,before_choose)
 
             proc,frame = restart_tabs()
             edit = user.GetDlgItem(frame,1001)
@@ -5100,6 +5103,52 @@ def run_win32(exe, base, root):
             click(px(110),px(185))
             wait_for(lambda: read_address()==second,"The protected edited tab was not retained")
             print("tab_batch_tools=ok duplicate_target=ok duplicate_history=ok close_below=ok pinned_kept=ok edited_tab_kept=ok",flush=True)
+
+            if '"closeSelected"' in tab_tools_manifest:
+                def select_row(row, modifier):
+                    point = px(148+37*row)<<16 | px(110)
+                    user.SendMessageW(frame,0x0201,modifier|1,point)
+                    user.SendMessageW(frame,0x0202,modifier,point)
+
+                for name in ("selection-a","selection-b"):
+                    invoke("新建标签页")
+                    wait_for(lambda: user.IsWindowVisible(home),"Could not open a disposable selection test tab")
+                    closed_page(name)
+                click(px(110),px(185))
+                wait_for(lambda: read_address()==second,"The edited tab did not become active")
+                before = palette_rows()
+
+                select_row(3,0x0008)  # MK_CONTROL
+                if "关闭所选标签（2）" not in tab_menu(3) or "关闭标签" not in tab_menu(2):
+                    raise RuntimeError("Ctrl+click did not restrict the selection menu to selected tabs")
+                select_row(0,0x0008)
+                if "关闭所选标签（3）" not in tab_menu(0) or read_address()!=second:
+                    raise RuntimeError("Toggling a selection activated another tab or lost its previous members")
+                user.PostMessageW(frame,0x0100,0x1B,1)
+                wait_for(lambda: "关闭标签" in tab_menu(3),"Esc did not clear the selected tabs")
+
+                select_row(4,0x0004)  # MK_SHIFT
+                if "关闭所选标签（4）" not in tab_menu(4):
+                    raise RuntimeError("Shift+click did not select the entire range")
+                tab_menu(4,"取消选择")
+                if "关闭标签" not in tab_menu(4):
+                    raise RuntimeError("The tab menu did not clear the selection")
+
+                for row in (0,3,4):
+                    select_row(row,0x0008)
+                tab_menu(4,"关闭所选标签（4）",lambda: select_row(2,0x0008))
+                if palette_rows()!=before or "关闭所选标签（5）" not in tab_menu(4):
+                    raise RuntimeError("A stale menu closed tabs after the selection changed")
+                select_row(2,0x0008)
+                tab_menu(4,"关闭所选标签（4）")
+                wait_for(lambda: palette_rows()==before-2,"Batch close did not remove exactly the two selected tabs")
+                if read_address()!=second or "取消固定标签" not in tab_menu(0):
+                    raise RuntimeError("Batch close removed the active edited tab or the selected pinned tab")
+                click(px(110),px(148+37*2))
+                wait_for(lambda: read_address()==keep,"Batch close removed an unselected tab")
+                click(px(110),px(185))
+                wait_for(lambda: read_address()==second,"Could not return to the edited tab")
+                print("tab_multiselect=ok ctrl_toggle=ok shift_range=ok cancel=ok stale_menu=ok selected_close=ok pinned_kept=ok edited_kept=ok unselected_kept=ok",flush=True)
 
             def sidebar_point(y):
                 return ((px(y)&0xFFFF)<<16) | (px(110)&0xFFFF)
@@ -5215,6 +5264,12 @@ def run_win32(exe, base, root):
                     wait_for(lambda: user.IsWindowVisible(home),"Could not reopen the group test browser")
                     invoke("恢复上次会话")
                     wait_for(lambda: read_address()==outside,"Session restore did not reactivate the ungrouped tab")
+                    if '"closeSelected"' in tab_tools_manifest:
+                        select_row(0,0x0004)
+                        if "关闭所选标签（3）" not in tab_menu(0) or read_address()!=outside:
+                            raise RuntimeError("Shift+click included collapsed tabs or activated the selection")
+                        tab_menu(0,"取消选择")
+                        print("tab_multiselect_collapsed=ok",flush=True)
                 if "管理标签组" not in tab_menu(2):
                     raise RuntimeError("The group header was lost")
                 tab_manifest=json.loads(tab_tools.with_name("plugin.json").read_text(encoding="utf-8"))

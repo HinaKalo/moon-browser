@@ -46,7 +46,7 @@
     {
       "id": "moon.tab-tools",
       "name": "标签管理",
-      "description": "按 Ctrl+Shift+A 搜索打开的标签。支持分组、固定、静音、复制和批量关闭。",
+      "description": "按 Ctrl+Shift+A 搜索打开的标签，按 Ctrl 或 Shift 点击侧栏可多选。支持分组、固定、静音、复制和批量关闭。",
       "permission": "分组、固定、静音、复制和整理标签",
       "url": "https://docs.browser.moonl.cloud/tab-tools.html"
     },

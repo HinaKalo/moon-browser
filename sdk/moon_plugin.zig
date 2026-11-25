@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub const api_version = 2;
 pub const frame_limit = 32 * 1024;
-pub const command_limit = 13;
+pub const command_limit = 14;
 pub const request_limit = 24;
 pub const interactive_request_limit = 256;
 pub const lua_source_limit = 16 * 1024;
@@ -213,7 +213,7 @@ pub const TabOperation = enum(c_int) { pin, mute, duplicate, copyAddress };
 pub const TabOrganization = enum(c_int) {
     pinned, unpinned, muted, unmuted, unavailable, limitReached, saveFailed, duplicated, copied, clipboardBusy,
 };
-pub const TabCloseScope = enum { others, below };
+pub const TabCloseScope = enum { others, below, selected };
 pub const TabCloseResult = struct { closed: u32, kept: u32 };
 pub const TabReorder = enum(c_int) { moved, unavailable, saveFailed };
 pub const TabGroupColor = enum(c_uint) { indigo, teal, amber, rose, slate };

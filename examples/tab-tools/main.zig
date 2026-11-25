@@ -12,7 +12,7 @@ pub fn main() !void {
     const params = command.get("params") orelse return error.InvalidCommand;
     if (params != .object) return error.InvalidCommand;
     const action = sdk.string(params.object.get("id")) orelse return error.InvalidCommand;
-    const Action = enum { search, pin, mute, duplicate, copyAddress, closeOthers, closeBelow, openLink, copyLink, reorder,
+    const Action = enum { search, pin, mute, duplicate, copyAddress, closeOthers, closeBelow, closeSelected, openLink, copyLink, reorder,
         groupCreate, groups, groupRemove };
     const operation = std.meta.stringToEnum(Action,action) orelse return error.InvalidCommand;
     const message = switch (operation) {
@@ -26,6 +26,7 @@ pub fn main() !void {
         .copyAddress => try organize(&client,.@"tabs.copyAddress"),
         .closeOthers => try close(&client,.others),
         .closeBelow => try close(&client,.below),
+        .closeSelected => try close(&client,.selected),
         .openLink => try link(&client,.@"tabs.openLink"),
         .copyLink => try link(&client,.@"tabs.copyLink"),
         .reorder => try reorder(&client),
@@ -87,7 +88,7 @@ fn organize(client: *sdk.Client, method: sdk.Method) !?[]const u8 {
 fn close(client: *sdk.Client, scope: sdk.TabCloseScope) !?[]const u8 {
     const response = try client.call(.@"tabs.closeGroup",.{ .scope=scope });
     const result = response.get("result") orelse return "当前标签已关闭，或插件权限不可用。";
-    if (result==.null) return "当前标签已关闭。";
+    if (result==.null) return if (scope==.selected) "在侧栏按住 Ctrl 或 Shift 选择标签后再试。" else "当前标签已关闭。";
     const counts = try std.json.parseFromValueLeaky(sdk.TabCloseResult,client.allocator,result,.{});
     if (counts.kept==0) {
         if (counts.closed==0) return "没有可关闭的标签。";

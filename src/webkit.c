@@ -195,7 +195,7 @@ struct MoonView {
     struct MoonView *next;
 };
 static MoonView *views;
-enum { LINK_COMMANDS = MOON_PLUGIN_LIMIT*MOON_LINK_MENU_STRIDE, LINK_MENU_GENERATIONS = 64 };
+enum { LINK_COMMANDS = MOON_PLUGIN_LIMIT*MOON_LINK_MENU_STRIDE, LINK_MENU_GENERATIONS = 60 };
 _Static_assert(kWKContextMenuItemBaseApplicationTag+LINK_COMMANDS*LINK_MENU_GENERATIONS <= UINT16_MAX,
     "Context menu command IDs must fit a Win32 menu command");
 static MoonLinkContext link_context;

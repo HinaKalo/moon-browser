@@ -55,6 +55,7 @@ const Tab = struct {
     download_count: usize = 0,
     activity: bool = false,
     pinned: bool = false,
+    selected: bool = false,
     group: u32 = 0,
     muted: bool = false,
     media: MediaControls = .{},
@@ -73,6 +74,9 @@ const Retiring = struct { handle: *anyopaque, pid: u32 };
 var tabs: [max_tabs]Tab = undefined;
 var count: usize = 0;
 var active: usize = 0;
+var selection_count: usize = 0;
+var selection_anchor: u64 = 0;
+var selection_epoch: u64 = 1;
 var find_tab: u64 = 0;
 var find_owner: [96:0]u8 = @splat(0);
 var fullscreen_owner: [96:0]u8 = @splat(0);
@@ -539,7 +543,12 @@ fn chooseTab(index: usize, notify: bool) void {
 }
 
 fn selectTab(index: usize, notify: bool, expand_group: bool) void {
-    if (index >= count or index == active) return;
+    if (index >= count) return;
+    const cleared = discardTabSelection();
+    if (index == active) {
+        if (cleared) native.moon_shell_refresh_tab_order(false);
+        return;
+    }
     shortcut_capture = null;
     moon_find_dismiss(false);
     const now = native.moon_clock();
@@ -779,6 +788,7 @@ export fn moon_group_name(id: u32) [*:0]const u8 {
 export fn moon_group_toggle(id: u32) void {
     if (stopped or !plugins.systemEnabled(.@"tabs.groups")) return;
     const group=tab_groups.get(id) orelse return;
+    _ = discardTabSelection();
     group.collapsed=!group.collapsed;
     native.moon_shell_refresh_tab_order(false);
 }
@@ -1039,6 +1049,7 @@ fn addTab(url: ?[]const u8, notify: bool) void {
 }
 fn closeTab(index: usize) void {
     if (index >= count) return;
+    _ = discardTabSelection();
     site_data.closed(tabs[index].id);
     page_source.closed(tabs[index].id);
     reader.closed(tabs[index].id);
@@ -1090,10 +1101,95 @@ export fn moon_tabs_close_group(id: u64, below: bool, result: *native.MoonTabClo
         if (canCloseInGroup(tab)) selected[index] = true else result.kept += 1;
     }
     if (selected[active]) chooseTab(target,true);
-    var index = count;
-    while (index>start) {
+    closeMarkedTabs(selected[0..count], result);
+    return true;
+}
+
+fn discardTabSelection() bool {
+    if (selection_count == 0) return false;
+    for (tabs[0..count]) |*tab| tab.selected = false;
+    selection_count = 0;
+    selection_anchor = 0;
+    selection_epoch +%= 1;
+    return true;
+}
+
+export fn moon_tab_selection_count() usize {
+    return selection_count;
+}
+
+export fn moon_tab_selection_epoch() u64 {
+    return if (selection_count > 0) selection_epoch else 0;
+}
+
+export fn moon_tab_selection_clear() bool {
+    if (stopped or !discardTabSelection()) return false;
+    native.moon_shell_refresh_tab_order(false);
+    return true;
+}
+
+export fn moon_tab_selection_pick(index: usize, range: bool) bool {
+    if (stopped or index >= count or !plugins.systemEnabled(.@"tabs.manage")) return false;
+    const target = &tabs[index];
+    if (range) {
+        const anchor = tabIndex(selection_anchor) orelse active;
+        const first = @min(index, anchor);
+        const last = @max(index, anchor);
+        const show_groups = plugins.systemEnabled(.@"tabs.groups");
+        selection_count = 0;
+        for (tabs[0..count], 0..) |*tab, position| {
+            const collapsed = if (show_groups) if (tab_groups.get(tab.group)) |group| group.collapsed else false else false;
+            tab.selected = position >= first and position <= last and !collapsed;
+            if (tab.selected) selection_count += 1;
+        }
+        selection_anchor = tabs[anchor].id;
+    } else {
+        if (selection_count == 0) {
+            const current = &tabs[active];
+            const collapsed = if (tab_groups.get(current.group)) |group| group.collapsed and plugins.systemEnabled(.@"tabs.groups") else false;
+            if (!collapsed) {
+                current.selected = true;
+                selection_count = 1;
+            }
+        }
+        target.selected = !target.selected;
+        if (target.selected) selection_count += 1 else selection_count -= 1;
+        selection_anchor = target.id;
+    }
+    if (selection_count == 0) selection_anchor = 0;
+    selection_epoch +%= 1;
+    native.moon_shell_refresh_tab_order(false);
+    return true;
+}
+
+export fn moon_tabs_close_selection(epoch: u64, result: *native.MoonTabCloseResult) bool {
+    if (stopped or epoch == 0 or epoch != moon_tab_selection_epoch() or !plugins.systemEnabled(.@"tabs.manage")) return false;
+    var marked: [max_tabs]bool = @splat(false);
+    result.* = .{ .closed=0, .kept=0 };
+    var first_kept: ?usize = null;
+    var next_kept: ?usize = null;
+    for (tabs[0..count], 0..) |*tab, index| {
+        if (tab.selected) {
+            if (canCloseInGroup(tab)) marked[index] = true else result.kept += 1;
+        }
+        if (marked[index]) continue;
+        if (first_kept == null) first_kept = index;
+        if (index > active and next_kept == null) next_kept = index;
+    }
+    _ = discardTabSelection();
+    if (marked[active]) {
+        if (next_kept orelse first_kept) |index| chooseTab(index, true);
+    }
+    closeMarkedTabs(marked[0..count], result);
+    native.moon_shell_refresh_tab_order(false);
+    return true;
+}
+
+fn closeMarkedTabs(marked: []const bool, result: *native.MoonTabCloseResult) void {
+    var index = marked.len;
+    while (index > 0) {
         index -= 1;
-        if (!selected[index]) continue;
+        if (!marked[index]) continue;
         if (!canCloseInGroup(&tabs[index])) {
             result.kept += 1;
             continue;
@@ -1101,7 +1197,6 @@ export fn moon_tabs_close_group(id: u64, below: bool, result: *native.MoonTabClo
         closeTab(index);
         result.closed += 1;
     }
-    return true;
 }
 fn rememberClosedTab(tab: *Tab) void {
     if (!plugins.systemEnabled(.@"tabs.closed.manage") or tab.extension or !tab.has_document or
@@ -1646,6 +1741,10 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
         native.MOON_NEW => addTab(null, true),
         native.MOON_CLOSE => closeTab(index),
         native.MOON_SELECT => chooseTab(index, true),
+        native.MOON_TAB_CLOSE_SELECTED => {
+            if (argument == 0 or argument != moon_tab_selection_epoch()) return;
+            _ = plugins.namedCommand("moon.tab-tools","closeSelected",tabSnapshot());
+        },
         native.MOON_TAB_PIN, native.MOON_TAB_MUTE, native.MOON_TAB_DUPLICATE, native.MOON_TAB_COPY_ADDRESS,
         native.MOON_TAB_CLOSE_OTHERS, native.MOON_TAB_CLOSE_BELOW => {
             const permission: sdk.Permission = if (command==native.MOON_TAB_PIN or command==native.MOON_TAB_MUTE)
@@ -1983,7 +2082,8 @@ export fn moon_tab_flags(index: usize) c_uint {
         (if (tab.muted or (!tab.extension and safeURL(slice(&tab.url)))) @as(c_uint,native.MOON_TAB_CAN_MUTE) else 0) |
         (if (canDuplicate(tab) and safeURL(slice(&tab.url))) @as(c_uint,native.MOON_TAB_CAN_DUPLICATE) else 0) |
         (if (tab.has_document and !tab.extension and safeURL(slice(&tab.url))) @as(c_uint,native.MOON_TAB_CAN_COPY_ADDRESS) else 0) |
-        (if (hasSite(tab)) @as(c_uint,native.MOON_TAB_HAS_SITE) else 0);
+        (if (hasSite(tab)) @as(c_uint,native.MOON_TAB_HAS_SITE) else 0) |
+        (if (tab.selected) @as(c_uint,native.MOON_TAB_SELECTED) else 0);
 }
 
 fn hasSite(tab: *const Tab) bool {
@@ -2198,6 +2298,8 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     }
     if (permission == null or permission == .@"tabs.closed.manage") checkClosedTabGrant();
     if (permission == null or permission == .@"tabs.organize") checkTabToolsGrant();
+    if ((permission == null or permission == .@"tabs.manage") and !plugins.systemEnabled(.@"tabs.manage"))
+        _ = discardTabSelection();
     if (permission == null or permission == .@"bookmarks.manage") native.moon_shell_bookmarks_changed();
     if (permission == null or permission == .@"siteSettings.sound") moon_site_sound_update();
     if (permission == null or permission == .@"siteSettings.notifications") {
