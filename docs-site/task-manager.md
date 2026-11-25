@@ -6,11 +6,13 @@
 
 「进程」按 PID 显示私有提交内存及关联标签数。多个标签可能共用一个渲染进程。仍有标签使用该进程时，卸载一页后进程内存可能维持原值。指标使用 Windows 的 `PrivateUsage`。 [Windows 进程内存指标](https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-process_memory_counters_ex)
 
+从 0.1.0-preview.101 起，「标签」可按标题或完整 PID 搜索，筛选先于分页。「进程」默认按私有提交内存从高到低显示，可点击内存或 PID 列切换升降序。共享进程仍只显示一行，总览始终统计完整进程树。
+
 ## 插件 API
 
 声明 `taskManager.manage` 后可调用：
 
-- `taskManager.snapshot { view, offset? }` 返回 `overview` 和所选视图的最多 24 条记录。用返回的 `next` 读取下一页。进程字节数来自最近一次调度采样。标签记录包括标题、状态和 PID。
+- `taskManager.snapshot { view, offset?, query?, order? }` 返回 `overview` 和所选视图的最多 24 条记录。用返回的 `next` 读取下一页，`matched` 为匹配数。标签视图可传 `query`（标题或完整 PID），进程视图可传 `order`（`native`、`memoryAsc`、`memoryDesc`、`pidAsc` 或 `pidDesc`）。进程字节数来自最近一次调度采样。标签记录包括标题、状态和 PID。
 - `taskManager.focus { id }` 切换到指定标签。
 - `taskManager.discard { id }` 经宿主重新检查标签状态后卸载后台视图。
 

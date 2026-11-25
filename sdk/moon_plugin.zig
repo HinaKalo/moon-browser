@@ -253,11 +253,16 @@ pub const TaskOverview = struct {
     open: u32, live: u32, dormant: u32, protected: u32, processes: u32, evictions: u32, retiring: u32,
     beforeBytes: ?u64, afterBytes: ?u64,
 };
-pub const TaskQuery = struct { view: enum { tabs, processes }, offset: u32 = 0 };
+pub const TaskProcessOrder = enum(c_int) { native, memoryAsc, memoryDesc, pidAsc, pidDesc };
+pub const TaskQuery = struct {
+    view: enum { tabs, processes }, offset: u32 = 0,
+    query: []const u8 = "", order: TaskProcessOrder = .native,
+};
 pub const TaskSnapshot = struct {
     overview: TaskOverview,
     tabs: ?[]const TaskTab = null,
     processes: ?[]const TaskProcess = null,
+    matched: u32,
     next: ?u32,
 };
 pub const TaskAction = enum(c_uint) { done, notFound, protected, unavailable };

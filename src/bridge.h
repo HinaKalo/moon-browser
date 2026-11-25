@@ -37,8 +37,8 @@ typedef struct MoonTaskTab {
 } MoonTaskTab;
 typedef struct MoonTaskProcess { uint64_t private_bytes; uint32_t pid, tabs; bool browser; } MoonTaskProcess;
 void moon_tasks_overview(MoonTaskOverview *overview);
-size_t moon_tasks_tabs(uint32_t offset, MoonTaskTab *rows, size_t cap);
-size_t moon_tasks_processes(uint32_t offset, MoonTaskProcess *rows, size_t cap);
+size_t moon_tasks_tabs(uint32_t offset, const char *query, size_t query_length, MoonTaskTab *rows, size_t cap, uint32_t *matched);
+size_t moon_tasks_processes(uint32_t offset, int order, MoonTaskProcess *rows, size_t cap);
 unsigned moon_tasks_action(uint64_t source, uint64_t id, bool discard);
 enum { MOON_MEDIA_AUDIO=1, MOON_MEDIA_VIDEO=2 };
 typedef struct MoonMediaTab {

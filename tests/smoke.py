@@ -2640,6 +2640,49 @@ def run_win32(exe, base, root):
             "permissions": ["taskManager.manage"], "contributes": {"commands": [{"id": "open", "label": "Fixture"}]},
         }), encoding="utf-8")
         page = task_manager.with_name("tasks.html").read_text(encoding="utf-8")
+        sort_contract = r"""
+            if(find("task-search")){
+                const verifyOrder=(items,compare)=>items.every((item,index)=>!index||compare(items[index-1],item)<=0);
+                for(const [order,compare] of [
+                    ["memoryAsc",(a,b)=>a.privateBytes-b.privateBytes||a.pid-b.pid],
+                    ["memoryDesc",(a,b)=>b.privateBytes-a.privateBytes||a.pid-b.pid],
+                    ["pidDesc",(a,b)=>b.pid-a.pid]
+                ]){
+                    const sorted=await host("taskManager.snapshot",{view:"processes",order});
+                    if(sorted.matched!==sorted.overview.processes||
+                        sorted.processes.reduce((sum,p)=>sum+p.privateBytes,0)!==sorted.overview.privateBytes||
+                        !verifyOrder(sorted.processes,compare))throw Error("process order "+order);
+                }
+                const memory=find("head").querySelector("[data-sort=memory]");
+                if(memory.closest("th").getAttribute("aria-sort")!=="descending")throw Error("default memory order");
+                memory.click();
+                if(memory.closest("th").getAttribute("aria-sort")!=="ascending")throw Error("memory sort heading");
+                const pid=find("head").querySelector("[data-sort=pid]");
+                pid.click();
+                await wait(()=>{
+                    const entries=[...find("rows").rows].map(row=>Number(row.cells[1].textContent));
+                    return entries.length>1&&verifyOrder(entries,(a,b)=>a-b)&&pid.closest("th").getAttribute("aria-sort")==="ascending";
+                },"process PID column");
+                const filtered=await host("taskManager.snapshot",{view:"tabs",query:"TASK-ELIGIBLE"});
+                const samePid=await host("taskManager.snapshot",{view:"tabs",query:String(ready.pid)});
+                if(filtered.matched!==1||filtered.tabs[0]?.id!==ready.id||filtered.next!==null||
+                    !samePid.tabs.some(item=>item.id===ready.id)||samePid.tabs.some(item=>item.pid!==ready.pid))
+                    throw Error("task title/PID query");
+            }
+        """ if 'id="task-search"' in page else ''
+        search_contract = r"""
+            if(find("task-search")){
+                const search=find("task-search");
+                const enter=value=>{search.value=value;search.dispatchEvent(new Event("input"));};
+                enter("task-eligible");
+                await wait(()=>find("rows").rows.length===1&&find("rows").textContent.includes("task-eligible")&&
+                    find("range").textContent.includes("/ 1"),"filtered task view");
+                enter("no task can match this");
+                await wait(()=>!find("rows").rows.length&&find("status").textContent==="没有匹配的标签。","empty task filter");
+                enter("");
+                await wait(()=>find("rows").rows.length===24&&find("status").textContent==="","reset task search");
+            }
+        """ if sort_contract else ''
         contract = (
             '<script>(async()=>{'
             'const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:"write",value}));'
@@ -2665,7 +2708,9 @@ def run_win32(exe, base, root):
             'processPage.next!==null||processes.reduce((sum,p)=>sum+p.privateBytes,0)!==processPage.overview.privateBytes||'
             '!processes.some(p=>p.browser))'
             'throw Error("process accounting: "+JSON.stringify(processPage));'
+            + sort_contract +
             'find("view-tabs").click();'
+            + search_contract +
             'const button=action=>[...find("rows").querySelectorAll("button")].find(b=>b.dataset.action===action&&b.dataset.tab===ready.id);'
             'await wait(()=>button("discard")&&!button("discard").disabled,"discard button");button("discard").click();'
             'await wait(()=>find("status").textContent.includes("已卸载"),"manual discard");'

@@ -172,12 +172,13 @@ fn taskSnapshot(allocator: std.mem.Allocator, id: []const u8, query: sdk.TaskQue
             .beforeBytes=if (info.has_sweep) info.before_bytes else null,
             .afterBytes=if (info.has_sweep and !info.sweep_pending) info.after_bytes else null,
         },
+        .matched = 0,
         .next = null,
     };
     switch (query.view) {
         .tabs => {
             var rows: [page_size]native.MoonTaskTab = undefined;
-            const len = native.moon_tasks_tabs(query.offset,&rows,rows.len);
+            const len = native.moon_tasks_tabs(query.offset,query.query.ptr,query.query.len,&rows,rows.len,&result.matched);
             var ids: [page_size][24]u8 = undefined;
             var items: [page_size]sdk.TaskTab = undefined;
             for (rows[0..len],items[0..len],ids[0..len]) |*row,*item,*tab_id| {
@@ -187,16 +188,17 @@ fn taskSnapshot(allocator: std.mem.Allocator, id: []const u8, query: sdk.TaskQue
                 };
             }
             result.tabs = items[0..len];
-            result.next = if (info.open -| query.offset > len) query.offset+@as(u32,@intCast(len)) else null;
+            result.next = if (result.matched -| query.offset > len) query.offset+@as(u32,@intCast(len)) else null;
             return sdk.result(allocator,id,result);
         },
         .processes => {
             var rows: [page_size]native.MoonTaskProcess = undefined;
-            const len = native.moon_tasks_processes(query.offset,&rows,rows.len);
+            const len = native.moon_tasks_processes(query.offset,@intFromEnum(query.order),&rows,rows.len);
             var items: [page_size]sdk.TaskProcess = undefined;
             for (rows[0..len],items[0..len]) |row,*item|
                 item.* = .{ .pid=row.pid,.privateBytes=row.private_bytes,.tabs=row.tabs,.browser=row.browser };
             result.processes = items[0..len];
+            result.matched = info.processes;
             result.next = if (info.processes -| query.offset > len) query.offset+@as(u32,@intCast(len)) else null;
             return sdk.result(allocator,id,result);
         },
@@ -1258,6 +1260,9 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         },
         .@"taskManager.snapshot" => {
             const query = decode(sdk.TaskQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (query.query.len > 256 or !std.unicode.utf8ValidateSlice(query.query) or
+                (query.view == .tabs and query.order != .native) or
+                (query.view == .processes and query.query.len != 0)) return sdk.failure(output,id,.InvalidParams);
             return taskSnapshot(output,id,query);
         },
         .@"media.list", .@"media.control" => {

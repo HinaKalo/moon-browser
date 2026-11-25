@@ -1576,19 +1576,30 @@ export fn moon_tasks_overview(output: *native.MoonTaskOverview) void {
         .warm_limit=@intCast(settings.warm_limit),.idle_seconds=@intCast(settings.idle_ms/1000),
     };
 }
-export fn moon_tasks_tabs(offset: u32, rows: [*]native.MoonTaskTab, cap: usize) usize {
-    const width = @min(cap,count -| offset);
-    for (rows[0..width],0..) |*row,i| {
-        const index = offset+i;
-        const tab = &tabs[index];
+export fn moon_tasks_tabs(offset: u32, query: [*]const u8, query_length: usize,
+    rows: [*]native.MoonTaskTab, cap: usize, matched: *u32) usize {
+    const term = query[0..query_length];
+    const wanted_pid = std.fmt.parseInt(u32,term,10) catch 0;
+    var written: usize = 0;
+    matched.* = 0;
+    for (tabs[0..count],0..) |*tab,index| {
+        const title = slice(&tab.title);
+        const pid = if (tab.view) |view| native.moon_engine_pid(view) else 0;
+        const display_title = if (title.len != 0) title else if (tab.phase == .blank) "新标签页" else "网页";
+        if (term.len != 0 and (wanted_pid == 0 or pid != wanted_pid) and
+            std.ascii.findIgnoreCase(display_title,term) == null) continue;
+        matched.* += 1;
+        if (matched.* <= offset or written == cap) continue;
         const protection: ?sdk.TaskProtection = if (index==active) .current else if (tab.phase==.live and tab.view!=null) tabProtection(tab) else null;
+        const row = &rows[written];
         row.* = .{
-            .id=tab.id,.phase=@intFromEnum(tab.phase),.pid=if (tab.view) |view| native.moon_engine_pid(view) else 0,
+            .id=tab.id,.phase=@intFromEnum(tab.phase),.pid=pid,
             .protection=if (protection) |reason| @intCast(@intFromEnum(reason)) else -1,.title=@splat(0),
         };
-        copyShortTitle(&row.title,slice(&tab.title));
+        copyShortTitle(&row.title,title);
+        written += 1;
     }
-    return width;
+    return written;
 }
 fn copyShortTitle(output: []u8, title: []const u8) void {
     var end = @min(title.len,output.len-1);
@@ -1684,12 +1695,30 @@ export fn moon_media_action_result(id: u64, request: u64, result: [*c]const u8) 
     if (tab.media.result==.resumed) tab.media.visible_until=native.moon_clock()+2500;
     if (tab.media.result==.resumed or (pending.resuming and tab.media.result==.unavailable)) tab.media.paused=false;
 }
-export fn moon_tasks_processes(offset: u32, rows: [*]native.MoonTaskProcess, cap: usize) usize {
+fn taskProcessLessThan(order: sdk.TaskProcessOrder, left: native.MoonSample, right: native.MoonSample) bool {
+    return switch (order) {
+        .native, .pidAsc => left.pid < right.pid,
+        .pidDesc => left.pid > right.pid,
+        .memoryAsc => if (left.bytes == right.bytes) left.pid < right.pid else left.bytes < right.bytes,
+        .memoryDesc => if (left.bytes == right.bytes) left.pid < right.pid else left.bytes > right.bytes,
+    };
+}
+
+export fn moon_tasks_processes(offset: u32, raw_order: c_int, rows: [*]native.MoonTaskProcess, cap: usize) usize {
     const width = @min(cap,process_count -| offset);
+    if (width == 0) return 0;
+    var ordered: [process_samples.len]native.MoonSample = undefined;
+    var samples = process_samples[0..process_count];
+    const order = std.enums.fromInt(sdk.TaskProcessOrder,raw_order) orelse .native;
+    if (order != .native) {
+        @memcpy(ordered[0..samples.len],samples);
+        samples = ordered[0..samples.len];
+        std.mem.sort(native.MoonSample,samples,order,taskProcessLessThan);
+    }
     var pids: [max_tabs]u32 = undefined;
     for (tabs[0..count],0..) |tab,i| pids[i] = if (tab.view) |view| native.moon_engine_pid(view) else 0;
     for (rows[0..width],0..) |*row,i| {
-        const sample = process_samples[offset+i];
+        const sample = samples[offset+i];
         row.* = .{
             .private_bytes=sample.bytes,.pid=sample.pid,.browser=sample.pid==native.moon_current_pid(),
             .tabs=@intCast(std.mem.countScalar(u32,pids[0..count],sample.pid)),
