@@ -629,6 +629,7 @@ addEventListener('load',()=>{
                 )
             if name in ("closed-first", "closed-second", "closed-item", "closed-protected", "task-eligible", "task-protected",
                         "pinned-first", "pinned-second", "selection-a", "selection-b",
+                        "batch-group-a", "batch-group-b", "batch-group-c", "batch-group-d",
                         "session-first", "session-second", "session-pinned", "session-private",
                         "session-external", "order-last", "order-edge", "group-first", "group-second", "group-outside",
                         "shell-cold", "shell-warm", "shell-plain", "address-visited", "address-saved", "bookmark-bar-live"):
@@ -1351,7 +1352,7 @@ def run_win32(exe, base, root):
                              "playing tab");
         const {id,navigation}=row.tab;
         const correctKind=()=>row.tab.audio && row.tab.video===Boolean(options.video);
-        if(!correctKind() || row.tab.paused || row.play.hidden)throw Error("engine media state");
+        await wait(()=>correctKind() && !row.tab.paused && !row.play.hidden,"engine media state");
         if(await host("media.control",{id,navigation:navigation+1,action:"mute"})!=="unavailable")
             throw Error("stale media target");
         row.mute.focus();row.mute.click();
@@ -5312,6 +5313,68 @@ def run_win32(exe, base, root):
                 if read_address()!=first_grouped or "移出标签组" in tab_menu(4):
                     raise RuntimeError("Removing a tab from its group changed its page or left its membership")
                 print("tab_groups_plugin=ok create_background=ok drag_into_group=ok rename_color=ok collapse=ok member_removal=ok session_groups=ok",flush=True)
+                if tuple(map(int,tab_manifest["version"].split(".")[:2]))>=(1,7):
+                    proc,frame=restart_tabs()
+                    edit=user.GetDlgItem(frame,1001)
+                    home=user.GetDlgItem(frame,1002)
+                    user.SetWindowPos(frame,None,0,0,1000,720,0x16)
+                    wait_for(lambda: user.IsWindowVisible(home),"Batch grouping did not start on a clean tab")
+                    pages=[closed_page("batch-group-a")]
+                    for letter in ("b","c","d"):
+                        invoke("新建标签页")
+                        wait_for(lambda: user.IsWindowVisible(home),"Could not open the next batch grouping tab")
+                        pages.append(closed_page("batch-group-"+letter))
+                    a,b,c,d=pages
+
+                    def batch_activate(row, expected):
+                        click(px(110),px(148+37*row))
+                        wait_for(lambda: read_address()==expected,f"Incorrect tab order in batch grouping at row {row}")
+
+                    group_menu="将所选标签移入标签组"
+                    batch_activate(2,a)
+                    select_row(0,0x0008)  # Include a fixed tab and two nonadjacent ordinary tabs.
+                    select_row(4,0x0008)
+                    tab_menu(4,(group_menu,"新建标签组"))
+                    wait_for(lambda: "管理标签组" in tab_menu(2),"The selected tabs were not placed in a new group")
+                    if read_address()!=a or "取消固定标签" not in tab_menu(0):
+                        raise RuntimeError("New batch group switched tabs or changed the pinned tab")
+                    for row,expected in enumerate((a,c,b,d),3):
+                        batch_activate(row,expected)
+                    if "移出标签组" not in tab_menu(4) or "移出标签组" in tab_menu(5):
+                        raise RuntimeError("Grouping nonadjacent tabs also grouped a tab between them")
+
+                    batch_activate(5,b)
+                    select_row(6,0x0008)
+                    target=next(label for label in tab_menu(6)[group_menu] if " · 2 个标签" in label)
+                    tab_menu(6,(group_menu,target),lambda: select_row(3,0x0008))
+                    if "关闭所选标签（3）" not in tab_menu(6) or target not in tab_menu(6)[group_menu]:
+                        raise RuntimeError("An obsolete selection menu applied a grouping operation")
+                    select_row(3,0x0008)
+                    tab_menu(6,(group_menu,target))
+                    wait_for(lambda: "移出标签组" in tab_menu(6),"The selected tabs did not enter the existing group")
+                    if read_address()!=b:
+                        raise RuntimeError("Adding selected tabs to a group changed the active page")
+                    for row,expected in enumerate((a,c,b,d),3):
+                        batch_activate(row,expected)
+
+                    batch_activate(3,a)
+                    select_row(5,0x0008)
+                    tab_menu(5,"将所选标签移出标签组")
+                    wait_for(lambda: (entries:=tab_menu(6)) and "关闭标签" in entries and "移出标签组" not in entries,
+                             "The selected tabs remained grouped")
+                    if read_address()!=a or "移出标签组" not in tab_menu(4):
+                        raise RuntimeError("Removing selected tabs affected another tab or changed the active page")
+                    for row,expected in enumerate((c,d,a,b),3):
+                        batch_activate(row,expected)
+
+                    batch_activate(5,a)
+                    click(px(110),px(148+37*2))
+                    select_row(4,0x0008)
+                    tab_menu(4,(group_menu,target))
+                    wait_for(lambda: "移出标签组" in tab_menu(4),"Moving the active selection did not expand its collapsed group")
+                    if read_address()!=a or "移出标签组" not in tab_menu(6):
+                        raise RuntimeError("Entering a collapsed group changed the active page or lost a selected tab")
+                    print("tab_group_selection=ok new_group=ok existing_group=ok ungroup=ok sidebar_order=ok stale_menu=ok pinned_kept=ok reveal_active=ok",flush=True)
             if modern_example:
                 plugin_state = profile / "plugin-state.json"
                 retained = [item for item in read_settings(plugin_state) if item["id"] != "moon.example"]

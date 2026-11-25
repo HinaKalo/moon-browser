@@ -745,7 +745,6 @@ fn assignTabGroup(index: usize, next: u32) void {
     tabs[index].group=next;
     moveTab(index,destination);
     pruneTabGroup(old);
-    native.moon_shell_refresh();
 }
 
 export fn moon_sidebar_rows(rows: [*c]native.MoonSidebarRow, capacity: usize, active_row: *usize) usize {
@@ -808,6 +807,7 @@ export fn moon_group_create(source: u64) c_int {
     if (tabs[index].pinned) return @intFromEnum(sdk.TabGroupResult.unavailable);
     const group=tab_groups.create(null) orelse return @intFromEnum(sdk.TabGroupResult.limitReached);
     assignTabGroup(index,group.id);
+    native.moon_shell_refresh();
     return @intFromEnum(sdk.TabGroupResult.saved);
 }
 
@@ -816,6 +816,7 @@ export fn moon_group_remove_tab(source: u64) c_int {
     const index=tabIndex(source) orelse return @intFromEnum(sdk.TabGroupResult.unavailable);
     if (tabs[index].group==0) return @intFromEnum(sdk.TabGroupResult.unavailable);
     assignTabGroup(index,0);
+    native.moon_shell_refresh();
     return @intFromEnum(sdk.TabGroupResult.saved);
 }
 
@@ -840,19 +841,89 @@ export fn moon_group_list(panel: u64, owner: [*c]const u8, output: [*c]native.Mo
     const source=groupPanelSource(panel);
     assignable.*=source!=null;
     assigned.*=if (source) |index| tabs[index].group else 0;
-    total.*=0;
+    total.*=writeTabGroups(output,capacity);
+    return true;
+}
+
+fn writeTabGroups(output: [*c]native.MoonTabGroup, capacity: usize) usize {
+    var total: usize=0;
     var index: usize=0;
-    while (index<count and total.*<capacity) {
+    while (index<count and total<capacity) {
         const id=tabs[index].group;
         index+=1;
         const group=tab_groups.get(id) orelse continue;
         var members: u32=1;
         while (index<count and tabs[index].group==id) : (index+=1) members+=1;
-        output[total.*]=.{ .id=id,.color=@intFromEnum(group.color),.members=members,
+        output[total]=.{ .id=id,.color=@intFromEnum(group.color),.members=members,
             .collapsed=group.collapsed,.name=group.name[0..group.name.len].* };
-        total.*+=1;
+        total+=1;
     }
-    return true;
+    return total;
+}
+
+export fn moon_group_selection_choices(output: [*c]native.MoonTabGroup, capacity: usize, can_assign: *bool, can_remove: *bool) usize {
+    can_assign.*=false;
+    can_remove.*=false;
+    if (stopped or !plugins.systemEnabled(.@"tabs.groups")) return 0;
+    for (tabs[0..count]) |*tab| {
+        if (!tab.selected or tab.pinned) continue;
+        can_assign.*=true;
+        can_remove.*=can_remove.* or tab.group!=0;
+    }
+    return if (can_assign.*) writeTabGroups(output,capacity) else 0;
+}
+
+export fn moon_group_selection_command(epoch: u64, action: c_int, id: u32) void {
+    if (stopped or epoch==0 or epoch!=moon_tab_selection_epoch() or !plugins.systemEnabled(.@"tabs.groups")) return;
+    const selection: sdk.TabGroupSelection = .{
+        .action=std.enums.fromInt(sdk.TabGroupSelection.Action,action) orelse return,.id=id,
+    };
+    const snapshot=tabSnapshot() orelse return;
+    _=plugins.launchTabGroupSelection(selection,snapshot);
+}
+
+export fn moon_group_selection_apply(epoch: u64, action: c_int, id: u32, result: *native.MoonGroupSelectionResult) c_int {
+    const outcome: sdk.TabGroupResult = applyGroupSelection(epoch,action,id,result);
+    return @intFromEnum(outcome);
+}
+
+fn applyGroupSelection(epoch: u64, action: c_int, id: u32, result: *native.MoonGroupSelectionResult) sdk.TabGroupResult {
+    result.*=.{ .moved=0,.kept=0 };
+    if (stopped or epoch==0 or epoch!=moon_tab_selection_epoch()) return .unavailable;
+    var ids: [max_tabs]u64=undefined;
+    var length: usize=0;
+    for (tabs[0..count]) |*tab| {
+        if (!tab.selected) continue;
+        if (tab.pinned) {
+            result.kept+=1;
+            continue;
+        }
+        ids[length]=tab.id;
+        length+=1;
+    }
+    if (length==0) return .unavailable;
+    const destination: u32 = switch (action) {
+        native.MOON_GROUP_CREATE => (tab_groups.create(null) orelse return .limitReached).id,
+        native.MOON_GROUP_ASSIGN => (tab_groups.get(id) orelse return .unavailable).id,
+        native.MOON_GROUP_REMOVE => 0,
+        else => return .unavailable,
+    };
+    const current=&tabs[active];
+    const reveal=current.selected and !current.pinned and current.group!=destination;
+    for (0..length) |offset| {
+        // Removing a member places it just after its old group. Work backwards to preserve order.
+        const tab_id=ids[if (destination==0) length-1-offset else offset];
+        const index=tabIndex(tab_id) orelse unreachable;
+        if (tabs[index].group==destination) continue;
+        assignTabGroup(index,destination);
+        result.moved+=1;
+    }
+    if (reveal) {
+        if (tab_groups.get(destination)) |group| group.collapsed=false;
+    }
+    _=discardTabSelection();
+    native.moon_shell_refresh();
+    return .saved;
 }
 
 export fn moon_group_assign(panel: u64, owner: [*c]const u8, id: u32) c_int {
@@ -860,6 +931,7 @@ export fn moon_group_assign(panel: u64, owner: [*c]const u8, id: u32) c_int {
         return @intFromEnum(sdk.TabGroupResult.unavailable);
     const index=groupPanelSource(panel) orelse return @intFromEnum(sdk.TabGroupResult.unavailable);
     assignTabGroup(index,id);
+    native.moon_shell_refresh();
     return @intFromEnum(sdk.TabGroupResult.saved);
 }
 
@@ -925,6 +997,7 @@ export fn moon_tabs_reorder(drop: *const native.MoonTabDrop) c_int {
     const position = dropPosition(drop) orelse return @intFromEnum(sdk.TabReorder.unavailable);
     if (drop.into_group) {
         assignTabGroup(position.from,tabs[position.to].group);
+        native.moon_shell_refresh();
         return @intFromEnum(sdk.TabReorder.moved);
     }
     const pinned = tabs[position.from].pinned;

@@ -219,6 +219,16 @@ pub const TabReorder = enum(c_int) { moved, unavailable, saveFailed };
 pub const TabGroupColor = enum(c_uint) { indigo, teal, amber, rose, slate };
 pub const TabGroup = struct { id: u32, name: []const u8, color: TabGroupColor, collapsed: bool = false };
 pub const TabGroupResult = enum(c_int) { saved, unavailable, limitReached, invalidName };
+pub const TabGroupSelection = struct {
+    pub const Action = enum(c_int) { create, assign, remove };
+    action: Action,
+    id: u32 = 0,
+};
+pub const TabGroupSelectionResult = struct {
+    state: TabGroupResult,
+    moved: u32,
+    kept: u32,
+};
 pub const DefaultAppsResult = enum(c_int) { opened, installRequired, unavailable };
 pub const search_custom_limit = 5;
 pub const SearchEngine = struct { alias: []const u8, name: []const u8, template: []const u8 };
@@ -592,6 +602,7 @@ pub const Method = enum {
     @"tabs.groups.removeTab",
     @"tabs.groups.list",
     @"tabs.groups.assign",
+    @"tabs.groups.applySelection",
     @"tabs.groups.update",
     @"tabs.groups.dissolve",
     @"privacy.clear",

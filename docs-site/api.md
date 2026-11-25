@@ -143,6 +143,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `tabs.openSearch` | `tabs.manage` | 用户命令传入 `{}`，打开当前窗口的原生标签搜索面板。返回是否打开。 |
 | `tabs.openLink` / `tabs.copyLink` | `tabs.manage` | 从对应的 `linkMenu` 命令传入 `{}`。前者返回 `opened` 或 `limitReached`，后者返回 `copied` 或 `clipboardBusy`。失效的链接上下文返回 `unavailable`。 |
 | `tabs.groups.create` / `tabs.groups.removeTab` / `tabs.groups.open` | `tabs.groups` | 从用户命令传入 `{}`，创建标签组、移出标签或打开组管理页。参见[标签组 API](./tab-tools#标签组-api)。 |
+| `tabs.groups.applySelection` | `tabs.groups` 与 `tabs.manage` | 从用户命令传入 `{ action, id? }`，为侧栏所选标签新建组、移入已有组或移出所在组。参见[标签组 API](./tab-tools#标签组-api)。 |
 | `tabs.groups.list` / `tabs.groups.assign` / `tabs.groups.update` / `tabs.groups.dissolve` | `tabs.groups` | 在活动插件页面查看组，移动命令绑定的标签，更新组或解散组。参见[标签组 API](./tab-tools#标签组-api)。 |
 | `search.getConfig` / `search.setConfig` | `search.manage` | 读取和保存默认搜索引擎与自定义关键词。参见[搜索引擎](./search)。 |
 | `siteData.update` | `siteData.read`、`siteData.write` | 从已绑定的站点面板编辑或删除 Local Storage／Session Storage 条目，提交后查看新快照中的操作结果。参见[站点数据](./site-data)。 |

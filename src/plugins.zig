@@ -80,6 +80,7 @@ const Task = struct {
     target_tab_id: u64,
     target_navigation: u64,
     selection_epoch: u64,
+    group_selection: ?sdk.TabGroupSelection,
     trigger: Trigger,
     plugin_id: [*:0]const u8,
     command_id: [*:0]const u8,
@@ -1222,15 +1223,20 @@ pub fn readSettingsPage(address: []const u8, body: []u8) ?[:0]const u8 {
 }
 
 fn launch(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot) bool {
-    return launchBound(index,command_index,trigger,snapshot,null,null);
+    return launchBound(index,command_index,trigger,snapshot,.{});
 }
 
-fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot, link: ?*api.LinkInvocation,
-    drop: ?api.TabDropInvocation) bool {
+const Invocation = struct {
+    link: ?*api.LinkInvocation = null,
+    drop: ?api.TabDropInvocation = null,
+    group_selection: ?sdk.TabGroupSelection = null,
+};
+
+fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot, binding: Invocation) bool {
     if (index >= len) return false;
     const plugin = &all[index];
     if (!plugin.enabled or plugin.work != null or command_index >= plugin.action_count) return false;
-    if (linkOnly(index,command_index) != (link!=null) or tabDropOnly(index,command_index) != (drop!=null)) return false;
+    if (linkOnly(index,command_index) != (binding.link!=null) or tabDropOnly(index,command_index) != (binding.drop!=null)) return false;
     const task = allocator.create(Task) catch return false;
     const rpc = if (plugin.protocol == .v2) allocator.create(Rpc) catch {
         allocator.destroy(task);
@@ -1246,6 +1252,7 @@ fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?
         .target_tab_id = if (snapshot) |tab| tab.id else 0,
         .target_navigation = if (snapshot) |tab| tab.navigation else 0,
         .selection_epoch = if (trigger == .command and plugin.grants.contains(.@"tabs.manage")) native.moon_tab_selection_epoch() else 0,
+        .group_selection = binding.group_selection,
         .trigger = trigger,
         .plugin_id = &plugin.id,
         .command_id = &plugin.actions[command_index].id,
@@ -1254,8 +1261,8 @@ fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?
         .dark = native.moon_shell_dark_mode(),
         .grants = plugin.grants,
         .rpc = rpc,
-        .link = link,
-        .drop = drop,
+        .link = binding.link,
+        .drop = binding.drop,
     };
     plugin.work = task;
     if (!native.moon_plugin_thread(task)) {
@@ -1271,7 +1278,7 @@ pub fn linkCommand(index: usize, command_index: usize, snapshot: ?Snapshot, cont
     const operation = linkAction(index,command_index) orelse return;
     const invocation = allocator.create(api.LinkInvocation) catch return;
     invocation.* = .{ .context=context.*, .operation=operation };
-    if (!launchBound(index,command_index,.command,snapshot,invocation,null)) allocator.destroy(invocation);
+    if (!launchBound(index,command_index,.command,snapshot,.{ .link=invocation })) allocator.destroy(invocation);
 }
 
 pub fn tabDropCommand(drop: native.MoonTabDrop, snapshot: Snapshot) bool {
@@ -1281,7 +1288,7 @@ pub fn tabDropCommand(drop: native.MoonTabDrop, snapshot: Snapshot) bool {
         plugin.pending_drop = drop;
         return true;
     }
-    return launchBound(provider.plugin,provider.command,.command,snapshot,null,.{ .context=drop });
+    return launchBound(provider.plugin,provider.command,.command,snapshot,.{ .drop=.{ .context=drop } });
 }
 
 pub fn command(index: usize, command_index: usize, snapshot: ?Snapshot) void {
@@ -1309,12 +1316,19 @@ pub fn namedCommand(id: []const u8, action_id: []const u8, snapshot: ?Snapshot) 
 }
 
 pub fn launchSystemCommand(id: []const u8, action_id: []const u8, snapshot: Snapshot) bool {
+    return launchBundled(id,action_id,snapshot,.{});
+}
+
+fn launchBundled(id: []const u8, action_id: []const u8, snapshot: Snapshot, binding: Invocation) bool {
     for (all[0..len],0..) |*plugin,index| {
         if (!plugin.bundled or !plugin.enabled or !std.mem.eql(u8,idAt(index),id)) continue;
         const command_index = findAction(plugin,action_id) orelse return false;
-        return launch(index,command_index,.command,snapshot);
+        return launchBound(index,command_index,.command,snapshot,binding);
     }
     return false;
+}
+pub fn launchTabGroupSelection(selection: sdk.TabGroupSelection, snapshot: Snapshot) bool {
+    return launchBundled("moon.tab-tools","groupCreate",snapshot,.{ .group_selection=selection });
 }
 pub fn changed(snapshot: ?Snapshot) void {
     for (all[0..len], 0..) |*plugin, index| {
@@ -1342,6 +1356,7 @@ fn serviceRpc(task: *Task, rpc: *Rpc) void {
         .target_tab_id = task.target_tab_id,
         .target_navigation = task.target_navigation,
         .selection_epoch = task.selection_epoch,
+        .group_selection = task.group_selection,
         .tab = if (task.snapshot) |*snapshot| snapshot else null,
         .consent = .{ .context = task, .valid = invocationActive },
         .user_command = task.trigger == .command,
@@ -1500,13 +1515,14 @@ fn exchangeV2(task: *Task, pipe: *native.MoonPipe, rpc: *Rpc) Outcome {
     native.moon_pipe_set_budget(pipe, budget);
     const event = task.trigger == .changed;
     var tab_buffer: [24]u8 = undefined;
+    const command_id = std.mem.span(task.command_id);
     const invocation = if (event) sdk.serialize(allocator, .{
         .jsonrpc = sdk.rpc_version, .method = "tabs.changed", .params = sdk.TabChange{
             .tabId = if (task.snapshot) |tab| api.tabId(tab.id, &tab_buffer) else null,
         },
-    }) catch return .failed else sdk.request(allocator, "h:2", "commands.run", .{
-        .id = std.mem.span(task.command_id),
-    }) catch return .failed;
+    }) catch return .failed else if (task.group_selection) |group| sdk.request(allocator, "h:2", "commands.run", .{
+        .id = command_id, .groupSelection = group,
+    }) catch return .failed else sdk.request(allocator, "h:2", "commands.run", .{ .id = command_id }) catch return .failed;
     defer allocator.free(invocation);
     if (!sendRpc(rpc, pipe, invocation)) return .failed;
 

@@ -369,6 +369,11 @@ typedef struct {
     bool collapsed;
     char name[97];
 } MoonTabGroup;
+enum { MOON_GROUP_CREATE, MOON_GROUP_ASSIGN, MOON_GROUP_REMOVE };
+typedef struct { uint32_t moved, kept; } MoonGroupSelectionResult;
+size_t moon_group_selection_choices(MoonTabGroup *groups, size_t capacity, bool *can_assign, bool *can_remove);
+void moon_group_selection_command(uint64_t epoch, int action, uint32_t id);
+int moon_group_selection_apply(uint64_t epoch, int action, uint32_t id, MoonGroupSelectionResult *result);
 size_t moon_sidebar_rows(MoonSidebarRow *rows, size_t capacity, size_t *active_row);
 const char *moon_group_name(uint32_t group);
 void moon_group_toggle(uint32_t group);

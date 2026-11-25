@@ -32,6 +32,7 @@ pub const Context = struct {
     target_tab_id: u64,
     target_navigation: u64 = 0,
     selection_epoch: u64 = 0,
+    group_selection: ?sdk.TabGroupSelection = null,
     tab: ?*const Snapshot,
     consent: userscripts.Consent,
     from_page: bool = false,
@@ -100,7 +101,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.reorder" => .@"tabs.organize",
         .@"tabs.groups.open", .@"tabs.groups.create", .@"tabs.groups.removeTab", .@"tabs.groups.list",
-        .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve" => .@"tabs.groups",
+        .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve", .@"tabs.groups.applySelection" => .@"tabs.groups",
         .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup", .@"tabs.openSearch" => .@"tabs.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
@@ -1120,6 +1121,19 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const outcome=if (method==.@"tabs.groups.create") native.moon_group_create(context.target_tab_id)
                 else native.moon_group_remove_tab(context.target_tab_id);
             return sdk.result(output,id,std.enums.fromInt(sdk.TabGroupResult,outcome) orelse .unavailable);
+        },
+        .@"tabs.groups.applySelection" => {
+            if (!context.user_command or !context.grants.contains(.@"tabs.manage")) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(sdk.TabGroupSelection,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if ((options.action == .assign) != (options.id != 0)) return sdk.failure(output,id,.InvalidParams);
+            if (context.group_selection) |bound| {
+                if (!std.meta.eql(bound,options)) return sdk.failure(output,id,.PermissionDenied);
+            }
+            var counts: native.MoonGroupSelectionResult = .{ .moved=0,.kept=0 };
+            const outcome = native.moon_group_selection_apply(context.selection_epoch,@intFromEnum(options.action),options.id,&counts);
+            return sdk.result(output,id,sdk.TabGroupSelectionResult{
+                .state=std.enums.fromInt(sdk.TabGroupResult,outcome) orelse .unavailable,.moved=counts.moved,.kept=counts.kept,
+            });
         },
         .@"tabs.groups.list" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);

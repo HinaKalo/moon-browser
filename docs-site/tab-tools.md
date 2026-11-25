@@ -29,9 +29,13 @@
 
 从组标题的右键菜单打开「管理标签组」，可以改名、选色、折叠或解散。解散保留组内的标签页。恢复上次会话时，会重建其中可恢复网页的分组、颜色和折叠状态。
 
+从 0.1.0-preview.88 起，右键多选中的任一标签，打开「将所选标签移入标签组」，可以新建组或选择已有组。也可以从右键菜单将所选标签移出各自所在的组。固定标签留在固定区，操作期间当前网页保持打开。将当前页移入折叠组时，该组会展开。
+
 ### 标签组 API
 
 `tabs.groups` 授权后，用户触发的原生命令传入 `{}`，可调用 `tabs.groups.create`、`tabs.groups.removeTab` 或 `tabs.groups.open`。宿主为命令绑定目标标签，`open` 将目标传给插件配置页。
+
+用户触发的命令同时拥有 `tabs.groups` 和 `tabs.manage` 授权时，可调用 `tabs.groups.applySelection({ action, id? })`。使用 `create` 创建组，`assign` 移入指定组，`remove` 移出各自所在的组。仅 `assign` 需要现有组的 `id`。宿主绑定命令启动时的选择。返回 `{ state, moved, kept }`，其中 `kept` 统计保留的固定标签。选择或目标失效时返回 `unavailable`，组数达到上限时返回 `limitReached`。
 
 活动配置页调用 `tabs.groups.list` 获取 `{ groups, assigned, assignable }`，其中组含 `id`、`name`、`color`、`collapsed` 和 `members`。调用 `tabs.groups.assign({ id })` 移动绑定标签，`id: 0` 表示移出。用 `tabs.groups.update({ id, name, color, collapsed })` 修改，用 `tabs.groups.dissolve({ id })` 解散。颜色为 `indigo`、`teal`、`amber`、`rose` 或 `slate`。
 

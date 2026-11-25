@@ -1428,6 +1428,47 @@ static bool palette_key(const MSG *msg) {
 static bool within(int x,int y,int left,int top,int w,int h) {
     return x>=left && x<left+w && y>=top && y<top+h;
 }
+static void selection_context_menu(HWND hwnd, HMENU popup, POINT screen, uint64_t selection, unsigned permission) {
+    enum { CANCEL_SELECTION = 1, GROUP_CREATE = 100, GROUP_REMOVE, GROUP_FIRST };
+    wchar_t close_label[48];
+    swprintf(close_label,ARRAYSIZE(close_label),L"关闭所选标签（%u）",(unsigned)moon_tab_selection_count());
+    AppendMenuW(popup,MF_STRING,MOON_TAB_CLOSE_SELECTED,close_label);
+    MoonTabGroup groups[MOON_MAX_GROUPS];
+    size_t count=0;
+    if (permission&MOON_TAB_GROUPS) {
+        bool can_assign,can_remove;
+        count=moon_group_selection_choices(groups,ARRAYSIZE(groups),&can_assign,&can_remove);
+        HMENU destinations=can_assign?CreatePopupMenu():NULL;
+        if (destinations) {
+            AppendMenuW(destinations,MF_STRING,GROUP_CREATE,L"新建标签组");
+            if (count) AppendMenuW(destinations,MF_SEPARATOR,0,NULL);
+            for (size_t i=0;i<count;++i) {
+                wchar_t name[97], escaped[193], label[224];
+                if (!moon_utf16(groups[i].name,name,ARRAYSIZE(name))) continue;
+                size_t used=0;
+                for (size_t n=0;name[n];++n) {
+                    if (name[n]==L'&') escaped[used++]=L'&';
+                    escaped[used++]=name[n];
+                }
+                escaped[used]=0;
+                swprintf(label,ARRAYSIZE(label),L"「%ls」 · %u 个标签",escaped,groups[i].members);
+                AppendMenuW(destinations,MF_STRING,GROUP_FIRST+i,label);
+            }
+            if (!AppendMenuW(popup,MF_POPUP,(UINT_PTR)destinations,L"将所选标签移入标签组"))
+                DestroyMenu(destinations);
+        }
+        if (can_remove) AppendMenuW(popup,MF_STRING,GROUP_REMOVE,L"将所选标签移出标签组");
+    }
+    AppendMenuW(popup,MF_STRING,CANCEL_SELECTION,L"取消选择");
+    const UINT command=TrackPopupMenuEx(popup,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON,screen.x,screen.y,hwnd,NULL);
+    if (command==CANCEL_SELECTION && selection==moon_tab_selection_epoch()) moon_tab_selection_clear();
+    else if (command==MOON_TAB_CLOSE_SELECTED) moon_command((int)command,selection,NULL);
+    else if (command==GROUP_CREATE) moon_group_selection_command(selection,MOON_GROUP_CREATE,0);
+    else if (command==GROUP_REMOVE) moon_group_selection_command(selection,MOON_GROUP_REMOVE,0);
+    else if (command>=GROUP_FIRST && command-GROUP_FIRST<count)
+        moon_group_selection_command(selection,MOON_GROUP_ASSIGN,groups[command-GROUP_FIRST].id);
+}
+
 static void tab_context_menu(HWND hwnd, POINT screen) {
     if (focus_mode) return;
     POINT client=screen;
@@ -1451,15 +1492,8 @@ static void tab_context_menu(HWND hwnd, POINT screen) {
     }
     const uint64_t selection=(flags&MOON_TAB_SELECTED)?moon_tab_selection_epoch():0;
     if (selection && (tab_tools&MOON_TAB_MANAGE)) {
-        enum { CANCEL_SELECTION = 1 };
-        wchar_t close_label[48];
-        swprintf(close_label,ARRAYSIZE(close_label),L"关闭所选标签（%u）",(unsigned)moon_tab_selection_count());
-        AppendMenuW(popup,MF_STRING,MOON_TAB_CLOSE_SELECTED,close_label);
-        AppendMenuW(popup,MF_STRING,CANCEL_SELECTION,L"取消选择");
-        const UINT command=TrackPopupMenuEx(popup,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON,screen.x,screen.y,hwnd,NULL);
+        selection_context_menu(hwnd,popup,screen,selection,tab_tools);
         DestroyMenu(popup);
-        if (command==CANCEL_SELECTION && selection==moon_tab_selection_epoch()) moon_tab_selection_clear();
-        if (command==MOON_TAB_CLOSE_SELECTED) moon_command((int)command,selection,NULL);
         return;
     }
     if (tab_tools&MOON_TAB_ORGANIZE) {

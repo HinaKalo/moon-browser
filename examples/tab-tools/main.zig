@@ -30,11 +30,27 @@ pub fn main() !void {
         .openLink => try link(&client,.@"tabs.openLink"),
         .copyLink => try link(&client,.@"tabs.copyLink"),
         .reorder => try reorder(&client),
-        .groupCreate => try groupCommand(&client,.@"tabs.groups.create"),
+        .groupCreate => try createGroup(&client,params.object.get("groupSelection") orelse .null),
         .groups => try groupCommand(&client,.@"tabs.groups.open"),
         .groupRemove => try groupCommand(&client,.@"tabs.groups.removeTab"),
     };
     try client.reply(id, sdk.CommandResult{ .message = message, .toast = true });
+}
+
+fn createGroup(client: *sdk.Client, selection: std.json.Value) !?[]const u8 {
+    if (selection == .null) return groupCommand(client,.@"tabs.groups.create");
+    const request=try std.json.parseFromValueLeaky(sdk.TabGroupSelection,client.allocator,selection,.{});
+    const response=try client.call(.@"tabs.groups.applySelection",request);
+    const result=response.get("result") orelse return "请检查标签组和标签管理权限。";
+    const outcome=try std.json.parseFromValueLeaky(sdk.TabGroupSelectionResult,client.allocator,result,.{});
+    return switch (outcome.state) {
+        .saved => if (outcome.kept==0)
+            try std.fmt.allocPrint(client.allocator,"已更新 {d} 个标签的分组。",.{outcome.moved})
+        else
+            try std.fmt.allocPrint(client.allocator,"已更新 {d} 个标签的分组，保留 {d} 个固定标签。",.{outcome.moved,outcome.kept}),
+        .limitReached => "已达到 24 个标签组上限。",
+        else => "选择或目标标签组已改变，请重试。",
+    };
 }
 
 fn groupCommand(client: *sdk.Client, method: sdk.Method) !?[]const u8 {
