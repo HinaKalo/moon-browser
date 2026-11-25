@@ -1991,6 +1991,11 @@ export fn moon_context_inspect_label(tab: u64) ?[*:0]const u8 {
     return plugins.inspectElementLabel();
 }
 
+export fn moon_context_highlight_label(tab: u64) ?[*:0]const u8 {
+    if (stopped or count==0 or tabs[active].id!=tab or !hasSite(&tabs[active])) return null;
+    return plugins.highlightLinkLabel();
+}
+
 export fn moon_site_context(site: *native.MoonSiteContext) bool {
     if (stopped or count == 0) return false;
     const tab = &tabs[active];

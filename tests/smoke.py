@@ -23,6 +23,7 @@ from zipfile import ZipFile
 
 
 PAYLOAD = b"Moon Browser download fixture\n"
+HIGHLIGHT_QUOTE = "Moon 高亮链接验收，窗口下方的月亮"
 # Generated AAC-LC 440 Hz track for WebKit's MP4 decoder, with no video.
 AUTOPLAY_AUDIO_MP4 = Path(__file__).with_name("autoplay-audible.m4a")
 # Generated 320x180 H.264 baseline video at 15 fps, without audio.
@@ -57,6 +58,8 @@ class Fixture(BaseHTTPRequestHandler):
     seen_extension_network = Event()
     seen_blocked_request = Event()
     seen_filter_proof = Event()
+    highlight_selected = Event()
+    highlight_reached = Event()
     seen_allowed_request = Event()
     filter_control_reports = {}
     filter_probe = False
@@ -194,6 +197,32 @@ class Fixture(BaseHTTPRequestHandler):
         elif path == "/moon-filter-probe/passed":
             self.seen_filter_proof.set()
             data, content_type = b"ok", "text/plain"
+        elif path == "/highlight-selected":
+            self.highlight_selected.set()
+            data, content_type = b"ok", "text/plain"
+        elif path == "/highlight-reached":
+            self.highlight_reached.set()
+            data, content_type = b"ok", "text/plain"
+        elif path == "/page/highlight-link":
+            data = ('''<!doctype html><meta charset="utf-8"><title>Moon highlight fixture</title>
+<style>body{margin:0;font:20px sans-serif} #choose{position:fixed;top:0;left:0;padding:12px} #quote{margin:0;padding:8px} .spacer{height:1900px}</style>
+<button id="choose">Select text</button><div class="spacer"></div><p id="quote">''' + HIGHLIGHT_QUOTE + '''</p>
+<div class="spacer"></div><script>
+const choose=document.getElementById('choose'), quote=document.getElementById('quote');
+let manual=false;
+choose.onclick=()=>{
+  manual=true;
+  choose.hidden=true;
+  quote.scrollIntoView({block:'start'});
+  getSelection().selectAllChildren(quote);
+  fetch('/highlight-selected',{cache:'no-store'});
+};
+addEventListener('scroll',()=>{
+  if(!manual && scrollY>=1000 && quote.getBoundingClientRect().top<innerHeight && quote.getBoundingClientRect().bottom>0)
+    fetch('/highlight-reached',{cache:'no-store'});
+});
+</script>''').encode()
+            content_type = "text/html; charset=utf-8"
         elif path == "/site-data-navigation":
             action = b"change" if self.change_site_data_source.is_set() else (
                 b"overwrite" if self.change_site_data_entry.is_set() else
@@ -440,7 +469,11 @@ class Fixture(BaseHTTPRequestHandler):
                       'const report=(event,detail)=>fetch("/media-control-report/"+stage+"-"+event+"?"+detail,{cache:"no-store"});'
                       'media.onplaying=()=>report("playing",++count);'
                       'media.ontimeupdate=()=>{if(media.currentTime>=0.6){media.ontimeupdate=null;report("advanced","yes");}};'
-                      'media.onpause=()=>report("pause","yes");'
+                      'media.onpause=()=>{report("pause","yes");report("pause-state",'
+                      'JSON.stringify({hidden:document.hidden,time:media.currentTime,'
+                      'ready:media.readyState,ended:media.ended,error:media.error?.code,'
+                      'muted:media.muted,volume:media.volume,count}));};'
+                      'document.addEventListener("visibilitychange",()=>report("visibility",document.visibilityState));'
                       'document.querySelector("button").onclick=()=>media.play().catch(error=>report("error",error.name));'
                       'report("ready","yes");'
                       '</script>')
@@ -975,7 +1008,9 @@ def run_win32(exe, base, root):
         session_plugin.with_name("plugin.json").read_text(encoding="utf-8"))["permissions"]
     tab_tools = exe.parent / "plugins" / "tab-tools" / "MoonTabTools.exe"
     tab_groups = (tab_tools.parent / "groups.html").is_file()
-    has_web_link_menu = tab_tools.exists() and '"linkMenu"' in tab_tools.with_name("plugin.json").read_text(encoding="utf-8")
+    tab_tools_manifest = tab_tools.with_name("plugin.json").read_text(encoding="utf-8") if tab_tools.exists() else ""
+    has_web_link_menu = '"linkMenu"' in tab_tools_manifest
+    has_highlight_link = '"highlightLinkMenu"' in tab_tools_manifest
     private_window = exe.parent / "plugins" / "private-window" / "MoonPrivateWindow.exe"
     if task_manager.exists():
         profile.mkdir(parents=True,exist_ok=True)
@@ -4648,6 +4683,69 @@ def run_win32(exe, base, root):
                 if saved_link(base + "/page/link-menu-stale-target"):
                     raise RuntimeError("A stale menu saved a link from an earlier document")
                 print("link_menu=ok webkit_hit_test=ok bookmark_target=ok lazy_background=ok non_http=ok stale_navigation=ok",flush=True)
+
+            if has_highlight_link:
+                target=base+"/page/highlight-link?session=1"
+                set_control(edit,target)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(target,)),"Highlight fixture did not load")
+                view=visible_page_view()
+                title="复制所选文字的链接"
+                def highlight_menu(choose=None):
+                    def right_click():
+                        point=px(18)<<16 | px(30)
+                        user.PostMessageW(view,0x0204,2,point)
+                        user.PostMessageW(view,0x0205,0,point)
+                    return native_entries(trigger=right_click,choose=choose,owner_window=view)
+
+                if title in highlight_menu():
+                    raise RuntimeError("Highlight link was offered without a text selection")
+                page_click(px(30),px(18))
+                if not Fixture.highlight_selected.wait(6):
+                    raise RuntimeError("Could not select the fixture text")
+                menu_items=highlight_menu()
+                if title not in menu_items:
+                    raise RuntimeError(f"WebKit did not offer the plugin's highlight link: {menu_items}")
+                destination=target+"#:~:text="+quote(HIGHLIGHT_QUOTE,safe="")
+                clipboard_test="occupied"
+                if user.CountClipboardFormats()==0:
+                    user.GetClipboardData.argtypes=[wt.UINT]
+                    user.GetClipboardData.restype=wt.HANDLE
+                    kernel=ctypes.WinDLL("kernel32",use_last_error=True)
+                    kernel.GlobalLock.argtypes=[wt.HANDLE]
+                    kernel.GlobalLock.restype=ctypes.c_void_p
+                    kernel.GlobalUnlock.argtypes=[wt.HANDLE]
+                    def copied_highlight(clear_expected=None):
+                        if not user.IsClipboardFormatAvailable(13) or not user.OpenClipboard(None):
+                            return None
+                        try:
+                            data=user.GetClipboardData(13)    # CF_UNICODETEXT
+                            pointer=kernel.GlobalLock(data) if data else None
+                            if not pointer:
+                                return None
+                            try:
+                                text=ctypes.wstring_at(pointer)
+                            finally:
+                                kernel.GlobalUnlock(data)
+                            if clear_expected is not None and text==clear_expected:
+                                user.EmptyClipboard()
+                            return text if text.startswith(target+"#:~:text=") else None
+                        finally:
+                            user.CloseClipboard()
+
+                    highlight_menu(choose=title)
+                    destination=wait_for(copied_highlight,"WebKit did not copy the exact text-fragment link")
+                    if HIGHLIGHT_QUOTE not in unquote(destination):
+                        raise RuntimeError("The copied fragment did not include the selected text")
+                    copied_highlight(destination)
+                    clipboard_test="ok"
+                # Re-open the same URL in another tab so a saved scroll position cannot satisfy the test.
+                invoke("新建标签页")
+                set_control(edit,destination)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                if not Fixture.highlight_reached.wait(10):
+                    raise RuntimeError("Re-opening the text-fragment link did not scroll to the selection")
+                print(f"highlight_link=ok native_selection_menu=ok empty_selection_hidden=ok clipboard={clipboard_test} fragment_scroll=ok",flush=True)
 
             groups = native_entries()
             if "管理插件" not in groups:

@@ -95,13 +95,15 @@ const Task = struct {
 const MenuOverride = enum { default, pinned, hidden };
 const UserShortcut = struct { plugin: []const u8, command: []const u8, shortcut: []const u8 };
 const PendingCommand = struct { action: usize, tab: u64, navigation: u64 };
+const WebContextAction = enum { inspect_element, highlight_link };
 const Command = struct {
     id: [64:0]u8 = @splat(0), label: [256:0]u8 = @splat(0), interactive: bool = false,
     shortcut: ?sdk.Shortcut = null,
     menu_group: ?sdk.MenuGroup = null,
     site_menu: bool = false,
     link_menu: ?sdk.LinkMenuAction = null,
-    inspect_element_menu: [256:0]u8 = @splat(0),
+    web_context_action: ?WebContextAction = null,
+    web_context_label: [256:0]u8 = @splat(0),
     tab_drop: bool = false,
     menu_override: MenuOverride = .default,
     user_shortcut: ?Hotkey = null,
@@ -208,6 +210,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     if (!copy(&plugin.network_rules,network_rules orelse "")) return;
     var has_tab_drop = false;
     var has_inspect_element = false;
+    var has_highlight_link = false;
     for (commands, 0..) |item, index| {
         if (!validComponent(item.id) or item.label.len == 0) return;
         if ((item.linkMenu != null or item.tabDrop) and (item.shortcut != null or item.siteMenu or item.menu != null)) return;
@@ -220,6 +223,11 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
                 !requests.contains(.@"page.inspect")) return;
             has_inspect_element = true;
         }
+        if (item.highlightLinkMenu) |menu_label| {
+            if (has_highlight_link or menu_label.len==0 or item.linkMenu!=null or item.tabDrop or item.inspectElementMenu!=null or
+                !requests.contains(.@"tabs.manage")) return;
+            has_highlight_link = true;
+        }
         for (commands[0..index]) |prior| if (std.mem.eql(u8, prior.id, item.id)) return;
         plugin.actions[index] = .{};
         plugin.actions[index].interactive = item.interactive;
@@ -228,7 +236,9 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         plugin.actions[index].site_menu = item.siteMenu;
         plugin.actions[index].link_menu = item.linkMenu;
         plugin.actions[index].tab_drop = item.tabDrop;
-        if (!copy(&plugin.actions[index].inspect_element_menu,item.inspectElementMenu orelse "")) return;
+        plugin.actions[index].web_context_action = if (item.inspectElementMenu!=null) .inspect_element
+            else if (item.highlightLinkMenu!=null) .highlight_link else null;
+        if (!copy(&plugin.actions[index].web_context_label,item.inspectElementMenu orelse item.highlightLinkMenu orelse "")) return;
         if (!copy(&plugin.actions[index].id, item.id) or !copy(&plugin.actions[index].label, item.label)) return;
     }
     if (bundled) {
@@ -854,11 +864,19 @@ pub fn tabDropProvider() ?struct { plugin: usize, command: usize } {
 }
 
 pub fn inspectElementLabel() ?[*:0]const u8 {
+    return contextLabel(.@"page.inspect",.inspect_element);
+}
+
+pub fn highlightLinkLabel() ?[*:0]const u8 {
+    return contextLabel(.@"tabs.manage",.highlight_link);
+}
+
+fn contextLabel(permission: sdk.Permission, kind: WebContextAction) ?[*:0]const u8 {
     for (all[0..len]) |*plugin| {
-        if (!plugin.enabled or !plugin.grants.contains(.@"page.inspect") or
+        if (!plugin.enabled or !plugin.grants.contains(permission) or
             (!plugin.bundled and !canContribute(plugin))) continue;
         for (plugin.actions[0..plugin.action_count]) |*entry| {
-            if (entry.inspect_element_menu[0]!=0) return &entry.inspect_element_menu;
+            if (entry.web_context_action==kind) return &entry.web_context_label;
         }
     }
     return null;

@@ -114,7 +114,7 @@ extern WKDictionaryRef WKDictionaryCreate(const WKStringRef *, const WKTypeRef *
     X(WKPageSetPageNavigationClient) X(WKPageSetPageUIClient) X(WKPageSetPageStateClient) \
     X(WKPageSetPageContextMenuClient) X(WKArrayCreate) X(WKArrayGetSize) X(WKArrayGetItemAtIndex) \
     X(WKHitTestResultCopyAbsoluteLinkURL) X(WKHitTestResultCopyLinkLabel) \
-    X(WKContextMenuItemCreateAsAction) X(WKContextMenuItemGetTag) X(WKContextMenuItemSeparatorItem) \
+    X(WKContextMenuItemCreateAsAction) X(WKContextMenuItemGetEnabled) X(WKContextMenuItemGetTag) X(WKContextMenuItemSeparatorItem) \
     X(WKPageLoadURL) X(WKPageCopyTitle) X(WKPageCopyActiveURL) X(WKPageClose) \
     X(WKPageCopyCommittedURL) X(WKPageCallAsyncJavaScriptWithoutUserGesture) \
     X(WKPageSetPageInjectedBundleClient) X(WKPagePostMessageToInjectedBundle) \
@@ -935,17 +935,18 @@ static void web_context_menu(WKPageRef page,WKArrayRef proposed,WKArrayRef *resu
     MoonView *view=(MoonView *)client;
     link_context.tab_id=0;
     const size_t existing=wk.WKArrayGetSize(proposed);
-    if (view->extension_address || existing>256) {
+    if (existing>256) {
         *result=(WKArrayRef)wk.WKRetain(proposed);
         return;
     }
     WKTypeRef items[LINK_COMMANDS+257];
     MoonLinkContext current={0};
     bool replace_open=false, replace_copy=false;
-    const size_t created=web_link_menu(view,hit,items,&current,&replace_open,&replace_copy);
+    const size_t created=view->extension_address ? 0 : web_link_menu(view,hit,items,&current,&replace_open,&replace_copy);
     size_t used=created;
     const char *inspect_label=context_inspect_available ? moon_context_inspect_label(view->token) : NULL;
-    WKContextMenuItemRef inspect_item=NULL;
+    const char *highlight_label=moon_context_highlight_label(view->token);
+    WKContextMenuItemRef inspect_item=NULL, highlight_item=NULL;
     WKContextMenuItemRef separator=created ? wk.WKContextMenuItemSeparatorItem() : NULL;
     for (size_t i=0;i<existing;++i) {
         WKContextMenuItemRef item=(WKContextMenuItemRef)wk.WKArrayGetItemAtIndex(proposed,i);
@@ -966,14 +967,22 @@ static void web_context_menu(WKPageRef page,WKArrayRef proposed,WKArrayRef *resu
             view->inspector=wk.WKPageGetInspector(view->page);
             if (!view->inspector) continue;
             item=inspect_item;
+        } else if (tag==kWKContextMenuItemTagCopyLinkWithHighlight) {
+            if (!highlight_label || highlight_item) continue;
+            WKStringRef title=wk.WKStringCreateWithUTF8CString(highlight_label);
+            highlight_item=title ? wk.WKContextMenuItemCreateAsAction(tag,title,wk.WKContextMenuItemGetEnabled(item)) : NULL;
+            release(title);
+            if (!highlight_item) continue;
+            item=highlight_item;
         }
         if (separator) items[used++]=separator;
         separator=NULL;
         items[used++]=item;
     }
-    *result=(!created && !inspect_item && used==existing) ? (WKArrayRef)wk.WKRetain(proposed) : wk.WKArrayCreate(items,used);
+    *result=(!created && !inspect_item && !highlight_item && used==existing) ? (WKArrayRef)wk.WKRetain(proposed) : wk.WKArrayCreate(items,used);
     for (size_t i=0;i<created;++i) release(items[i]);
     release(inspect_item);
+    release(highlight_item);
     if (*result && created) link_context=current;
 }
 
@@ -1147,7 +1156,8 @@ static MoonView *open_view(uint64_t token, const char *extension_id, const char 
         wk.WKPageSetPageContextMenuClient(view->page,&menu.base);
     }
     wk.WKPageListenForLayoutMilestones(view->page,kWKDidFirstVisuallyNonEmptyLayout);
-    ShowWindow(view->hwnd,SW_SHOWNA);
+    wk.WKViewSetIsInWindow(view->view,true);
+    ShowWindow(view->hwnd,IsWindowVisible(view->surface) ? SW_SHOWNA : SW_HIDE);
     return view;
 fail:
     release(config);
@@ -1220,10 +1230,16 @@ void moon_engine_close(MoonView *view) {
     free(view);
 }
 void moon_engine_show(MoonView *view, bool visible) {
-    if (!visible) moon_engine_cancel_pick(view);
+    // Hiding a tab changes WebKit's visibility, while its WebView remains attached to the window.
+    if (!visible) {
+        moon_engine_cancel_pick(view);
+        ShowWindow(view->hwnd,SW_HIDE);
+    }
     ShowWindow(view->surface,visible ? SW_SHOWNA : SW_HIDE);
-    wk.WKViewSetIsInWindow(view->view,visible);
-    if (visible && GetForegroundWindow() == moon_shell_window()) SetFocus(view->hwnd);
+    if (visible) {
+        ShowWindow(view->hwnd,SW_SHOWNA);
+        if (GetForegroundWindow()==moon_shell_window()) SetFocus(view->hwnd);
+    }
 }
 bool moon_engine_load(MoonView *view, const char *url) {
     WKURLRef target_url = wk.WKURLCreateWithUTF8CString(url);

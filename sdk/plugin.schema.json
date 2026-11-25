@@ -56,8 +56,10 @@
               { "required": ["shortcut"] },
               { "required": ["siteMenu"], "properties": { "siteMenu": { "const": true } } },
               { "required": ["linkMenu", "tabDrop"], "properties": { "tabDrop": { "const": true } } },
-              { "required": ["inspectElementMenu"] }
+              { "required": ["inspectElementMenu"] },
+              { "required": ["highlightLinkMenu"] }
             ] } },
+            "not": { "required": ["inspectElementMenu", "highlightLinkMenu"] },
             "properties": {
               "id": { "type": "string", "maxLength": 63, "pattern": "^[A-Za-z0-9_-](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?$" },
               "label": { "type": "string", "minLength": 1, "maxLength": 255 },
@@ -66,6 +68,7 @@
               "siteMenu": { "type": "boolean", "default": false },
               "linkMenu": { "enum": ["open", "copy", "bookmark"] },
               "inspectElementMenu": { "type": "string", "minLength": 1, "maxLength": 255 },
+              "highlightLinkMenu": { "type": "string", "minLength": 1, "maxLength": 255 },
               "tabDrop": { "type": "boolean", "default": false },
               "shortcut": { "enum": ["Ctrl+H", "F9", "F11", "F12", "Ctrl+Shift+C", "Ctrl+Shift+E", "Ctrl+Shift+J", "Ctrl+D", "Ctrl+Shift+O", "Ctrl+J", "Ctrl+F", "Ctrl++", "Ctrl+-", "Ctrl+0", "Ctrl+Shift+T", "Ctrl+Shift+Delete", "Ctrl+Shift+M", "Ctrl+Shift+N", "Ctrl+U", "Ctrl+S", "Ctrl+Shift+B", "Ctrl+Shift+R", "Ctrl+B", "Ctrl+Shift+L", "Ctrl+Shift+A", "Ctrl+,"] }
             }
@@ -98,6 +101,19 @@
         "properties": {
           "permissions": { "contains": { "const": "page.inspect" } },
           "contributes": { "properties": { "commands": { "contains": { "required": ["inspectElementMenu"] }, "maxContains": 1 } } }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["contributes"],
+        "properties": { "contributes": { "required": ["commands"], "properties": { "commands": { "contains": { "required": ["highlightLinkMenu"] } } } } }
+      },
+      "then": {
+        "required": ["permissions"],
+        "properties": {
+          "permissions": { "contains": { "const": "tabs.manage" } },
+          "contributes": { "properties": { "commands": { "contains": { "required": ["highlightLinkMenu"] }, "maxContains": 1 } } }
         }
       }
     }

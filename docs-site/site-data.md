@@ -6,7 +6,7 @@
 
 从 0.1.0-preview.82 起，Local Storage 和 Session Storage 每页显示 32 条。筛选按完整键名匹配，覆盖此类存储中的全部条目。长条目会标记截断。普通窗口的 Cookie 列表可按名称、域或路径搜索全部与原网页匹配的 Cookie，每页最多 32 条。单条值最多预览 2048 UTF-8 字节。Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。
 
-从 0.1.0-preview.83 起，普通窗口的 Cookie 列表可删除选中的网页可写 Cookie。确认框会显示名称、域和路径。同名、不同路径的 Cookie 可分别处理。HttpOnly Cookie 可按需查看，整站清除时一并移除。
+从 0.1.0-preview.84 起，普通窗口的 Cookie 列表可删除选中的网页可写 Cookie。确认框会显示名称、域和路径。同名、不同路径的 Cookie 可分别处理。HttpOnly Cookie 可按需查看，整站清除时一并移除。
 
 从 0.1.0-preview.73 起，在普通窗口的 Cookie 页可选「清除站点 Cookie…」。确认后，WebKit 清除同一注册域及其子域的 Cookie，包含 HttpOnly Cookie 和其他路径下的 Cookie。其他站点和 Local Storage、Session Storage、IndexedDB、Cache Storage 保留。清除登录 Cookie 后可能需要重新登录。
 

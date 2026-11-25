@@ -145,6 +145,7 @@ bool moon_engine_inspect(MoonView *view, int panel, int placement);
 bool moon_engine_close_inspector(MoonView *view);
 void moon_engine_context_inspect_available(bool available);
 const char *moon_context_inspect_label(uint64_t tab);
+const char *moon_context_highlight_label(uint64_t tab);
 bool moon_engine_cancel_pick(MoonView *view);
 bool moon_engine_inspecting(MoonView *view);
 enum { MOON_VIEWPORT_MIN = 120, MOON_VIEWPORT_MAX = 2400 };
