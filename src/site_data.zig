@@ -6,6 +6,16 @@ const cookie_store = @import("cookie_store.zig");
 const Entry = struct { name: []const u8, value: []const u8, shortened: bool };
 const Group = struct { entries: []Entry, more: bool };
 const Snapshot = struct { cookies: ?Group, local: ?Group, session: ?Group, mutation: ?sdk.SiteDataMutation = null };
+const StorageSnapshot = struct { entries: []Entry, total: u32, storageCount: u32 };
+const StorageRequest = struct {
+    group: sdk.SiteDataGroup,
+    offset: u32,
+    token: u64,
+    term: [sdk.site_storage_query_limit]u8 = undefined,
+    term_len: usize,
+    deadline: ?u64,
+    result: ?std.json.Parsed(StorageSnapshot) = null,
+};
 const Catalog = struct {
     indexedDB: @FieldType(sdk.SiteStorageCatalog,"indexedDB"),
     cacheStorage: @FieldType(sdk.SiteStorageCatalog,"cacheStorage"),
@@ -37,6 +47,8 @@ const RecordsRequest = struct {
 const AsyncMutation = union(enum) { cache, cookies, database: u64 };
 const allocator = std.heap.page_allocator;
 var captured: ?std.json.Parsed(Snapshot) = null;
+var storage_page: ?StorageRequest = null;
+var storage_serial: u64 = 0;
 var cookies: ?cookie_store.Snapshot = null;
 var catalog: ?std.json.Parsed(Catalog) = null;
 var catalog_deadline: ?u64 = null;
@@ -62,11 +74,17 @@ fn dropValues() void {
     if (captured) |result| result.deinit();
     captured = null;
     dropCookies();
+    dropStoragePage();
     if (catalog) |result| result.deinit();
     catalog = null;
     catalog_deadline = null;
     catalog_requested = false;
     dropDatabase();
+}
+
+pub fn dropStoragePage() void {
+    if (storage_page) |page| if (page.result) |result| result.deinit();
+    storage_page = null;
 }
 
 fn dropDatabase() void {
@@ -165,9 +183,7 @@ pub fn update(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.Site
     if (replacement) |bytes| {
         if (bytes.len>sdk.site_data_value_limit or !std.unicode.utf8ValidateSlice(bytes)) return false;
     }
-    const group = resolve(target.group) orelse return false;
-    if (target.id>=group.entries.len) return false;
-    const entry = group.entries[target.id];
+    const entry = storageEntry(target) orelse return false;
     if (entry.shortened) return false;
     return mutate(view,.{ .group=target.group,.key=entry.name,.previous=entry.value,.replacement=replacement });
 }
@@ -312,6 +328,11 @@ pub fn complete(tab: u64, token: u64, json: []const u8) void {
 }
 
 pub fn tick(now: u64) void {
+    if (storage_page) |*page| {
+        if (page.deadline) |expires| {
+            if (now >= expires) page.deadline = null;
+        }
+    }
     if (catalog_deadline) |expires| {
         if (now >= expires) catalog_deadline = null;
     }
@@ -573,9 +594,83 @@ pub fn list(tab: u64, id: []const u8, kind: sdk.SiteDataGroup, buffer: *[32]sdk.
     return .{ .available=true,.entries=buffer[0..group.entries.len],.more=group.more,.generation=sequence };
 }
 
+pub fn requestStoragePage(view: *native.MoonView, tab: u64, id: []const u8, query: sdk.SiteStorageQuery) bool {
+    if (!canMutate(tab,id,query.group,query.generation) or query.query.len>sdk.site_storage_query_limit) return false;
+    if (!query.refresh) {
+        if (storage_page) |*page| {
+            if (page.group==query.group and page.offset==query.offset and
+                std.mem.eql(u8,page.term[0..page.term_len],query.query)) return true;
+        }
+    }
+    var generation: [20]u8 = undefined;
+    const bytes = std.json.Stringify.valueAlloc(allocator,.{
+        .generation=std.fmt.bufPrint(&generation,"{d}",.{sequence}) catch unreachable,
+        .group=query.group,.query=query.query,.offset=query.offset,
+    },.{}) catch return false;
+    defer allocator.free(bytes);
+    const payload = allocator.dupeSentinel(u8,bytes,0) catch return false;
+    defer allocator.free(payload);
+    dropStoragePage();
+    storage_serial+=1;
+    storage_page=.{ .group=query.group,.offset=query.offset,.token=storage_serial,
+        .term_len=query.query.len,.deadline=native.moon_clock()+5000 };
+    @memcpy(storage_page.?.term[0..query.query.len],query.query);
+    if (!native.moon_engine_inspect_storage_page(view,storage_serial,payload.ptr))
+        storage_page.?.deadline=null;
+    return true;
+}
+
+pub fn completeStoragePage(tab: u64, token: u64, json: []const u8) void {
+    const page = if (storage_page) |*current| current else return;
+    if (tab!=source or page.token!=token or page.deadline==null) return;
+    page.deadline=null;
+    const result = std.json.parseFromSlice(StorageSnapshot,allocator,json,.{ .allocate=.alloc_always }) catch return;
+    const expected = @min(sdk.site_storage_page_size,result.value.total -| page.offset);
+    if (result.value.total>result.value.storageCount or result.value.entries.len!=expected) {
+        result.deinit();
+        return;
+    }
+    for (result.value.entries) |entry| {
+        if (entry.name.len>512 or entry.value.len>2048) {
+            result.deinit();
+            return;
+        }
+    }
+    page.result=result;
+}
+
+pub fn storagePage(query: sdk.SiteStorageQuery, buffer: *[sdk.site_storage_page_size]sdk.SiteDataEntry) sdk.SiteStoragePage {
+    const page = storage_page.?;
+    var response: sdk.SiteStoragePage = .{
+        .generation=query.generation,.pageRevision=page.token,.offset=query.offset,
+        .state=if (page.deadline!=null) .pending else .unavailable,
+    };
+    if (page.result) |result| {
+        const entries = result.value.entries;
+        for (entries,0..) |item,index| buffer[index]=.{
+            .id=@intCast(index),.name=item.name,.length=item.value.len,.shortened=item.shortened,
+        };
+        response.state=.ready;
+        response.entries=buffer[0..entries.len];
+        response.total=result.value.total;
+        response.storageCount=result.value.storageCount;
+    }
+    return response;
+}
+
+fn storageEntry(target: sdk.SiteDataItem) ?Entry {
+    const entries = if (target.pageRevision) |revision| blk: {
+        const page = storage_page orelse return null;
+        if (page.token!=revision or page.group!=target.group) return null;
+        const result = page.result orelse return null;
+        break :blk result.value.entries;
+    } else (resolve(target.group) orelse return null).entries;
+    if (target.id>=entries.len) return null;
+    return entries[target.id];
+}
+
 pub fn value(tab: u64, id: []const u8, target: sdk.SiteDataItem) ?[]const u8 {
     if (!owns(tab,id) or received != .ready or target.generation != sequence) return null;
-    const group=resolve(target.group) orelse return null;
-    if (target.id >= group.entries.len) return null;
-    return group.entries[target.id].value;
+    const entry=storageEntry(target) orelse return null;
+    return entry.value;
 }

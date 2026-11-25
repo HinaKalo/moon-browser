@@ -101,13 +101,14 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteData.open` | `siteData.read` | 在用户命令中传入 `{}`，打开清单声明的面板并绑定触发命令的网页。返回布尔值。 |
 | `siteData.status` | `siteData.read` | 从已打开的面板调用，返回 `{ state, origin, generation, failure, mutation, writable, cookieDetails, cacheWritable }`。各权限标记用于控制面板中对应的操作入口。 |
 | `siteData.list` | `siteData.read` | 面板传入 `{ group }`，类别是 `cookies`、`local` 或 `session`。返回 `{ available, entries, more, generation }`。 |
+| `siteData.storagePage` | `siteData.read` | 活动面板传入 `{ group, generation, query?, offset?, refresh? }`，翻页或搜索全部 Local Storage 和 Session Storage 的键。返回页代数、条目信息、匹配数和全部条目数。 |
 | `siteData.catalog` | `siteData.read` | 从绑定面板传入 `{ group }`，可选 `indexedDB` 或 `cacheStorage`。返回 `state`、`generation` 和对应目录。状态为 `pending`、`ready` 或 `unavailable`。目录含 `entries` 和 `more`，IndexedDB 条目还包含 `version`。 |
 | `siteData.database` | `siteData.read` | 活动的绑定面板传入 `{ index, generation, refresh? }`，读取对应 IndexedDB 目录条目的仓库、键路径和索引元数据。数据库变化时返回 `changed`。 |
 | `siteData.databaseRecords` | `siteData.read`、`siteData.records` | 活动的绑定面板传入 `{ index, generation, revision, store, offset?, refresh? }`，读取对应仓库一页的主键和值预览。就绪响应包含 `pageRevision`。 |
 | `siteData.clearObjectStore` | `siteData.read`、`siteData.databaseWrite` | 活动的绑定面板传入 `{ index, generation, revision, store }`，请求用户确认后清空该仓库中的记录。返回 `started`、`cancelled` 或 `unavailable`。 |
 | `siteData.removeRecord` | `siteData.read`、`siteData.records`、`siteData.databaseWrite` | 活动的绑定面板传入 `{ index, generation, revision, store, pageRevision, row }`，请求用户确认后按主键删除单条记录。`row` 为当前预览页的零起始下标。返回 `started`、`cancelled` 或 `unavailable`。 |
 | `siteData.cacheRemove` | `siteData.read`、`siteData.cacheWrite` | 活动的绑定面板传入 `{ index, generation }`，按 Cache Storage 原始目录下标请求确认并删除单个缓存。返回 `started`、`cancelled` 或 `unavailable`。 |
-| `siteData.value` | `siteData.read` | 面板传入 `{ group, id, generation }`，返回当前快照中的预览值。 |
+| `siteData.value` | `siteData.read` | 面板传入 `{ group, id, generation, pageRevision? }`，返回当前快照中的预览值。翻页接口返回的条目需要 `pageRevision`。 |
 | `siteData.cookieDetails` | `siteData.read`、`siteData.cookieDetails` | 普通窗口的活动绑定面板传入 `{ generation }`，返回 Cookie 属性。列表不含值。 |
 | `siteData.cookieValue` | `siteData.read`、`siteData.cookieDetails` | 活动绑定面板传入 `{ id, generation }`，单独读取一个 Cookie 的预览值，支持 HttpOnly。 |
 | `siteData.clearCookies` | `siteData.read`、`siteData.cookieClear` | 普通窗口的活动绑定面板传入 `{ generation }`，请求用户确认后清除网页所属同一注册域及其子域的 Cookie。返回 `started`、`cancelled` 或 `unavailable`。 |

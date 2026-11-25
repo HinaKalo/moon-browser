@@ -445,6 +445,7 @@ class Fixture(BaseHTTPRequestHandler):
                 demo = (
                     '<script>localStorage.setItem("moon-local","local-value");'
                     'sessionStorage.setItem("moon-session","session-value");'
+                    'sessionStorage.setItem("length","reserved-name-value");'
                     '(async()=>{await Promise.all(['
                     'new Promise((ok,fail)=>{const request=indexedDB.open("moon-inventory",3);'
                     'request.onupgradeneeded=()=>{const db=request.result;'
@@ -1954,6 +1955,35 @@ def run_win32(exe, base, root):
             + remove_record_contract
             + object_store_contract
         ) if database_schema else ""
+        storage_paging_contract = (
+            'const searchStorage=term=>{el("search").value=term;el("search").dispatchEvent(new Event("input"));};'
+            'const targetOnPage=id=>({group:"session",id,generation:page.generation,pageRevision:page.pageRevision});'
+            'const unavailable=request=>request.then(()=>false,error=>error.message==="NOT_FOUND");'
+            'searchStorage("length");'
+            'const reserved=await wait(()=>page?.total===1&&rowFor("length"),"storage name shared with the DOM API");'
+            'button(reserved,"显示值").click();'
+            'await wait(()=>reserved.querySelector("pre").textContent==="reserved-name-value","value of reserved name");'
+            'searchStorage("BULK-");'
+            'await wait(()=>page?.total===40&&page.entries.length===32&&!el("storage-next").disabled,"first storage page");'
+            'const previous=targetOnPage(page.entries[0].id);el("storage-next").click();'
+            'await wait(()=>page?.offset===32&&page.entries.length===8&&el("storage-next").disabled,"second storage page");'
+            'if(!await unavailable(host("siteData.value",previous))||'
+            '!await unavailable(host("siteData.update",{...previous,value:"stale"})))throw Error("old storage page remained valid");'
+            'const later=Array.from({length:40},(_,i)=>"bulk-"+i).find(name=>!capped.entries.some(first=>first.name===name));'
+            'if(!later)throw Error("later storage keys were missing");'
+            'const bound=targetOnPage(page.entries[0].id);'
+            'if(!await unavailable(host("siteData.value",{...bound,group:"local"})))throw Error("wrong storage group accepted");'
+            'el("storage-prev").click();await wait(()=>page?.offset===0&&page.entries.length===32,"previous storage page");'
+            'searchStorage(later.toUpperCase());'
+            'const laterRow=await wait(()=>page?.total===1&&rowFor(later),"query matched key beyond old cap");'
+            'if(laterRow.querySelector("pre").textContent)throw Error("paged value was visible by default");'
+            'button(laterRow,"显示值").click();await wait(()=>laterRow.querySelector("pre").textContent==="extra","reveal paged value");'
+            'button(laterRow,"编辑").click();await wait(()=>!el("editor").hidden&&el("new-value").value==="extra","edit paged key");'
+            'el("new-value").value="second-page-edit";el("editor").requestSubmit();seeded=await changed("saved",seeded.generation);'
+            'await wait(()=>page?.generation===seeded.generation&&rowFor(later),"new storage page after edit");'
+            'button(rowFor(later),"显示值").click();'
+            'await wait(()=>rowFor(later)?.querySelector("pre").textContent==="second-page-edit","saved paged value");'
+        ) if 'id="storage-pager"' in page else ""
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
             'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
@@ -2041,12 +2071,14 @@ def run_win32(exe, base, root):
             'const checked=await host("siteData.list",{group:"local"});const preserved=checked.entries.find(e=>e.name==="月亮");'
             'if(!preserved||await host("siteData.value",{group:"local",id:preserved.id,generation:checked.generation})!=="新数据")throw Error("duplicate changed value");'
             'if(!await host("siteData.create",{group:"session",generation:conflict.generation,key:"session-keep",value:"keep-value"}))throw Error("seed session");'
-            'const seeded=await changed("saved",conflict.generation);'
+            'let seeded=await changed("saved",conflict.generation);'
             'const capped=await host("siteData.list",{group:"session"});if(!capped.more||capped.entries.length!==32)throw Error("entries beyond preview");'
             'if(await host("siteData.clear",{group:"session",generation:added.generation})!=="unavailable")throw Error("stale generation");'
             'document.querySelector("[data-group=session]").click();'
             'await wait(()=>!el("storage-actions").hidden&&!el("clear-storage").disabled&&page.generation===seeded.generation,"bulk confirmation action");'
-            'el("search").value="bulk-1";el("search").dispatchEvent(new Event("input"));'
+            + storage_paging_contract +
+            'el("search").value="never-match-storage-fixture";el("search").dispatchEvent(new Event("input"));'
+            'await wait(()=>!el("clear-storage").disabled&&page?.entries.length===0&&el("results").children.length===0,"clear remains available with no matches");'
             'await emit({clearStage:"cancel"});el("clear-storage").click();'
             'await wait(()=>el("feedback").textContent==="已取消。","clear cancel")'
             '.catch(()=>{throw Error("clear cancel feedback: "+el("feedback").textContent);});'
@@ -3364,7 +3396,7 @@ def run_win32(exe, base, root):
                 result=wait_for(lambda: (value:=read_settings(config)) and (value.get("passed") or value.get("error")) and value,
                                 f"The {stage} media controls did not report",20)
                 if not result.get("passed"):
-                    raise RuntimeError(f"Media controls failed: {result}")
+                    raise RuntimeError(f"Media controls failed for {stage}: {result}. Fixture reports: {Fixture.media_reports}")
                 wait_for(lambda: Fixture.media_reports.get(stage+"-pause")=="yes" and Fixture.media_reports.get(stage+"-playing")=="2",
                          "Pause and resume did not affect the real HTML media element")
                 signal.write_text('{"focus":true}',encoding="utf-8")
@@ -3665,6 +3697,8 @@ def run_win32(exe, base, root):
             print("site_data_system_plugin=ok isolated_storage=ok storage_edit=ok storage_remove=ok stale_write_rejected=ok conflict_preserved=ok site_data_navigation_cleanup=ok",flush=True)
             if bulk_storage:
                 print("site_storage_create=ok duplicate_conflict=ok full_group_clear=ok other_group_kept=ok cancel=ok stale_confirmation=ok",flush=True)
+                if 'id="storage-pager"' in (site_data.parent / "site-data.html").read_text(encoding="utf-8"):
+                    print("site_storage_paging=ok full_key_search=ok page_edit=ok stale_page_rejected=ok filtered_clear=ok",flush=True)
         if page_source.exists():
             target = base + "/page/source-contract"
             set_control(edit,target)

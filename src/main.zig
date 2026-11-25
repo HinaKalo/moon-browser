@@ -542,6 +542,9 @@ fn selectTab(index: usize, notify: bool, expand_group: bool) void {
     moon_find_dismiss(false);
     const now = native.moon_clock();
     tabs[active].last_used = now;
+    if (site_data.ownerId()) |owner| {
+        if (site_data.owns(tabs[active].id,owner)) site_data.dropStoragePage();
+    }
     if (tabs[active].view) |view| native.moon_engine_show(view, false);
     active = index;
     const tab = &tabs[index];
@@ -2844,6 +2847,20 @@ fn sitePanelView(panel: u64, owner: []const u8, permission: sdk.Permission) ?*na
     return tab.view;
 }
 
+export fn moon_site_storage_page(panel: u64, id: [*c]const u8, session: bool, generation: u64,
+    query: [*c]const u8, length: usize, offset: u32, refresh: bool) bool {
+    const owner = slice(id);
+    const view = sitePanelView(panel,owner,.@"siteData.read") orelse return false;
+    return site_data.requestStoragePage(view,panel,owner,.{
+        .group=if (session) .session else .local,.generation=generation,.query=query[0..length],
+        .offset=offset,.refresh=refresh,
+    });
+}
+
+export fn moon_site_storage_page_result(tab: u64, request: u64, result: [*c]const u8) void {
+    if (!stopped and result!=null) site_data.completeStoragePage(tab,request,slice(result));
+}
+
 export fn moon_site_data_database(panel: u64, id: [*c]const u8, index: c_uint, generation: u64, refresh: bool) bool {
     const owner = slice(id);
     const view = sitePanelView(panel,owner,.@"siteData.read") orelse return false;
@@ -2955,11 +2972,14 @@ fn removeSiteRecord(panel: u64, owner: []const u8, target: sdk.SiteDatabaseRecor
 }
 
 export fn moon_site_data_update(panel: u64, id: [*c]const u8, session: bool, entry: u32, generation: u64,
-    value: [*c]const u8, length: usize) bool {
+    page_revision: u64, value: [*c]const u8, length: usize) bool {
     if (site_clear_confirming) return false;
     const owner = slice(id);
     const view = sitePanelView(panel,owner,.@"siteData.write") orelse return false;
-    const target: sdk.SiteDataItem = .{ .group=if (session) .session else .local, .id=entry, .generation=generation };
+    const target: sdk.SiteDataItem = .{
+        .group=if (session) .session else .local,.id=entry,.generation=generation,
+        .pageRevision=if (page_revision!=0) page_revision else null,
+    };
     return site_data.update(view,panel,owner,target,if (value!=null) value[0..length] else null);
 }
 

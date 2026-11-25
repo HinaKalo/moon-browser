@@ -295,6 +295,10 @@ bool moon_engine_clear_site_cookies_available(void);
 bool moon_engine_clear_site_cookies(const char *url, uint64_t request);
 int moon_site_clear_cookies(uint64_t panel, const char *owner, uint64_t generation);
 void moon_site_cookies_cleared(uint64_t request);
+bool moon_engine_inspect_storage_page(MoonView *view, uint64_t request, const char *query);
+bool moon_site_storage_page(uint64_t panel, const char *owner, bool session, uint64_t generation,
+    const char *query, size_t length, uint32_t offset, bool refresh);
+void moon_site_storage_page_result(uint64_t tab, uint64_t request, const char *result);
 bool moon_engine_inspect_database(MoonView *view, uint64_t request, const char *query);
 bool moon_site_data_database(uint64_t panel, const char *owner, unsigned index, uint64_t generation, bool refresh);
 bool moon_site_database_records(uint64_t panel, const char *owner, unsigned index, uint64_t generation,
@@ -309,7 +313,7 @@ int moon_site_cache_remove(uint64_t panel, const char *owner, unsigned index, ui
 bool moon_site_data_action(uint64_t panel, const char *id, int action);
 bool moon_site_data_cookie_url(uint64_t panel, const char *id, char *url, size_t cap);
 bool moon_site_data_update(uint64_t panel, const char *id, bool session, uint32_t entry, uint64_t generation,
-    const char *value, size_t length);
+    uint64_t page_revision, const char *value, size_t length);
 bool moon_site_data_create(uint64_t panel, const char *id, bool session, uint64_t generation,
     const char *key, size_t key_length, const char *value, size_t value_length);
 int moon_site_data_clear(uint64_t panel, const char *id, bool session, uint64_t generation);

@@ -994,9 +994,10 @@ static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef bod
     const bool cache=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteCacheRemoval");
     const bool database=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteDatabase");
     const bool media=wk.WKStringIsEqualToUTF8CString(name,"MoonMediaResult");
-    if ((!catalog && !reader && !cache && !database && !media && !wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot")) || !body ||
+    const bool storage=wk.WKStringIsEqualToUTF8CString(name,"MoonStoragePage");
+    if ((!catalog && !reader && !cache && !database && !media && !storage && !wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot")) || !body ||
         wk.WKGetTypeID(body)!=wk.WKStringGetTypeID()) return;
-    const size_t cap=(cache || media ? 1 : database ? 20 : reader ? 192 : catalog ? 64 : 512)*1024+32;
+    const size_t cap=(cache || media ? 1 : database ? 20 : reader ? 192 : catalog ? 64 : storage ? 128 : 512)*1024+32;
     char *response=malloc(cap);
     if (!response) return;
     const size_t n=wk.WKStringGetUTF8CString((WKStringRef)body,response,cap);
@@ -1007,6 +1008,7 @@ static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef bod
             if (reader) moon_reader_result(view->token,request,end+1);
             else if (cache) moon_site_cache_result(view,view->token,request,end+1);
             else if (database) moon_site_database_result(view,view->token,request,end+1);
+            else if (storage) moon_site_storage_page_result(view->token,request,end+1);
             else if (media) moon_media_action_result(view->token,request,end+1);
             else moon_site_data_result(view->token,request,end+1,catalog);
         }
@@ -1034,6 +1036,9 @@ static bool send_site_request(MoonView *view,uint64_t request,const char *change
 }
 bool moon_engine_inspect_site(MoonView *view,uint64_t request) {
     return send_site_request(view,request,"null","MoonInspectSite");
+}
+bool moon_engine_inspect_storage_page(MoonView *view,uint64_t request,const char *query) {
+    return send_site_request(view,request,query,"MoonInspectStoragePage");
 }
 bool moon_engine_inspect_catalog(MoonView *view,uint64_t request) {
     return send_site_request(view,request,"null","MoonInspectCatalog");

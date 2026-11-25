@@ -4,11 +4,11 @@
 
 从 0.1.0-preview.46 起，普通窗口可查看当前网页域名、路径和协议匹配的 Cookie，包括 HttpOnly Cookie。每条显示 Domain、Path、会话或到期时间，以及适用的 HttpOnly 和 Secure 标记。同名 Cookie 按各自的域名和路径显示。隐私窗口或内核数据库不可用时，面板使用网页可见的 Cookie。可用面板中的「打开开发者工具」查看内核提供的完整数据。
 
-当前面板每类最多预览 32 条。长条目会标记截断。Cookie 的单条值最多预览 2048 UTF-8 字节。Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。
+从 0.1.0-preview.81 起，Local Storage 和 Session Storage 每页显示 32 条。筛选按完整键名匹配，覆盖此类存储中的全部条目。长条目会标记截断。Cookie 列表最多预览 32 条，单条值最多预览 2048 UTF-8 字节。Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。
 
 从 0.1.0-preview.73 起，在普通窗口的 Cookie 页可选「清除站点 Cookie…」。确认后，WebKit 清除同一注册域及其子域的 Cookie，包含 HttpOnly Cookie 和其他路径下的 Cookie。其他站点和 Local Storage、Session Storage、IndexedDB、Cache Storage 保留。清除登录 Cookie 后可能需要重新登录。
 
-从 0.1.0-preview.40 起，在 Local Storage 或 Session Storage 可选择「新增条目」和「清空此类」。新增同名条目会报告冲突。清空时，系统对话框会显示来源和类别。确认会移除该类别中的全部条目，包含筛选结果之外和预览上限之后的条目。
+从 0.1.0-preview.40 起，在 Local Storage 或 Session Storage 可选择「新增条目」和「清空此类」。新增同名条目会报告冲突。清空时，系统对话框会显示来源和类别。确认会移除该类别中的全部条目，包含筛选结果之外和其他页的条目。
 
 从 0.1.0-preview.34 起，可筛选当前来源的 IndexedDB 数据库和 Cache Storage 缓存。IndexedDB 列表显示数据库名称和版本，Cache Storage 列表显示缓存名称。每类最多预览 32 条。
 
@@ -30,6 +30,8 @@
 
 面板通过 `moonHost` 请求 `siteData.status`、`siteData.list` 和 `siteData.value`。列表只返回名称和长度。读取值需要同时传入类别、条目 ID 和列表返回的快照代数 `generation`。EXE 负责发起查看命令，查看结果由绑定面板读取。
 
+`siteData.storagePage({ group, generation, query?, offset?, refresh? })` 需要 `siteData.read`，且仅支持 `local` 和 `session`。按完整键名做不区分大小写的匹配。`query` 默认为空，最多 512 UTF-8 字节，`offset` 默认为 0。返回 `{ state, generation, pageRevision, offset, entries, total, storageCount }`。`total` 为匹配数，`storageCount` 为当前存储中的键数。通过相同参数轮询 `pending`，直到 `ready` 或 `unavailable`。主动重新读取可传 `refresh: true`，轮询时省略。使用 `offset + entries.length` 翻页。读取或修改此接口返回的条目时，必须同时提交该页的 `pageRevision`。新查询、翻页、刷新、切走面板和原网页导航均会使旧页失效。
+
 Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限。`siteData.status` 的 `cookieDetails` 字段表示该窗口允许尝试读取。当前活动且已绑定的面板调用 `siteData.cookieDetails({ generation })`，返回 `{ available, entries, more, generation }`。条目包含 `id`、`name`、`domain`、`path`、`expiresAt`、`httpOnly`、`secure`、`length`、`shortened` 和 `metadataShortened`。`expiresAt` 是 Unix 毫秒时间戳，会话 Cookie 传 `null`。`available: false` 时可调用 `siteData.list({ group: "cookies" })` 显示网页可读的 Cookie。通过 `siteData.cookieValue({ id, generation })` 单独读取一个预览值。面板离开前台、网页导航、权限撤销或 Cookie 更新后，旧条目无法继续读取。
 
 面板调用 `siteData.catalog` 时传入 `{ group }`，其值为 `indexedDB` 或 `cacheStorage`。首次调用会按需读取，响应为 `pending` 时可再次查询同一代快照。目录条目包含 `name`、`shortened`，IndexedDB 还包含 `version`。对应目录为 `null` 表示当前网页无法读取该类别。
@@ -44,7 +46,7 @@ Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限�
 
 `siteData.removeRecord({ index, generation, revision, store, pageRevision, row })` 还需要 `siteData.records`。传入当前记录页响应的 `pageRevision`，以及从 0 开始的行下标 `row`。浏览器用原记录的类型化主键执行删除。翻页、刷新或切换网页后，旧行会失效。收到 `started` 后通过 `siteData.status` 等待新快照，`mutation` 为 `removed`、`conflict` 或 `failed`。
 
-编辑还需要独立的 `siteData.write` 权限，并从当前显示且已绑定的面板调用 `siteData.update`。参数为 `{ group, id, generation, value }`。字符串表示替换值，`null` 表示删除。提交后通过 `siteData.status` 等待新一代快照，`mutation` 会返回 `saved`、`removed`、`conflict` 或 `failed`。浏览到其他文档、旧快照或截断条目均不能继续提交修改。
+编辑还需要独立的 `siteData.write` 权限，并从当前显示且已绑定的面板调用 `siteData.update`。参数为 `{ group, id, generation, value, pageRevision? }`。`siteData.storagePage` 的条目需要附带 `pageRevision`。字符串表示替换值，`null` 表示删除。提交后通过 `siteData.status` 等待新一代快照，`mutation` 会返回 `saved`、`removed`、`conflict` 或 `failed`。浏览到其他文档、旧快照或截断条目均不能继续提交修改。
 
 `siteData.create` 传入 `{ group, generation, key, value }`。名称最多 512 UTF-8 字节，值最多 1024 UTF-8 字节。已有同名条目时，快照的 `mutation` 为 `conflict`。
 

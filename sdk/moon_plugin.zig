@@ -333,7 +333,25 @@ pub const SiteDataStatus = struct {
 };
 pub const SiteDataEntry = struct { id: u32, name: []const u8, length: usize, shortened: bool };
 pub const SiteDataPage = struct { available: bool, entries: []const SiteDataEntry, more: bool, generation: u64 };
-pub const SiteDataItem = struct { group: SiteDataGroup, id: u32, generation: u64 };
+pub const site_storage_page_size = 32;
+pub const site_storage_query_limit = 512;
+pub const SiteStorageQuery = struct {
+    group: SiteDataGroup,
+    generation: u64,
+    query: []const u8 = "",
+    offset: u32 = 0,
+    refresh: bool = false,
+};
+pub const SiteStoragePage = struct {
+    state: enum { pending, ready, unavailable },
+    generation: u64,
+    pageRevision: u64,
+    offset: u32,
+    entries: []const SiteDataEntry = &.{},
+    total: u32 = 0,
+    storageCount: u32 = 0,
+};
+pub const SiteDataItem = struct { group: SiteDataGroup, id: u32, generation: u64, pageRevision: ?u64 = null };
 pub const SiteCookieEntry = struct {
     id: u32,
     name: []const u8,
@@ -392,7 +410,7 @@ pub const SiteStorageCatalog = struct {
 };
 pub const site_data_value_limit = 1024;
 pub const site_data_key_limit = 512;
-pub const SiteDataUpdate = struct { group: SiteDataGroup, id: u32, generation: u64, value: ?[]const u8 };
+pub const SiteDataUpdate = struct { group: SiteDataGroup, id: u32, generation: u64, value: ?[]const u8, pageRevision: ?u64 = null };
 pub const SiteDataCreate = struct { group: SiteDataGroup, generation: u64, key: []const u8, value: []const u8 };
 pub const SiteDataClear = struct { group: SiteDataGroup, generation: u64 };
 pub const SiteCacheRemove = struct { index: u32, generation: u64 };
@@ -489,6 +507,7 @@ pub const Method = enum {
     @"siteData.open",
     @"siteData.status",
     @"siteData.list",
+    @"siteData.storagePage",
     @"siteData.catalog",
     @"siteData.database",
     @"siteData.databaseRecords",

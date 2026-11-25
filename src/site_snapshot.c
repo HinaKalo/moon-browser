@@ -89,10 +89,10 @@ static const char snapshot_script[] =
         "if(globalThis.__moonSiteDataRevision!==update.revision)return JSON.stringify('sourceChanged');"
         "try{const store=update.group==='local'?localStorage:update.group==='session'?sessionStorage:null;"
             "if(!store)mutation='failed';"
-            "else if(update.clear){store.clear();mutation='cleared';}"
-            "else if(store.getItem(update.key)!==update.previous)mutation='conflict';"
-            "else if(update.replacement===null){store.removeItem(update.key);mutation='removed';}"
-            "else{store.setItem(update.key,update.replacement);mutation='saved';}"
+            "else if(update.clear){Storage.prototype.clear.call(store);mutation='cleared';}"
+            "else if(Storage.prototype.getItem.call(store,update.key)!==update.previous)mutation='conflict';"
+            "else if(update.replacement===null){Storage.prototype.removeItem.call(store,update.key);mutation='removed';}"
+            "else{Storage.prototype.setItem.call(store,update.key,update.replacement);mutation='saved';}"
         "}catch{mutation='failed';}"
     "}"
     "globalThis.__moonSiteDataRevision=revision;"
@@ -100,8 +100,8 @@ static const char snapshot_script[] =
     "const make=(name,value)=>{const key=name.slice(0,128).toWellFormed(),text=value.slice(0,512).toWellFormed();"
         "return {name:key,value:text,shortened:name!==key||value!==text};};"
     "const storage=(read)=>{try{const store=read(), entries=[];"
-        "for(let i=0;i<Math.min(store.length,max);++i){const key=store.key(i);"
-        "if(key!==null)entries.push(make(key,store.getItem(key) ?? ''));}"
+        "for(let i=0;i<Math.min(store.length,max);++i){const key=Storage.prototype.key.call(store,i);"
+        "if(key!==null)entries.push(make(key,Storage.prototype.getItem.call(store,key) ?? ''));}"
         "return {entries,more:store.length>max};}catch{return null;}};"
     "const cookies=()=>{try{const value=document.cookie;"
         "const lines=value?value.split(';'):[];"
@@ -109,6 +109,31 @@ static const char snapshot_script[] =
         "return split<0?make(text,''):make(text.slice(0,split),text.slice(split+1));});"
         "return {entries,more:lines.length>max};}catch{return null;}};"
     "return JSON.stringify({cookies:cookies(),local:storage(()=>localStorage),session:storage(()=>sessionStorage),mutation});"
+    "})";
+
+static const char storage_page_script[] =
+    "((request,json) => {"
+    "const page=JSON.parse(json);"
+    "if(globalThis.__moonSiteDataRevision!==page.generation)return JSON.stringify('sourceChanged');"
+    "const store=page.group==='local'?localStorage:sessionStorage;"
+    "const {key,getItem}=Storage.prototype, term=page.query.toLowerCase();"
+    "const storageCount=store.length, entries=[];"
+    "let total=term?0:storageCount;"
+    "const first=term?0:page.offset, end=term?storageCount:Math.min(storageCount,page.offset+32);"
+    "for(let index=first;index<end;++index){"
+        "const full=key.call(store,index);"
+        "if(full===null)continue;"
+        "if(term){"
+            "if(!full.toLowerCase().includes(term))continue;"
+            "++total;"
+            "if(total<=page.offset)continue;"
+        "}"
+        "if(entries.length===32)continue;"
+        "const value=getItem.call(store,full) ?? '';"
+        "const name=full.slice(0,128).toWellFormed(), text=value.slice(0,512).toWellFormed();"
+        "entries.push({name,value:text,shortened:name!==full||text!==value});"
+    "}"
+    "return JSON.stringify({entries,total,storageCount});"
     "})";
 
 static const char catalog_script[] =
@@ -227,7 +252,7 @@ static const char lua_dom_script[] =
       "}"
     "})";
 
-typedef enum { SITE_SNAPSHOT, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE, SITE_DATABASE, SITE_LUA_DOM, SITE_MEDIA } SiteRequest;
+typedef enum { SITE_SNAPSHOT, SITE_STORAGE_PAGE, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE, SITE_DATABASE, SITE_LUA_DOM, SITE_MEDIA } SiteRequest;
 
 static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char *expected,char *change,
                            SiteRequest kind,bool *scheduled,const char **failure) {
@@ -255,7 +280,8 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
         const char *source = kind==SITE_ARTICLE ? change : kind==SITE_CATALOG ? catalog_script :
                              kind==SITE_CACHE_REMOVE ? cache_remove_script :
                              kind==SITE_MEDIA ? media_script :
-                             kind==SITE_LUA_DOM ? lua_dom_script : snapshot_script;
+                             kind==SITE_LUA_DOM ? lua_dom_script :
+                             kind==SITE_STORAGE_PAGE ? storage_page_script : snapshot_script;
         if (kind==SITE_DATABASE) {
             char *separator=strchr(change,'\n');
             if (!separator || !separator[1]) return NULL;
@@ -270,7 +296,7 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
             if (script) api.release_js(script);
             return result;
         }
-        const bool direct = kind==SITE_SNAPSHOT || kind==SITE_LUA_DOM;
+        const bool direct = kind==SITE_SNAPSHOT || kind==SITE_STORAGE_PAGE || kind==SITE_LUA_DOM;
         JSStringRef id=api.source(kind==SITE_LUA_DOM ? expected : revision), url=direct ? NULL : api.source(expected);
         JSStringRef payload=kind==SITE_CATALOG ? NULL : api.source(change);
         if (script && id && (url || direct) && (payload || kind==SITE_CATALOG)) {
@@ -291,7 +317,7 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
                 JSValueRef value=api.call(context,callback,NULL,count,arguments,&exception);
                 *failure="\"conversionFailed\"";
                 if (!exception && value) {
-                    if (kind!=SITE_SNAPSHOT) *scheduled=true;
+                    if (kind!=SITE_SNAPSHOT && kind!=SITE_STORAGE_PAGE) *scheduled=true;
                     else result=api.to_string(context,value,NULL);
                 }
             }
@@ -309,6 +335,7 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
     SiteRequest kind;
     const char *channel;
     if (api.text_equals(name,"MoonInspectSite")) { kind=SITE_SNAPSHOT; channel="MoonSiteSnapshot"; }
+    else if (api.text_equals(name,"MoonInspectStoragePage")) { kind=SITE_STORAGE_PAGE; channel="MoonStoragePage"; }
     else if (api.text_equals(name,"MoonInspectCatalog")) { kind=SITE_CATALOG; channel="MoonSiteCatalog"; }
     else if (api.text_equals(name,"MoonReadArticle")) { kind=SITE_ARTICLE; channel="MoonArticleSnapshot"; }
     else if (api.text_equals(name,"MoonRemoveSiteCache")) { kind=SITE_CACHE_REMOVE; channel="MoonSiteCacheRemoval"; }
@@ -339,7 +366,7 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
     if (scheduled || !channel) { free(request); return; }
     *split='\n';
     const size_t capacity=snapshot ? api.size(snapshot) : 0;
-    const size_t limit=(kind==SITE_ARTICLE ? 192 : 512)*1024;
+    const size_t limit=(kind==SITE_ARTICLE ? 192 : kind==SITE_STORAGE_PAGE ? 128 : 512)*1024;
     const size_t estimated=capacity<limit ? capacity : limit;
     char *response=malloc(prefix+(estimated>32 ? estimated : 32));
     if (response) {

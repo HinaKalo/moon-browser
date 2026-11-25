@@ -82,7 +82,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"downloads.open" => .@"downloads.open",
         .@"downloads.preferences.get", .@"downloads.preferences.setPrompt",
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => .@"downloads.preferences",
-        .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.database", .@"siteData.value",
+        .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.storagePage", .@"siteData.catalog", .@"siteData.database", .@"siteData.value",
         .@"siteData.refresh", .@"siteData.openInspector" => .@"siteData.read",
         .@"siteData.cookieDetails", .@"siteData.cookieValue" => .@"siteData.cookieDetails",
         .@"siteData.clearCookies" => .@"siteData.cookieClear",
@@ -220,7 +220,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.clearCookies",
-        .@"siteData.cacheRemove", .@"siteData.database" => {},
+        .@"siteData.cacheRemove", .@"siteData.database", .@"siteData.storagePage" => {},
         .@"siteData.databaseRecords", .@"siteData.clearObjectStore", .@"siteData.removeRecord" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
@@ -823,6 +823,17 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                 return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,result);
         },
+        .@"siteData.storagePage" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const query = decode(sdk.SiteStorageQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (query.group==.cookies or query.query.len>sdk.site_storage_query_limit or
+                !std.unicode.utf8ValidateSlice(query.query)) return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (!native.moon_site_storage_page(context.target_tab_id,owner.ptr,query.group==.session,query.generation,
+                query.query.ptr,query.query.len,query.offset,query.refresh)) return sdk.failure(output,id,.NotFound);
+            var entries: [sdk.site_storage_page_size]sdk.SiteDataEntry = undefined;
+            return sdk.result(output,id,site_data.storagePage(query,&entries));
+        },
         .@"siteData.value" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
             const options = decode(sdk.SiteDataItem,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
@@ -901,12 +912,12 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"siteData.update" => {
             if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);
             const options = decode(sdk.SiteDataUpdate,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
-            if (options.group==.cookies) return sdk.failure(output,id,.InvalidParams);
+            if (options.group==.cookies or options.pageRevision==0) return sdk.failure(output,id,.InvalidParams);
             if (options.value) |raw| if (raw.len>sdk.site_data_value_limit) return sdk.failure(output,id,.LimitExceeded);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             const value = options.value orelse "";
             const ok = native.moon_site_data_update(context.target_tab_id,owner.ptr,options.group==.session,
-                options.id,options.generation,if (options.value!=null) value.ptr else null,value.len);
+                options.id,options.generation,options.pageRevision orelse 0,if (options.value!=null) value.ptr else null,value.len);
             if (!ok) return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,true);
         },
