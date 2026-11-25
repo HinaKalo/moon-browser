@@ -485,15 +485,20 @@ addEventListener('load',()=>{
                 demo=(f'<button style="position:fixed;z-index:1;top:0;left:0;padding:10px">Play fixture</button>'
                       f'<{tag} loop playsinline preload="none" src="{source}"></{tag}><script>'
                       f'const stage={json.dumps(stage)}, media=document.querySelector("{tag}");'
-                      'let count=0;'
+                      'let count=0,advanced=false,backgroundAt=null,backgroundAdvanced=false;'
                       'const report=(event,detail)=>fetch("/media-control-report/"+stage+"-"+event+"?"+detail,{cache:"no-store"});'
                       'media.onplaying=()=>report("playing",++count);'
-                      'media.ontimeupdate=()=>{if(media.currentTime>=0.6){media.ontimeupdate=null;report("advanced","yes");}};'
+                      'media.ontimeupdate=()=>{'
+                      'if(!advanced&&media.currentTime>=0.6){advanced=true;report("advanced","yes");}'
+                      'if(!backgroundAdvanced&&document.hidden&&backgroundAt!==null&&media.currentTime>=backgroundAt+0.2){'
+                      'backgroundAdvanced=true;report("background","advancing");}};'
                       'media.onpause=()=>{report("pause","yes");report("pause-state",'
                       'JSON.stringify({hidden:document.hidden,time:media.currentTime,'
                       'ready:media.readyState,ended:media.ended,error:media.error?.code,'
                       'muted:media.muted,volume:media.volume,count}));};'
-                      'document.addEventListener("visibilitychange",()=>report("visibility",document.visibilityState));'
+                      'document.addEventListener("visibilitychange",()=>{'
+                      'backgroundAt=document.hidden?media.currentTime:null;'
+                      'report("visibility",document.visibilityState);});'
                       'document.querySelector("button").onclick=()=>media.play().catch(error=>report("error",error.name));'
                       'report("ready","yes");'
                       '</script>')
@@ -3530,6 +3535,11 @@ def run_win32(exe, base, root):
                     raise RuntimeError(f"No test media source played: {Fixture.media_reports}")
                 invoke("打开媒体控件")
                 wait_for(lambda: read_address()=="extension://moon.media/media.html","The bundled media system plugin did not open")
+                try:
+                    wait_for(lambda: Fixture.media_reports.get(stage+"-background")=="advancing",
+                             "Audio/video stopped advancing after its tab was hidden")
+                except RuntimeError as error:
+                    raise RuntimeError(f"{error}: {Fixture.media_reports}") from error
                 config=profile/f'extension-{sha256(b"moon.media-fixture").hexdigest()}.json'
                 signal=config.with_suffix(".media-signal")
                 signal.write_text(json.dumps({"title":"media-control-"+stage,"origin":base,"video":stage=="video"}),encoding="utf-8")
@@ -3550,7 +3560,7 @@ def run_win32(exe, base, root):
                 user.PostMessageW(edit,0x0100,0x0D,1)
                 wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(after,)),
                          "Could not leave the test media page")
-                print(f"media_plugin=ok engine_media_state=ok source={stage} mute=ok pause=ok resume=ok source_focus=ok stale_navigation=ok",flush=True)
+                print(f"media_plugin=ok background_playback=ok engine_media_state=ok source={stage} mute=ok pause=ok resume=ok source_focus=ok stale_navigation=ok",flush=True)
             verify_media(("wav","aac"))
             verify_media(("video",))
         if bookmarks.exists():

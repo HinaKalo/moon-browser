@@ -182,6 +182,8 @@ struct MoonView {
     uint64_t picker_deadline;
     bool docked, inspector_visible;
     bool tab_muted, site_muted;
+    unsigned document_playing;
+    uint64_t media_observer;
     uint64_t token;
     uintptr_t extension_serial;
     WKUserContentControllerRef extension_controller;
@@ -354,7 +356,13 @@ static void started(WKPageRef page, WKNavigationRef nav, WKTypeRef user, const v
     moon_engine_cancel_pick((MoonView *)client);
     emit(client, MOON_STARTED, NULL);
 }
+static bool send_site_request(MoonView *view,uint64_t request,const char *change,const char *channel);
+
 static void committed(WKPageRef page, WKNavigationRef nav, WKTypeRef user, const void *client) {
+    MoonView *view=(MoonView *)client;
+    view->document_playing=0;
+    ++view->media_observer;
+    if (view->token) send_site_request(view,view->media_observer,"null","MoonObserveMedia");
     emit(client, MOON_COMMITTED, NULL);
 }
 static void finished(WKPageRef page, WKNavigationRef nav, WKTypeRef user, const void *client) {
@@ -372,6 +380,9 @@ static void failed(WKPageRef page, WKNavigationRef nav, WKErrorRef error, WKType
 }
 static void changed(const void *client) { emit(client, MOON_CHANGED, NULL); }
 static void terminated(WKPageRef page, WKProcessTerminationReason reason, const void *client) {
+    MoonView *view=(MoonView *)client;
+    view->document_playing=0;
+    ++view->media_observer;
     if (client==download_retry.view && download_retry.state<RETRY_TRANSFERRING) download_retry.state=RETRY_FAILED;
     const char *detail;
     switch (reason) {
@@ -1003,10 +1014,11 @@ static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef bod
     const bool cache=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteCacheRemoval");
     const bool database=wk.WKStringIsEqualToUTF8CString(name,"MoonSiteDatabase");
     const bool media=wk.WKStringIsEqualToUTF8CString(name,"MoonMediaResult");
+    const bool activity=wk.WKStringIsEqualToUTF8CString(name,"MoonMediaActivity");
     const bool storage=wk.WKStringIsEqualToUTF8CString(name,"MoonStoragePage");
-    if ((!catalog && !reader && !cache && !database && !media && !storage && !wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot")) || !body ||
+    if ((!catalog && !reader && !cache && !database && !media && !activity && !storage && !wk.WKStringIsEqualToUTF8CString(name,"MoonSiteSnapshot")) || !body ||
         wk.WKGetTypeID(body)!=wk.WKStringGetTypeID()) return;
-    const size_t cap=(cache || media ? 1 : database ? 20 : reader ? 192 : catalog ? 64 : storage ? 128 : 512)*1024+32;
+    const size_t cap=(cache || media || activity ? 1 : database ? 20 : reader ? 192 : catalog ? 64 : storage ? 128 : 512)*1024+32;
     char *response=malloc(cap);
     if (!response) return;
     const size_t n=wk.WKStringGetUTF8CString((WKStringRef)body,response,cap);
@@ -1019,6 +1031,11 @@ static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef bod
             else if (database) moon_site_database_result(view,view->token,request,end+1);
             else if (storage) moon_site_storage_page_result(view->token,request,end+1);
             else if (media) moon_media_action_result(view->token,request,end+1);
+            else if (activity) {
+                const char *flags=end+1;
+                if (request==view->media_observer && strlen(flags)==13 && !strncmp(flags,"{\"playing\":",11) &&
+                    flags[11]>='0' && flags[11]<='3' && flags[12]=='}') view->document_playing=flags[11]-'0';
+            }
             else moon_site_data_result(view->token,request,end+1,catalog);
         }
     }
@@ -1645,14 +1662,15 @@ void moon_engine_site_mute(MoonView *view, bool muted) {
 bool moon_engine_site_muted(const MoonView *view) { return view->site_muted; }
 unsigned moon_engine_playing(const MoonView *view) {
     const WKMediaState state=wk.WKPageGetMediaState(view->page);
-    return (state&kWKMediaIsPlayingAudio ? MOON_MEDIA_AUDIO : 0) |
+    _Static_assert(MOON_MEDIA_AUDIO==1 && MOON_MEDIA_VIDEO==2,"Media observer flags must match the host ABI");
+    return view->document_playing | (state&kWKMediaIsPlayingAudio ? MOON_MEDIA_AUDIO : 0) |
         (state&kWKMediaIsPlayingVideo ? MOON_MEDIA_VIDEO : 0);
 }
 bool moon_engine_media(MoonView *view) {
     WKMediaState state = wk.WKPageGetMediaState(view->page);
-    return state & (kWKMediaIsPlayingAudio | kWKMediaIsPlayingVideo | kWKMediaHasActiveAudioCaptureDevice |
+    return view->document_playing || (state & (kWKMediaIsPlayingAudio | kWKMediaIsPlayingVideo | kWKMediaHasActiveAudioCaptureDevice |
         kWKMediaHasActiveVideoCaptureDevice | kWKMediaHasActiveDisplayCaptureDevice |
-        kWKMediaHasActiveScreenCaptureDevice | kWKMediaHasActiveWindowCaptureDevice);
+        kWKMediaHasActiveScreenCaptureDevice | kWKMediaHasActiveWindowCaptureDevice));
 }
 void moon_engine_read(MoonView *view, char *title, size_t title_cap, char *url, size_t url_cap) {
     copy_string(wk.WKPageCopyTitle(view->page),title,title_cap);

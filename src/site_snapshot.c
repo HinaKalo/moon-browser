@@ -213,6 +213,47 @@ static JSValueRef media_finished(JSContextRef context,JSObjectRef function,JSObj
     return send_async_reply(context,argc,argv,exception,"MoonMediaResult");
 }
 
+static JSValueRef media_activity(JSContextRef context,JSObjectRef function,JSObjectRef self,size_t argc,
+                                 const JSValueRef argv[],JSValueRef *exception) {
+    return send_async_reply(context,argc,argv,exception,"MoonMediaActivity");
+}
+
+// WebKit's aggregate flags still cover media outside the main document, including capture.
+static const char media_observer_script[] =
+    "((revision,url,_payload,reply) => {"
+    "if(location.href!==url || !/^https?:$/.test(location.protocol))return;"
+    "globalThis.__moonStopMediaObserver?.();"
+    "const listeners=new AbortController(), active=new Set;"
+    "let previous=0, timer=0;"
+    "globalThis.__moonStopMediaObserver=()=>{listeners.abort();clearTimeout(timer);};"
+    "function sample(){"
+        "clearTimeout(timer);timer=0;"
+        "let mask=0;"
+        "for(const el of active){"
+            "if(!el.isConnected || el.ownerDocument!==document || el.paused || el.ended){active.delete(el);continue;}"
+            "if(el instanceof HTMLAudioElement || el.webkitAudioDecodedByteCount>0 || el.audioTracks?.length)mask|=1;"
+            "if(el instanceof HTMLVideoElement && el.videoWidth>0)mask|=2;"
+        "}"
+        "if(mask!==previous){previous=mask;reply(revision+'\\n'+JSON.stringify({playing:mask}));}"
+        "if(active.size)timer=setTimeout(sample,1000);"
+    "}"
+    "const options={capture:true,signal:listeners.signal};"
+    "document.addEventListener('playing',event=>{"
+        "const el=event.target;"
+        "if(!event.isTrusted || !(el instanceof HTMLMediaElement))return;"
+        "if(active.size<32)active.add(el);sample();"
+    "},options);"
+    "for(const name of ['pause','ended','emptied'])"
+        "document.addEventListener(name,event=>{if(event.isTrusted && active.has(event.target))sample();},options);"
+    "for(const name of ['audio','video']){"
+        "const elements=document.getElementsByTagName(name);"
+        "for(let i=0;i<Math.min(32,elements.length)&&active.size<32;++i){"
+            "const el=elements[i];if(!el.paused&&!el.ended)active.add(el);"
+        "}"
+    "}"
+    "sample();"
+    "})";
+
 static const char media_script[] =
     "((request,url,action,reply) => {"
     "const finish=status=>{if(location.href===url)reply(request+'\\n'+JSON.stringify({status}));};"
@@ -258,7 +299,7 @@ static const char lua_dom_script[] =
       "}"
     "})";
 
-typedef enum { SITE_SNAPSHOT, SITE_STORAGE_PAGE, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE, SITE_DATABASE, SITE_LUA_DOM, SITE_MEDIA } SiteRequest;
+typedef enum { SITE_SNAPSHOT, SITE_STORAGE_PAGE, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE, SITE_DATABASE, SITE_LUA_DOM, SITE_MEDIA, SITE_MEDIA_OBSERVER } SiteRequest;
 
 static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char *expected,char *change,
                            SiteRequest kind,bool *scheduled,const char **failure) {
@@ -286,6 +327,7 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
         const char *source = kind==SITE_ARTICLE ? change : kind==SITE_CATALOG ? catalog_script :
                              kind==SITE_CACHE_REMOVE ? cache_remove_script :
                              kind==SITE_MEDIA ? media_script :
+                             kind==SITE_MEDIA_OBSERVER ? media_observer_script :
                              kind==SITE_LUA_DOM ? lua_dom_script :
                              kind==SITE_STORAGE_PAGE ? storage_page_script : snapshot_script;
         if (kind==SITE_DATABASE) {
@@ -317,7 +359,8 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
                     arguments[1]=api.make_string(context,url);
                     if (kind!=SITE_CATALOG) arguments[count++]=api.make_string(context,payload);
                     const JSFunctionCallback handler=kind==SITE_CATALOG ? catalog_finished :
-                        kind==SITE_DATABASE ? database_finished : kind==SITE_MEDIA ? media_finished : cache_remove_finished;
+                        kind==SITE_DATABASE ? database_finished : kind==SITE_MEDIA ? media_finished :
+                        kind==SITE_MEDIA_OBSERVER ? media_activity : cache_remove_finished;
                     arguments[count++]=api.make_callback(context,NULL,handler);
                 }
                 JSValueRef value=api.call(context,callback,NULL,count,arguments,&exception);
@@ -348,6 +391,7 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
     else if (api.text_equals(name,"MoonInspectDatabase")) { kind=SITE_DATABASE; channel="MoonSiteDatabase"; }
     else if (api.text_equals(name,"MoonApplyLuaDOM")) { kind=SITE_LUA_DOM; channel=NULL; }
     else if (api.text_equals(name,"MoonControlMedia")) { kind=SITE_MEDIA; channel="MoonMediaResult"; }
+    else if (api.text_equals(name,"MoonObserveMedia")) { kind=SITE_MEDIA_OBSERVER; channel=NULL; }
     else return;
     // Lua emits at most 32 operations with 1280 argument bytes each, before JSON escaping.
     size_t request_cap=(kind==SITE_LUA_DOM ? 256 : kind==SITE_ARTICLE ? 144 : 32)*1024;
