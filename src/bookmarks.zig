@@ -96,7 +96,7 @@ pub fn remove(id: u32) !void {
     if (id==0 or try removeMany(&.{id})==0) return error.NotFound;
 }
 
-fn validSelection(ids: []const u32) bool {
+pub fn validSelection(ids: []const u32) bool {
     return ids.len!=0 and ids.len<=sdk.bookmark_selection_limit and std.mem.indexOfScalar(u32,ids,0)==null;
 }
 
@@ -213,7 +213,12 @@ pub fn barTarget(id: u32, address: *[4096:0]u8, label: *[512:0]u8) !void {
     const db=try connection();
     const statement=try db_api.prepare(db,"SELECT url,title FROM bookmarks WHERE id=?1");
     defer _=sqlite.sqlite3_finalize(statement);
-    if (sqlite.sqlite3_bind_int64(statement,1,id)!=db_api.ok or sqlite.sqlite3_step(statement)!=db_api.row) return error.NotFound;
+    if (sqlite.sqlite3_bind_int64(statement,1,id)!=db_api.ok) return error.IOError;
+    switch (sqlite.sqlite3_step(statement)) {
+        db_api.row => {},
+        db_api.done => return error.NotFound,
+        else => return error.IOError,
+    }
     const url=try db_api.columnText(statement,0);
     const title=try db_api.columnText(statement,1);
     if (!history.validURL(url) or !validLabel(title,511)) return error.InvalidParams;

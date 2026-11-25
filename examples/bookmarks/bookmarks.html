@@ -21,7 +21,7 @@
   #folder-status:empty,#selection-count:empty,#move-error:empty { display:none; }
   #remove-selected,#remove-confirm { color:#a52937; }
   :root[data-moon-theme=dark] #remove-selected,:root[data-moon-theme=dark] #remove-confirm { color:#ffadb6; }
-  #remove-error:empty { display:none; }
+  #remove-error:empty,#open-error:empty { display:none; }
   input,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
   input { min-width:0; flex:1; }
   button { cursor:pointer; }
@@ -58,6 +58,7 @@
   <p id="folder-status" role="status"></p>
   <div id="selection" hidden>
     <button type="button" id="select-displayed">选择已显示书签</button>
+    <button type="button" id="open-selected" disabled>在后台打开…</button>
     <button type="button" id="move-selected" disabled>移到文件夹…</button>
     <button type="button" id="remove-selected" disabled>删除所选…</button>
     <span id="selection-count" role="status"></span>
@@ -86,6 +87,15 @@
       <div class="actions"><button type="button" id="move-cancel">取消</button><button id="move-confirm">移动</button></div>
     </form>
   </dialog>
+  <dialog id="open-dialog" aria-labelledby="open-title" aria-describedby="open-description">
+    <h2 id="open-title">在后台打开书签</h2>
+    <p id="open-description"></p>
+    <p id="open-error" role="alert"></p>
+    <div class="actions">
+      <button type="button" id="open-cancel" autofocus>取消</button>
+      <button type="button" id="open-confirm">打开书签</button>
+    </div>
+  </dialog>
   <dialog id="remove-dialog" aria-labelledby="remove-title" aria-describedby="remove-description">
     <h2 id="remove-title">删除所选书签？</h2>
     <p id="remove-description"></p>
@@ -103,6 +113,8 @@
   const selection = el('selection'), moveSelected = el('move-selected'), selectionCount = el('selection-count');
   const selectDisplayed=el('select-displayed'), removeSelected=el('remove-selected'), removeDialog=el('remove-dialog');
   const removeConfirm=el('remove-confirm'), removeCancel=el('remove-cancel');
+  const openSelected=el('open-selected'), openDialog=el('open-dialog');
+  const openConfirm=el('open-confirm'), openCancel=el('open-cancel'), openError=el('open-error');
   const moveDialog = el('move-dialog'), moveConfirm = el('move-confirm'), moveCancel = el('move-cancel');
   const destination = el('destination');
   const separator = ' / ', selectionLimit = 100;
@@ -175,7 +187,7 @@
   function showSelection() {
     const choices=bookmarkChoices();
     selection.hidden = choices.length===0;
-    moveSelected.disabled = removeSelected.disabled = loading || selected.size===0;
+    openSelected.disabled = moveSelected.disabled = removeSelected.disabled = loading || selected.size===0;
     selectDisplayed.disabled=loading;
     selectDisplayed.textContent=selectionFilled(choices) ? '清除选择' : '选择已显示书签';
     selectionCount.textContent = selected.size ? `已选择 ${selected.size} 条` +
@@ -326,6 +338,35 @@
     } catch (error) {
       el('move-error').textContent = error.message==='INVALID_PARAMS' ? '请检查文件夹路径，最多 160 UTF-8 字节。' : '无法移动所选书签。';
     } finally { moveConfirm.disabled = moveCancel.disabled = false; }
+  };
+  let openingIds=[];
+  openSelected.onclick=()=>{
+    openingIds=bookmarkChoices().map(choice=>Number(choice.dataset.bookmark)).filter(id=>selected.has(id));
+    el('open-description').textContent=`将打开所选的 ${openingIds.length} 条书签。切换到新标签时才会加载网页。`;
+    openError.textContent='';
+    openDialog.showModal();
+  };
+  openCancel.onclick=()=>openDialog.close();
+  openDialog.oncancel=event=>{ if (openConfirm.disabled) event.preventDefault(); };
+  openConfirm.onclick=async ()=>{
+    openConfirm.disabled=openCancel.disabled=true;
+    openError.textContent='';
+    try {
+      const {state,opened,missing}=await host('bookmarks.openMany',{ids:openingIds});
+      if (state==='tabLimit') {
+        openError.textContent='标签空间不足。关闭部分标签后重试。';
+        return;
+      }
+      if (state==='unavailable') throw Error('UNAVAILABLE');
+      openDialog.close();
+      selected.clear();
+      showSelection();
+      status.textContent=opened ? `已在后台打开 ${opened} 个标签。` +
+        (missing ? `跳过 ${missing} 条已失效书签。` : '') : '所选书签已失效。';
+      search.focus({preventScroll:true});
+    } catch {
+      openError.textContent='无法打开所选书签。';
+    } finally { openConfirm.disabled=openCancel.disabled=false; }
   };
   let removingIds=[];
   removeSelected.onclick=()=>{

@@ -1916,11 +1916,15 @@ export fn moon_link_open(link: *const native.MoonLinkContext) c_uint {
 
 fn addBackgroundTab(address: [4096:0]u8, label: [512:0]u8) bool {
     if (count==tabs.len) return false;
+    appendBackgroundTab(address,label);
+    native.moon_shell_refresh();
+    return true;
+}
+
+fn appendBackgroundTab(address: [4096:0]u8, label: [512:0]u8) void {
     tabs[count] = .{ .id=next_id,.phase=.dormant,.url=address,.title=label,.last_used=native.moon_clock() };
     count += 1;
     next_id += 1;
-    native.moon_shell_refresh();
-    return true;
 }
 export fn moon_tab_id(index: usize) u64 {
     return if (index<count) tabs[index].id else 0;
@@ -2177,6 +2181,37 @@ export fn moon_bookmark_bar_open(id: u32, background: bool) bool {
         navigate(&tabs[active],slice(&address));
     }
     return true;
+}
+
+export fn moon_bookmarks_open_many(panel: u64, ids: [*]const u32, length: usize, opened: *u32, missing: *u32) c_int {
+    opened.* = 0;
+    missing.* = 0;
+    if (!moon_extension_panel_active(panel) or native.moon_shell_private())
+        return @intFromEnum(sdk.BookmarkOpenState.unavailable);
+    const allocator = std.heap.page_allocator;
+    const Target = struct { address: [4096:0]u8 = @splat(0), title: [512:0]u8 = @splat(0) };
+    const targets = allocator.alloc(Target,length) catch return @intFromEnum(sdk.BookmarkOpenState.unavailable);
+    defer allocator.free(targets);
+    var found: usize = 0;
+    for (ids[0..length],0..) |id,index| {
+        if (std.mem.indexOfScalar(u32,ids[0..index],id)!=null) continue;
+        targets[found] = .{};
+        const target = &targets[found];
+        bookmarks.barTarget(id,&target.address,&target.title) catch |err| switch (err) {
+            error.NotFound, error.InvalidParams => {
+                missing.* += 1;
+                continue;
+            },
+            else => return @intFromEnum(sdk.BookmarkOpenState.unavailable),
+        };
+        found += 1;
+    }
+    if (found==0) return @intFromEnum(sdk.BookmarkOpenState.empty);
+    if (found>tabs.len-count) return @intFromEnum(sdk.BookmarkOpenState.tabLimit);
+    for (targets[0..found]) |target| appendBackgroundTab(target.address,target.title);
+    opened.* = @intCast(found);
+    native.moon_shell_refresh();
+    return @intFromEnum(sdk.BookmarkOpenState.opened);
 }
 
 export fn moon_plugin_open_page(id: [*c]const u8) bool {

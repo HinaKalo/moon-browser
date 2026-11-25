@@ -88,7 +88,7 @@
     {
       "id": "moon.bookmarks",
       "name": "书签",
-      "description": "浏览书签文件夹、批量移动或删除书签，以及导入和导出 HTML。",
+      "description": "浏览书签文件夹、批量在后台打开、移动或删除书签，以及导入和导出 HTML。",
       "permission": "管理书签并选择导入或导出文件",
       "url": "https://docs.browser.moonl.cloud/library.html"
     },

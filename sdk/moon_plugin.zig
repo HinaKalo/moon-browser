@@ -237,6 +237,8 @@ pub const BookmarkFoldersQuery = struct { parent: []const u8 = "", after: ?[]con
 pub const BookmarkFolders = struct { folders: []const []const u8, next: ?[]const u8 };
 pub const BookmarkMove = struct { ids: []const u32, folder: []const u8 };
 pub const bookmark_selection_limit = 100;
+pub const BookmarkOpenState = enum(c_int) { opened, empty, tabLimit, unavailable };
+pub const BookmarkOpenResult = struct { state: BookmarkOpenState, opened: u32, missing: u32 };
 pub const BookmarksBarChange = enum(c_int) { shown, hidden, unavailable };
 pub const BookmarkPage = struct { bookmarks: []const Bookmark, next: ?u32 };
 pub const BookmarkTransferState = enum { done, cancelled, invalidFile, limitExceeded, unavailable };
@@ -401,6 +403,7 @@ pub const Method = enum {
     @"bookmarks.update",
     @"bookmarks.remove",
     @"bookmarks.removeMany",
+    @"bookmarks.openMany",
     @"bookmarks.importHtml",
     @"bookmarks.exportHtml",
     @"downloads.list",

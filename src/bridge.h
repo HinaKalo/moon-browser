@@ -87,6 +87,7 @@ bool moon_bookmark_bar_visible(void);
 int moon_bookmark_bar_toggle(void);
 size_t moon_bookmark_bar_entries(const char *folder, size_t offset, MoonBookmarkBarEntry *output, size_t capacity, bool *more);
 bool moon_bookmark_bar_open(uint32_t id, bool background);
+int moon_bookmarks_open_many(uint64_t panel, const uint32_t *ids, size_t length, uint32_t *opened, uint32_t *missing);
 void moon_shell_bookmarks_changed(void);
 const char *moon_app_dir(void);
 uint64_t moon_clock(void);

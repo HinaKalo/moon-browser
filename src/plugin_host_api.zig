@@ -72,7 +72,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear" => .@"history.manage",
         .@"network.filter.status", .@"network.filter.setSite" => .@"network.filter",
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
-        .@"bookmarks.bar.toggle", .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany" => .@"bookmarks.manage",
+        .@"bookmarks.bar.toggle", .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany", .@"bookmarks.openMany" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
         .@"downloads.open" => .@"downloads.open",
@@ -206,7 +206,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     if (context.from_page) switch (method) {
         .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
-        .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany",
+        .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany", .@"bookmarks.openMany",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
         .@"downloads.open" => {},
@@ -590,6 +590,17 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const value = decode(struct { ids: []const u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             const removed = bookmarks.removeMany(value.ids) catch |err| return sdk.failure(output,id,libraryReason(err));
             return sdk.result(output,id,.{ .removed=removed });
+        },
+        .@"bookmarks.openMany" => {
+            if (!context.from_page or native.moon_shell_private() or !native.moon_extension_panel_active(context.target_tab_id))
+                return sdk.failure(output,id,.PermissionDenied);
+            const value = decode(struct { ids: []const u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (!bookmarks.validSelection(value.ids)) return sdk.failure(output,id,.InvalidParams);
+            var opened: u32 = 0;
+            var missing: u32 = 0;
+            const state: sdk.BookmarkOpenState = @enumFromInt(native.moon_bookmarks_open_many(
+                context.target_tab_id,value.ids.ptr,value.ids.len,&opened,&missing));
+            return sdk.result(output,id,sdk.BookmarkOpenResult{ .state=state,.opened=opened,.missing=missing });
         },
         .@"bookmarks.saveActive" => save: {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

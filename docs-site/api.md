@@ -76,6 +76,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `bookmarks.folders` | `bookmarks.manage` | 传入 `{ parent?, after? }`。返回 `{ folders, next }`，每页最多 32 个直接子文件夹名称。省略 `parent` 时从根目录开始，使用 `next` 作为下一页的 `after`，用 ` / ` 拼接路径。 |
 | `bookmarks.move` | `bookmarks.manage` | 传入 `{ ids, folder }`，一次移动 1 至 100 个书签 ID。空字符串表示根目录。返回 `{ moved }`，计入实际更改位置的书签。 |
 | `bookmarks.removeMany` | `bookmarks.manage` | 传入 `{ ids }`，一次删除 1 至 100 个书签 ID。返回 `{ removed }`，只计入实际删除的书签。无效参数会拒绝整批请求。 |
+| `bookmarks.openMany` | `bookmarks.manage` | 从前台插件页面传入 `{ ids }`，每次 1 至 100 个已保存的书签 ID。返回 `{ state, opened, missing }`。首个相同 ID 生效，按传入顺序追加后台标签，切换到对应标签时才加载。状态为 `opened`、`empty`、`tabLimit` 或 `unavailable`。标签空间不足时整批不打开。 |
 | `bookmarks.save` | `bookmarks.manage` | 传入 `{ title, url, folder? }`，返回 `saved` 或 `alreadySaved`。 |
 | `bookmarks.saveActive` | `bookmarks.manage` | 在用户命令中传入 `{}`，保存触发时的网页。返回 `saved`、`alreadySaved` 或 `noPage`。 |
 | `bookmarks.bar.toggle` | `bookmarks.manage` | 在原生用户命令中传入 `{}`，切换并保存书签栏的显示状态。返回 `shown`、`hidden` 或 `unavailable`。参见[书签栏](./library#书签栏)。 |

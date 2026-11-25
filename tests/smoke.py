@@ -68,6 +68,7 @@ class Fixture(BaseHTTPRequestHandler):
     navigate_from_site_menu = Event()
     navigate_from_link_menu = Event()
     page_source_requests = 0
+    bookmark_batch_requests = []
     popup_attempts = set()
     popup_destinations = set()
     autoplay_reports = {}
@@ -276,6 +277,8 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"ok", "text/plain"
         elif path.startswith("/page/"):
             name = path.removeprefix("/page/")
+            if name.startswith("bookmark-batch-open-"):
+                self.bookmark_batch_requests.append(name)
             if name == "中文":
                 self.seen_unicode.set()
             demo = ""
@@ -4765,6 +4768,57 @@ def run_win32(exe, base, root):
             user.PostMessageW(frame,0x0010,0,0)
             if proc.wait(8)!=0:
                 raise RuntimeError("The bookmark bar fixture did not shut down")
+            bookmark_page=bookmarks.with_name("bookmarks.html").read_text(encoding="utf-8")
+            batch_page="extension://moon.bookmark-open-fixture/bookmarks.html"
+            if 'id="open-selected"' in bookmark_page:
+                fixture=bar_profile/"plugins"/"bookmark-open"
+                fixture.mkdir(parents=True)
+                manifest=json.loads(bookmarks.with_name("plugin.json").read_text(encoding="utf-8"))
+                manifest.update(id="moon.bookmark-open-fixture",name="Bookmark open fixture")
+                (fixture/"plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+                (bar_profile/"plugin-state.json").write_text(json.dumps([
+                    {"id":manifest["id"],"enabled":True,"tabs_read":False,"bookmarks_manage":True}
+                ]),encoding="utf-8")
+                contract=r"""
+                <script>(async()=>{
+                  const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:'write',value}));
+                  async function wait(predicate) {
+                    for(let i=0;i<80;i++) {
+                      if(predicate()) return;
+                      await new Promise(resolve=>setTimeout(resolve,50));
+                    }
+                    throw Error('bookmark batch open timeout');
+                  }
+                  try {
+                    for(const ids of [[],[0],Array(101).fill(1)]) {
+                      if(await host('bookmarks.openMany',{ids}).then(()=>true,error=>error.message!=='INVALID_PARAMS'))
+                        throw Error('invalid IDs accepted');
+                    }
+                    const stale=4294967295;
+                    const empty=await host('bookmarks.openMany',{ids:[stale,stale]});
+                    if(empty.state!=='empty'||empty.opened!==0||empty.missing!==1) throw Error('stale ID handling');
+                    search.value='bookmark-batch-open-';
+                    search.dispatchEvent(new Event('input'));
+                    await wait(()=>!loading&&bookmarkChoices().length===2);
+                    selectDisplayed.click();
+                    openSelected.click();
+                    if(!openDialog.open||!el('open-description').textContent.includes('2 条')) throw Error('preview count');
+                    openCancel.click();
+                    if(openDialog.open||selected.size!==2) throw Error('cancel changed selection');
+                    openSelected.click();
+                    openConfirm.click();
+                    await wait(()=>!openDialog.open&&status.textContent==='已在后台打开 2 个标签。');
+                    await emit({passed:true});
+                  } catch(error) { await emit({error:String(error)}); }
+                })();</script>
+                """
+                (fixture/"bookmarks.html").write_text(bookmark_page.replace("</html>",contract+"</html>"),encoding="utf-8")
+                with closing(sqlite3.connect(bar_profile/"bookmarks.sqlite3")) as connection:
+                    connection.executemany("INSERT INTO bookmarks(title,url,folder) VALUES(?,?,?)",[
+                        ("批量打开 A",base+"/page/bookmark-batch-open-a","批量打开"),
+                        ("批量打开 B",base+"/page/bookmark-batch-open-b","批量打开")
+                    ])
+                    connection.commit()
             proc=subprocess.Popen([str(exe),"--gdi"],env=bar_env)
             frame=browser_frame(proc)
             edit=user.GetDlgItem(frame,1001)
@@ -4772,6 +4826,23 @@ def run_win32(exe, base, root):
             invoke("显示或隐藏书签栏")
             wait_for(lambda: viewport_top(frame)==collapsed,"Hiding the bookmark bar did not restore the viewport")
             print("bookmarks_bar=ok session_preference=ok nested_menu=ok direct_navigation=ok menu_anchor=ok live_refresh=ok overflow=ok fullscreen=ok private=ok",flush=True)
+            if 'id="open-selected"' in bookmark_page:
+                set_control(edit,batch_page)
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                report=bar_profile/f'extension-{sha256(b"moon.bookmark-open-fixture").hexdigest()}.json'
+                result=wait_for(lambda: read_settings(report),"The bookmark batch-open fixture did not finish")
+                if not result.get("passed"):
+                    raise RuntimeError(f"Bookmark batch open: {result}")
+                if read_address()!=batch_page or Fixture.bookmark_batch_requests:
+                    raise RuntimeError("Batch open changed the active tab or prefetched a bookmark")
+                for row,suffix in ((1,"b"),(2,"a")):
+                    name="bookmark-batch-open-"+suffix
+                    click(px(110),px(148+37*row))
+                    wait_for(lambda: read_address()==base+"/page/"+name and name in Fixture.bookmark_batch_requests,
+                             "The selected background bookmark did not load in list order")
+                if Fixture.bookmark_batch_requests != ["bookmark-batch-open-b","bookmark-batch-open-a"]:
+                    raise RuntimeError(f"Unexpected bookmark requests: {Fixture.bookmark_batch_requests}")
+                print("bookmark_bulk_open=ok invalid_ids=ok stale_ids=ok cancel=ok active_tab_unchanged=ok ordered_lazy_load=ok",flush=True)
         if appearance.is_file():
             appearance_env = preview_env(root/"appearance")
             theme_path = Path(appearance_env["MOON_BROWSER_PROFILE_DIR"])/"chrome-theme"
