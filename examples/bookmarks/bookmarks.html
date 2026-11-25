@@ -22,7 +22,7 @@
   #remove-selected,#remove-confirm { color:#a52937; }
   :root[data-moon-theme=dark] #remove-selected,:root[data-moon-theme=dark] #remove-confirm { color:#ffadb6; }
   #remove-error:empty,#open-error:empty { display:none; }
-  input,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
+  input,select,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
   input { min-width:0; flex:1; }
   button { cursor:pointer; }
   button:hover { background:var(--soft); }
@@ -49,6 +49,12 @@
   <h1>书签</h1>
   <div class="toolbar">
     <input type="search" id="search" placeholder="搜索标题、网址或文件夹" aria-label="搜索书签" maxlength="64">
+    <select id="bookmark-order" aria-label="排序书签">
+      <option value="newest">最新添加</option>
+      <option value="oldest">最早添加</option>
+      <option value="titleAsc">标题升序</option>
+      <option value="titleDesc">标题降序</option>
+    </select>
     <button id="add">新建书签</button>
     <button id="import">导入 HTML</button>
     <button id="export">导出 HTML</button>
@@ -109,6 +115,7 @@
 <script>
   const el = id => document.getElementById(id);
   const search = el('search'), results = el('results'), status = el('status'), more = el('more'), editor = el('editor');
+  const order = el('bookmark-order');
   const folderPath = el('folder-path'), folders = el('folders'), folderStatus = el('folder-status');
   const selection = el('selection'), moveSelected = el('move-selected'), selectionCount = el('selection-count');
   const selectDisplayed=el('select-displayed'), removeSelected=el('remove-selected'), removeDialog=el('remove-dialog');
@@ -120,7 +127,7 @@
   const separator = ' / ', selectionLimit = 100;
   const selected = new Set();
   let folder = null, folderCursor = null, folderVersion = 0, loading = false;
-  let sequence = 0, revision = 0, timer, cursor, editing;
+  let sequence = 0, revision = 0, timer, cursor, cursorTitle, editing;
   async function host(method, params) {
     const id = 'bookmark:' + ++sequence;
     const reply = JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({ jsonrpc:'2.0', id, method, params })));
@@ -258,20 +265,22 @@
     row.append(choice,link,change,remove);
     results.append(row);
   }
-  async function load(appendMore = false) {
+  async function load(appendMore = false, preserveSelection = false) {
     const request = ++revision;
     loading = true;
-    if (!appendMore) { selected.clear(); loadFolders(); }
+    if (!appendMore && !preserveSelection) { selected.clear(); loadFolders(); }
     showSelection();
     more.disabled = true;
     try {
       const query = search.value.trim();
-      const page = await host('bookmarks.list',{ query,before:appendMore ? cursor : null,folder });
+      const page = await host('bookmarks.list',{ query,folder,order:order.value,
+        before:appendMore ? cursor : null,beforeTitle:appendMore ? cursorTitle : null });
       if (request !== revision) return;
       if (!appendMore) results.replaceChildren();
       page.bookmarks.forEach(append);
       results.hidden = !results.children.length;
       cursor = page.next;
+      cursorTitle = page.nextTitle;
       more.hidden = cursor === null;
       status.textContent = results.hidden ? (query ? '没有匹配的书签。' : folder!==null ? '这里暂无书签。' : '用 Ctrl+D 保存网页，或新建书签。') : '';
       el('add').disabled = false;
@@ -411,6 +420,10 @@
     showSelection();
     clearTimeout(timer);
     timer = setTimeout(load,120);
+  };
+  order.onchange = () => {
+    clearTimeout(timer);
+    load(false,true);
   };
   more.onclick = () => load(true);
   document.addEventListener('visibilitychange',() => { if (!document.hidden) load(); });

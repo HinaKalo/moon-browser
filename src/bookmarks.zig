@@ -229,19 +229,31 @@ pub fn barTarget(id: u32, address: *[4096:0]u8, label: *[512:0]u8) !void {
 pub fn list(allocator: std.mem.Allocator, options: sdk.BookmarkQuery, buffer: *[24]sdk.Bookmark) !sdk.BookmarkPage {
     const folder_filter = options.folder orelse "";
     if (options.query.len > 256 or !validLabel(folder_filter,160)) return error.InvalidParams;
+    const title_order = options.order == .titleAsc or options.order == .titleDesc;
+    if (options.beforeTitle) |title| {
+        if (!title_order or (options.before orelse 0) == 0 or !validLabel(title,511)) return error.InvalidParams;
+    } else if (title_order and options.before != null) return error.InvalidParams;
     const db = try connection();
-    const statement = try db_api.prepare(db,
-        \\SELECT id,title,url,folder FROM bookmarks WHERE id>0 AND id<?1
+    const base =
+        \\SELECT id,title,url,folder FROM bookmarks
+        \\WHERE id>0 AND id<=4294967295
         \\AND (instr(lower(title),lower(?2)) OR instr(lower(url),lower(?2)) OR instr(lower(folder),lower(?2)))
         \\AND (?3=0 OR folder=?4)
-        \\ORDER BY id DESC LIMIT 25
-    );
+        \\
+    ;
+    const statement = try db_api.prepare(db,switch (options.order) {
+        .newest => base ++ "AND id<?1 ORDER BY id DESC",
+        .oldest => base ++ "AND id>?1 ORDER BY id",
+        .titleAsc => base ++ "AND (?1=0 OR (title COLLATE NOCASE,id)>(?5,?1)) ORDER BY title COLLATE NOCASE,id",
+        .titleDesc => base ++ "AND (?1=0 OR (title COLLATE NOCASE,id)<(?5,?1)) ORDER BY title COLLATE NOCASE DESC,id DESC",
+    });
     defer _ = sqlite.sqlite3_finalize(statement);
-    const end: i64 = if (options.before) |id| id else @as(i64,std.math.maxInt(u32))+1;
+    const end: i64 = if (options.before) |id| id else if (options.order==.newest) @as(i64,std.math.maxInt(u32))+1 else 0;
     if (sqlite.sqlite3_bind_int64(statement,1,end) != db_api.ok or
         sqlite.sqlite3_bind_int64(statement,3,@intFromBool(options.folder!=null)) != db_api.ok) return error.IOError;
     try db_api.bindText(statement,2,options.query);
     try db_api.bindText(statement,4,folder_filter);
+    if (title_order) try db_api.bindText(statement,5,options.beforeTitle orelse "");
     var remaining: usize = 24*1024;
     var length: usize = 0;
     while (true) {
@@ -254,7 +266,8 @@ pub fn list(allocator: std.mem.Allocator, options: sdk.BookmarkQuery, buffer: *[
         if (!history.validURL(url) or !validLabel(title,511) or !validLabel(folder,160)) continue;
         const max_bytes = 2*(title.len+url.len+folder.len)+128;
         if (length == buffer.len or max_bytes > remaining)
-            return .{ .bookmarks=buffer[0..length],.next=buffer[length-1].id };
+            return .{ .bookmarks=buffer[0..length],.next=buffer[length-1].id,
+                .nextTitle=if (title_order) buffer[length-1].title else null };
         buffer[length] = .{
             .id=@intCast(sqlite.sqlite3_column_int64(statement,0)),
             .title=try allocator.dupe(u8,title),

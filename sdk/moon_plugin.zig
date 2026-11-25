@@ -321,7 +321,11 @@ pub const HistorySitePage = struct { sites: []const HistorySite, through: ?u32, 
 pub const BookmarkInput = struct { title: []const u8, url: []const u8, folder: []const u8 = "" };
 pub const BookmarkEdit = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 = "" };
 pub const Bookmark = struct { id: u32, title: []const u8, url: []const u8, folder: []const u8 };
-pub const BookmarkQuery = struct { query: []const u8 = "", before: ?u32 = null, folder: ?[]const u8 = null };
+pub const BookmarkOrder = enum { newest, oldest, titleAsc, titleDesc };
+pub const BookmarkQuery = struct {
+    query: []const u8 = "", before: ?u32 = null, folder: ?[]const u8 = null,
+    order: BookmarkOrder = .newest, beforeTitle: ?[]const u8 = null,
+};
 pub const BookmarkFoldersQuery = struct { parent: []const u8 = "", after: ?[]const u8 = null };
 pub const BookmarkFolders = struct { folders: []const []const u8, next: ?[]const u8 };
 pub const BookmarkMove = struct { ids: []const u32, folder: []const u8 };
@@ -329,7 +333,7 @@ pub const bookmark_selection_limit = 100;
 pub const BookmarkOpenState = enum(c_int) { opened, empty, tabLimit, unavailable };
 pub const BookmarkOpenResult = struct { state: BookmarkOpenState, opened: u32, missing: u32 };
 pub const BookmarksBarChange = enum(c_int) { shown, hidden, unavailable };
-pub const BookmarkPage = struct { bookmarks: []const Bookmark, next: ?u32 };
+pub const BookmarkPage = struct { bookmarks: []const Bookmark, next: ?u32, nextTitle: ?[]const u8 = null };
 pub const BookmarkTransferState = enum { done, cancelled, invalidFile, limitExceeded, unavailable };
 pub const BookmarkTransfer = struct { state: BookmarkTransferState, count: usize = 0, skipped: usize = 0 };
 pub const BookmarkSave = enum { saved, alreadySaved, noPage };

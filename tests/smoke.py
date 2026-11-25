@@ -1691,6 +1691,49 @@ def run_win32(exe, base, root):
                 before=batch.next;
             }
         ''' if 'id="move-selected"' in page else ''
+        order_contract = r'''
+            {
+                const group="排序验收", prefix="https://sort-fixture.invalid/item-";
+                const every=[];
+                for(let index=0;index<28;index++){
+                    const title=index===0?"Zulu":index===27?"Alpha":index%2?"Echo":"eCHO";
+                    const url=prefix+index;
+                    if(await host("bookmarks.save",{title,url,folder:group})!=="saved")throw Error("bookmark sort seed");
+                    every.push(url);
+                }
+                const query={folder:group,query:"sort-fixture"};
+                const first=await host("bookmarks.list",{...query,order:"titleAsc"});
+                const planned=[every[27],...every.slice(1,27),every[0]];
+                const urls=rows=>rows.map(row=>row.url).join(",");
+                if(first.bookmarks.length!==24||first.nextTitle?.toLowerCase()!=="echo"||
+                    urls(first.bookmarks)!==planned.slice(0,24).join(","))throw Error("first ascending title page");
+                const older=await host("bookmarks.list",{...query,order:"oldest"});
+                if(urls(older.bookmarks)!==every.slice(0,24).join(","))throw Error("oldest bookmark order");
+                const reverse=await host("bookmarks.list",{...query,order:"titleDesc"});
+                if(urls(reverse.bookmarks)!==planned.slice().reverse().slice(0,24).join(","))throw Error("descending title page");
+                goFolder(group);
+                const order=document.getElementById("bookmark-order");
+                const setOrder=value=>{order.value=value;order.dispatchEvent(new Event("change"));};
+                const rows=()=>[...document.querySelectorAll("#results li a")].map(link=>link.href);
+                setOrder("titleAsc");
+                await wait(()=>rows().join(",")===planned.slice(0,24).join(","));
+                const choice=document.querySelector("#results li input");
+                const alpha=choice.dataset.bookmark;
+                choice.click();
+                document.getElementById("more").click();
+                await wait(()=>rows().join(",")===planned.join(","));
+                setOrder("oldest");
+                await wait(()=>rows().join(",")===every.slice(0,24).join(","));
+                document.getElementById("more").click();
+                await wait(()=>rows().join(",")===every.join(",")&&document.querySelector('input[data-bookmark="'+alpha+'"]').checked);
+                await host("bookmarks.remove",{id:first.next});
+                const tail=await host("bookmarks.list",{...query,order:"titleAsc",before:first.next,beforeTitle:first.nextTitle});
+                if(tail.next!==null||urls(tail.bookmarks)!==planned.slice(24).join(","))throw Error("cursor lost after boundary deletion");
+                for(const item of [...first.bookmarks,...tail.bookmarks]){
+                    if(item.id!==first.next)await host("bookmarks.remove",{id:item.id});
+                }
+            }
+        ''' if 'id="bookmark-order"' in page else ''
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
             'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
@@ -1705,7 +1748,7 @@ def run_win32(exe, base, root):
             'await wait(()=>document.querySelector("#results").textContent.includes("编辑后的书签"));'
             'if(document.getElementById("export")){document.getElementById("export").click();'
             'await wait(()=>document.getElementById("transfer-status").textContent.includes("已导出 1 个"));}'
-            + folder_contract +
+            + folder_contract + order_contract +
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "bookmarks.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
@@ -3900,6 +3943,8 @@ def run_win32(exe, base, root):
             if row != [("编辑后的书签",target,"测试文件夹")]:
                 raise RuntimeError(f"Bookmark save or edit was not persisted: {row}")
             print("bookmark_system_plugin=ok native_bookmark_toast=ok bookmark_edit=ok",flush=True)
+            if 'id="bookmark-order"' in bookmarks.with_name("bookmarks.html").read_text(encoding="utf-8"):
+                print("bookmark_sort=ok stable_title_cursor=ok selection_kept=ok folder_scope=ok",flush=True)
             if 'id="move-selected"' in bookmarks.with_name("bookmarks.html").read_text(encoding="utf-8"):
                 print("bookmark_folders=ok exact_root=ok nested_paths=ok move_across_pages=ok cancel=ok atomic_validation=ok",flush=True)
             if 'id="remove-selected"' in bookmarks.with_name("bookmarks.html").read_text(encoding="utf-8"):
