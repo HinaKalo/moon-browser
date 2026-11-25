@@ -47,6 +47,7 @@ pub const Permission = enum {
     @"downloads.preferences",
     @"downloads.open",
     @"siteData.cookieClear",
+    @"ui.settings",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -66,6 +67,7 @@ pub const Shortcut = enum {
     @"Ctrl+B",
     @"Ctrl+Shift+L",
     @"Ctrl+Shift+A",
+    @"Ctrl+,",
     F9,
 };
 pub const Theme = enum { light, dark };
@@ -95,6 +97,10 @@ pub const Command = struct {
 pub const ShortcutScope = enum { browser, global };
 pub const RegisteredShortcut = struct { id: []const u8, shortcut: []const u8, scope: ShortcutScope = .browser };
 pub const UiRegistration = enum(c_uint) { saved, notFound, conflict, reserved, invalidShortcut, limitReached, cancelled, unavailable };
+pub const SettingsSection = enum(c_uint) { general, privacy, developer, extensions };
+pub const SettingsContribution = struct { section: SettingsSection = .extensions, title: []const u8, description: []const u8 };
+pub const SettingsEntry = struct { id: []const u8, section: SettingsSection, title: []const u8, description: []const u8 };
+pub const SettingsPage = struct { entries: []const SettingsEntry, next: ?usize };
 pub const Manifest = struct {
     id: []const u8,
     name: []const u8,
@@ -104,7 +110,7 @@ pub const Manifest = struct {
     entry: []const u8,
     settingsPage: ?[]const u8 = null,
     networkRules: ?[]const u8 = null,
-    contributes: struct { commands: []const Command },
+    contributes: struct { commands: []const Command, settings: ?SettingsContribution = null },
     permissions: []const Permission = &.{},
     events: []const Event = &.{},
 };
@@ -392,6 +398,8 @@ pub const Method = enum {
     @"siteSettings.zoom.get",
     @"siteSettings.zoom.set",
     @"ui.openPage",
+    @"ui.settings.list",
+    @"ui.settings.open",
     @"history.list",
     @"history.remove",
     @"history.removeMany",

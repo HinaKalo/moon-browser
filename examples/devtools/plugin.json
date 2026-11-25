@@ -7,6 +7,7 @@
   "entry": "MoonDevTools.exe",
   "settingsPage": "settings.html",
   "contributes": {
+    "settings": {"section": "developer", "title": "开发者工具", "description": "设置检查器默认停靠在页面内或独立窗口。"},
     "commands": [
       {"id": "inspector", "label": "切换网页开发者工具", "menu": "developer", "shortcut": "F12"},
       {"id": "elements", "label": "拾取网页元素", "menu": "developer", "shortcut": "Ctrl+Shift+C", "inspectElementMenu": "检查元素"},

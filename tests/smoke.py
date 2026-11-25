@@ -829,6 +829,7 @@ def run_win32(exe, base, root):
     picker_devtools = "elements" in devtools_commands
     inspect_menu = devtools_commands.get("elements",{}).get("inspectElementMenu")
     appearance = exe.parent / "plugins" / "appearance" / "MoonAppearance.exe"
+    browser_settings = exe.parent / "plugins" / "settings" / "MoonSettings.exe"
     history = exe.parent / "plugins" / "history" / "MoonHistory.exe"
     history_selection = history.exists() and 'id="remove-selected"' in (
         history.parent / "history.html").read_text(encoding="utf-8")
@@ -986,6 +987,9 @@ def run_win32(exe, base, root):
             ('const appearanceDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"14",method:"window.appearance.set",params:{theme:"dark"}}));'
              'if(JSON.parse(appearanceDenied).error?.code!==-32001)return;' if appearance.is_file() else '') +
+            ('const settingsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"settings-denied",method:"ui.settings.list",params:{}}));'
+             'if(JSON.parse(settingsDenied).error?.code!==-32001)return;' if browser_settings.is_file() else '') +
             ('const downloadsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"10",method:"downloads.clearCompleted",params:{}}));'
              'if(JSON.parse(downloadsDenied).error?.code!==-32001)return;'
@@ -5023,6 +5027,96 @@ def run_win32(exe, base, root):
             native_entries(choose=(page_menu,theme_action))
             wait_for(lambda: theme_stored("light"),"The theme toggle failed to start from the persisted dark theme")
             print("appearance_system_plugin=ok page_theme_control=ok native_focus=ok persistent_theme=ok window_scoped_focus=ok",flush=True)
+        if browser_settings.is_file():
+            hub_env=preview_env(root/"browser-settings")
+            hub_profile=Path(hub_env["MOON_BROWSER_PROFILE_DIR"])
+            fixture=hub_profile/"plugins"/"settings-hub"
+            fixture.mkdir(parents=True)
+            fixture_id="moon.settings-hub-fixture"
+            manifest=json.loads(browser_settings.with_name("plugin.json").read_text(encoding="utf-8"))
+            manifest["id"]=fixture_id
+            manifest["contributes"]["commands"][0].pop("shortcut",None)
+            manifest["contributes"]["commands"][0].pop("menu",None)
+            manifest["contributes"]["commands"][0]["label"]="Settings contract fixture"
+            (fixture/"plugin.json").write_text(json.dumps(manifest),encoding="utf-8")
+            states=[{"id":fixture_id,"enabled":True,"tabs_read":False,"ui_settings":True}]
+            for n in range(6):
+                target_id=f"fixture.settings-{n}"
+                target=hub_profile/"plugins"/target_id
+                target.mkdir()
+                (target/"plugin.json").write_text(json.dumps({
+                    "id":target_id,"name":f"Local settings {n}","version":"1.0.0","apiVersion":2,
+                    "runtime":"native","entry":"Unused.exe","settingsPage":"panel.html",
+                    "contributes":{"commands":[{"id":"open","label":f"Local settings {n}"}],
+                        "settings":{"title":f"<b>本地设置 {n}</b>","description":"本地插件设置验收"}}
+                }),encoding="utf-8")
+                (target/"panel.html").write_text("<!doctype html><title>Local settings</title>",encoding="utf-8")
+                states.append({"id":target_id,"enabled":n<5,"tabs_read":False})
+            (hub_profile/"plugin-state.json").write_text(json.dumps(states),encoding="utf-8")
+            (hub_profile/"chrome-theme").write_text("dark",encoding="utf-8")
+            contract=r"""
+            <script>(async()=>{
+              const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:'write',value}));
+              const check=(condition,error)=>{if(!condition) throw Error(error);};
+              try {
+                for(let attempt=0; reading && attempt<60; attempt++) await new Promise(resolve=>setTimeout(resolve,50));
+                const first=await host('ui.settings.list',{});
+                check(first.entries.length===12 && first.next>0,'settings pagination missing: '+JSON.stringify(first));
+                check((await host('ui.settings.list',{offset:first.next})).entries.length>0,'next settings page empty');
+                check(await host('ui.settings.list',{offset:65}).then(()=>false,e=>e.message==='INVALID_PARAMS'),'invalid pagination accepted');
+                check(!results.querySelector('[data-setting="fixture.settings-5"]') &&
+                      !await host('ui.settings.open',{id:'fixture.settings-5'}) &&
+                      !await host('ui.settings.open',{id:'moon.site-data'}),'disabled or undeclared setting was exposed');
+                check(document.documentElement.dataset.moonTheme==='dark' &&
+                      results.querySelector('[data-setting="fixture.settings-3"] strong').textContent==='<b>本地设置 3</b>' &&
+                      !results.querySelector('b'),'theme or escaping');
+                document.querySelector('[data-section=privacy]').click();
+                check(results.querySelector('[data-setting="moon.privacy"]')&&!results.querySelector('[data-setting="moon.appearance"]'),
+                      'privacy filter showed other sections');
+                search.value='保存位置';
+                search.dispatchEvent(new Event('input'));
+                check(results.querySelectorAll('li').length===1 && results.querySelector('[data-setting="moon.downloads"]'),
+                      'search did not match the download settings');
+                search.value='';
+                search.dispatchEvent(new Event('input'));
+                await emit({passed:true});
+                results.querySelector('[data-setting="fixture.settings-3"]').click();
+              } catch(error) { await emit({error:String(error)}); }
+            })();</script>
+            """
+            page=browser_settings.with_name("settings.html").read_text(encoding="utf-8")
+            (fixture/"settings.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
+
+            user.PostMessageW(frame,0x0010,0,0)
+            if proc.wait(8)!=0:
+                raise RuntimeError("Could not close the browser before the settings hub check")
+            proc=subprocess.Popen([str(exe),"--gdi"],env=hub_env)
+            frame=browser_frame(proc)
+            edit=user.GetDlgItem(frame,1001)
+            hub="extension://moon.settings/settings.html"
+            native_entries(choose=("标签与页面","打开浏览器设置\tCtrl+,"))
+            wait_for(lambda: read_address()==hub,"The native settings menu did not open the settings hub")
+            set_control(edit,f"extension://{fixture_id}/settings.html")
+            user.PostMessageW(edit,0x0100,0x0D,1)
+            report=hub_profile/f'extension-{sha256(fixture_id.encode()).hexdigest()}.json'
+            result=wait_for(lambda: read_settings(report),"The settings hub contract did not finish")
+            if not result.get("passed"):
+                raise RuntimeError(f"Browser settings: {result}")
+            wait_for(lambda: read_address()=="extension://fixture.settings-3/panel.html",
+                     "Selecting a settings entry did not open the contributing plugin's page")
+            user.GetForegroundWindow.restype=wt.HWND
+            shortcut="not_observed"
+            if user.GetForegroundWindow()==frame:
+                click(px(476),px(23))
+                user.keybd_event(0x11,0,0,0)
+                try:
+                    user.keybd_event(0xbc,0,0,0)
+                    user.keybd_event(0xbc,0,2,0)
+                finally:
+                    user.keybd_event(0x11,0,2,0)
+                wait_for(lambda: read_address()==hub,"Ctrl+, did not open the settings hub")
+                shortcut="ok"
+            print(f"settings_hub=ok native_menu=ok shortcut={shortcut} themed=ok search=ok categories=ok paging=ok third_party=ok safe_link=ok grant_required=ok",flush=True)
         if download_preferences:
             settings_env=preview_env(root/"download-settings")
             settings_profile=Path(settings_env["MOON_BROWSER_PROFILE_DIR"])

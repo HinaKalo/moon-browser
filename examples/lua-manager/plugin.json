@@ -7,6 +7,7 @@
   "entry": "MoonLuaManager.exe",
   "settingsPage": "settings.html",
   "contributes": {
+    "settings": {"section": "extensions", "title": "Lua 脚本管理器", "description": "设置保存源码后是否重新加载当前匹配网页。"},
     "commands": [{"id": "open", "label": "打开 Lua 脚本编辑器", "menu": "extensions", "interactive": true}]
   },
   "permissions": ["lua.scripts.manage"]

@@ -30,7 +30,7 @@ API 2 插件包以 `plugin.json` 声明 `id`、`version`、`apiVersion`、`runti
 | `apiVersion` | 宿主 API 主版本。新增兼容字段和方法无需提升主版本。 |
 | `runtime` | 选择 Lua VM 或原生进程。 |
 | `entry` | 包内主文件，例如 `main.lua` 或 `Plugin.exe`。 |
-| `contributes` | 声明命令、默认菜单分组、站点菜单入口和快捷键。参见 [菜单与快捷键](./command-contributions)。 |
+| `contributes` | 声明命令、默认菜单分组、站点菜单入口、快捷键和浏览器设置入口。参见 [菜单与快捷键](./command-contributions)和[专属设置页](./extension-pages)。 |
 | `permissions`、`events` | 声明需要的能力和感兴趣的宿主通知。 |
 
 当前 Lua 用户脚本采用单文件元数据格式。EXE 可使用 [API 2 与 SDK](./api)，既有 `api_version: 1` 原生插件继续兼容。宿主按已声明的协议版本处理历史包，旧权限只延续到同一插件标识和同等权限范围。

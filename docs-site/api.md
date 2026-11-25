@@ -66,6 +66,8 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `siteSettings.current` / `siteSettings.openTool` | `popups.manage` | 活动插件页读取绑定站点的规则和可用工具，或传入 `{ revision, tool }` 打开原网页、站点数据或控制台。参见[站点设置](./popups)。 |
 | `siteSettings.zoom.set` | `siteSettings.zoom` | 普通窗口的活动插件页传入 `{ origin, percent }`，比例取自 `levels`。返回规范化后的规则。设为 100 会删除该来源的例外。 |
 | `ui.openPage` | 本插件 | 在命令处理中传入 `{}` 打开清单声明的页面。已打开时聚焦该标签。返回浏览器是否接受请求。 |
+| `ui.settings.list` | `ui.settings` | 普通窗口的活动插件页传入 `{ offset? }`，默认从 0 开始。返回 `{ entries, next }`，每页最多 12 条。入口包含 `id`、`section`、`title` 和 `description`。有后续条目时，把 `next` 传作下一次的 `offset`。 |
+| `ui.settings.open` | `ui.settings` | 活动插件页传入 `{ id }`，打开已启用插件登记的设置页。已打开时聚焦该标签。返回是否打开。 |
 | `history.list` | `history.manage` | 传入 `{ query?, before?, from?, until? }`。`from` 含边界，`until` 不含边界，均使用 Unix 毫秒。返回 `{ visits, next }`，每条为 `{ id, title, url, visitedAt }`。翻页时将 `next` 作为 `before`，沿用原有筛选条件。 |
 | `history.remove` | `history.manage` | 传入 `{ id }` 移除单条记录，成功返回 `null`。 |
 | `history.removeMany` | `history.manage` | 传入 `{ ids }`，在一次操作中移除 1 至 100 个访问 ID。返回 `{ removed }`，计入实际移除的记录。 |

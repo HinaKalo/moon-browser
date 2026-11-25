@@ -7,6 +7,7 @@
   "entry": "MoonAppearance.exe",
   "settingsPage": "appearance.html",
   "contributes": {
+    "settings": {"section": "general", "title": "外观", "description": "切换亮色或深色主题，调整侧栏和专注模式。"},
     "commands": [
       { "id": "settings", "label": "外观设置", "menu": "page" },
       { "id": "theme", "label": "切换亮色 / 深色主题", "menu": "page", "shortcut": "Ctrl+Shift+L" },

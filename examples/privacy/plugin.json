@@ -7,6 +7,7 @@
   "entry": "MoonPrivacy.exe",
   "settingsPage": "privacy.html",
   "contributes": {
+    "settings": {"section": "privacy", "title": "清除浏览数据", "description": "按类别清理浏览历史、站点数据和缓存。"},
     "commands": [
       { "id": "open", "label": "清除浏览数据", "menu": "privacy", "shortcut": "Ctrl+Shift+Delete" }
     ]

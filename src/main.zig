@@ -1996,6 +1996,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"privacy.clear" => "允许在确认后清除浏览数据",
         .@"taskManager.manage" => "允许查看和管理标签与进程",
         .@"ui.commands" => "允许添加菜单入口和注册快捷键",
+        .@"ui.settings" => "允许查看和打开插件设置入口",
         .@"tabs.organize" => "允许固定、静音和排序标签",
         .@"privacy.privateWindow" => "允许打开隐私浏览窗口",
         .@"tabs.manage" => "允许复制和批量关闭标签",
@@ -2228,6 +2229,19 @@ export fn moon_appearance_available() bool {
 
 export fn moon_extension_panel_active(panel: u64) bool {
     return !stopped and count!=0 and tabs[active].id==panel and tabs[active].extension;
+}
+
+export fn moon_settings_list(panel: u64, offset: usize, entries: [*c]native.MoonSettingsEntry, capacity: usize, next: *usize) usize {
+    next.* = 0;
+    if (native.moon_shell_private() or !moon_extension_panel_active(panel) or entries==null or capacity==0) return 0;
+    return plugins.listSettings(offset,entries[0..capacity],next);
+}
+
+export fn moon_settings_open(panel: u64, target: [*c]const u8) bool {
+    if (native.moon_shell_private() or !moon_extension_panel_active(panel)) return false;
+    var buffer: [256]u8 = undefined;
+    const address = plugins.contributedSettings(slice(target),&buffer) orelse return false;
+    return openInternalPage(address);
 }
 
 fn openInternalPage(address: []const u8) bool {

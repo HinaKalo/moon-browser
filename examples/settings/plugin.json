@@ -1,0 +1,13 @@
+{
+  "id": "moon.settings",
+  "name": "浏览器设置",
+  "version": "0.1.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonSettings.exe",
+  "settingsPage": "settings.html",
+  "contributes": {
+    "commands": [{ "id": "open", "label": "打开浏览器设置", "menu": "page", "shortcut": "Ctrl+," }]
+  },
+  "permissions": ["ui.settings"]
+}

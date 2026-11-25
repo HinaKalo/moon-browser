@@ -2,6 +2,13 @@
   "version": 1,
   "entries": [
     {
+      "id": "moon.settings",
+      "name": "浏览器设置",
+      "description": "搜索并打开外观、启动、搜索、下载、隐私和扩展设置。",
+      "permission": "查看并打开已启用插件登记的设置入口",
+      "url": "https://docs.browser.moonl.cloud/extension-pages.html"
+    },
+    {
       "id": "moon.appearance",
       "name": "浏览器外观",
       "description": "在设置页预览并切换浏览器主题，用专注模式隐藏当前窗口的标签侧栏。",

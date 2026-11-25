@@ -57,6 +57,7 @@ fn applyLink(link: *LinkInvocation) sdk.LinkResult {
 pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
     return switch (method) {
         .@"host.getInfo", .@"settings.read", .@"settings.write", .@"ui.openPage" => null,
+        .@"ui.settings.list", .@"ui.settings.open" => .@"ui.settings",
         .@"browser.openDefaultApps" => .@"browser.defaultApp",
         .@"tabs.getActive" => .@"tabs.read",
         .@"lua.scripts.list", .@"lua.scripts.install", .@"lua.scripts.setEnabled", .@"lua.scripts.remove" => .@"lua.scripts.manage",
@@ -205,6 +206,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
     if (object.contains("result") or object.contains("error")) return sdk.failure(output, id, .InvalidRequest);
     const method = std.meta.stringToEnum(sdk.Method, method_name) orelse return sdk.failure(output, id, .MethodNotFound);
     if (context.from_page) switch (method) {
+        .@"ui.settings.list", .@"ui.settings.open" => {},
         .@"history.list", .@"history.remove", .@"history.removeMany", .@"history.clear", .@"network.filter.status", .@"network.filter.setSite" => {},
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany", .@"bookmarks.openMany",
@@ -533,6 +535,30 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             break :open sdk.result(output,id,native.moon_plugin_open_page(owner.ptr));
+        },
+        .@"ui.settings.list" => {
+            if (!context.from_page or native.moon_shell_private() or !native.moon_extension_panel_active(context.target_tab_id))
+                return sdk.failure(output,id,.PermissionDenied);
+            const query = decode(struct { offset: usize = 0 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (query.offset>native.MOON_PLUGIN_LIMIT) return sdk.failure(output,id,.InvalidParams);
+            var native_entries: [12]native.MoonSettingsEntry = undefined;
+            var next: usize = 0;
+            const count = native.moon_settings_list(context.target_tab_id,query.offset,&native_entries,native_entries.len,&next);
+            var entries: [12]sdk.SettingsEntry = undefined;
+            for (native_entries[0..count],entries[0..count]) |*source,*entry| entry.* = .{
+                .id=std.mem.sliceTo(&source.id,0),.title=std.mem.sliceTo(&source.title,0),
+                .description=std.mem.sliceTo(&source.description,0),.section=@enumFromInt(source.section),
+            };
+            return sdk.result(output,id,sdk.SettingsPage{ .entries=entries[0..count],.next=if (next==0) null else next });
+        },
+        .@"ui.settings.open" => {
+            if (!context.from_page or native.moon_shell_private() or !native.moon_extension_panel_active(context.target_tab_id))
+                return sdk.failure(output,id,.PermissionDenied);
+            const target = decode(struct { id: []const u8 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (target.id.len==0 or target.id.len>=96 or std.mem.indexOfScalar(u8,target.id,0)!=null)
+                return sdk.failure(output,id,.InvalidParams);
+            const plugin = try allocator.dupeSentinel(u8,target.id,0);
+            return sdk.result(output,id,native.moon_settings_open(context.target_tab_id,plugin.ptr));
         },
         .@"history.list" => list: {
             const options = decode(sdk.HistorySearch,allocator,params) catch return sdk.failure(output,id,.InvalidParams);

@@ -2,6 +2,22 @@
 
 Moon Browser 0.1.0-preview.7 支持原生插件在清单里声明 `"settingsPage": "settings.html"`。浏览器使用 `extension://发布者.插件名/settings.html` 分配地址。例如，Lua 管理器的配置页是 `extension://moon.lua-manager/settings.html`。
 
+## 浏览器设置入口
+
+从 0.1.0-preview.74 起，用 Ctrl+, 或「… → 标签与页面 → 打开浏览器设置」搜索设置。常规、隐私与安全、开发者和扩展分组显示对应插件的设置。选择一项会打开该插件的专属页面，保留设置中心的分类和搜索。已打开的页面会切回原标签。
+
+插件可在原有 `contributes` 对象中增加 `settings`，并声明 `settingsPage`。
+
+~~~json
+{
+  "section": "extensions",
+  "title": "本地同步",
+  "description": "设置自动同步间隔和同步目录。"
+}
+~~~
+
+`section` 支持 `general`、`privacy`、`developer` 和 `extensions`。默认分到扩展。标题和说明分别允许 128、256 UTF-8 字节。插件启用后显示入口，停用后从目录移除。声明入口无需额外权限。经用户授权读取和打开目录的插件可以调用 `ui.settings.list` 与 `ui.settings.open`。[插件 API](./api)
+
 启用插件后，可从该插件的工具栏子菜单打开「配置页面」，也可用地址栏访问。配置页是与 `plugin.json` 同目录的 UTF-8 HTML，最多 128 KiB。当前支持单文件页面，样式与脚本请内联。浏览器为每个打开的配置页使用独立的临时 WebKit 数据存储。
 
 ## 读写设置

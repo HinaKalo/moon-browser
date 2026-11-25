@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>浏览器设置</title>
+<style>
+  :root { color-scheme:light; font:14px/1.55 "Segoe UI","Microsoft YaHei UI",sans-serif; background:#f6f7fa; color:#171b26; --surface:#fff; --line:#dde2eb; --soft:#e9eefb; --accent:#344dae; --muted:#545e73; }
+  :root[data-moon-theme=dark] { color-scheme:dark; background:#171a22; color:#edf0f7; --surface:#222635; --line:#3b4459; --soft:#293455; --accent:#b4c3ff; --muted:#bdc8db; }
+  * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
+  body { margin:0; }
+  button,input { font:inherit; color:inherit; }
+  button { cursor:pointer; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+  main { display:grid; grid-template-columns:minmax(132px,175px) minmax(0,1fr); gap:clamp(26px,6vw,76px); max-width:1120px; margin:auto; padding:clamp(26px,6vw,64px) clamp(20px,5vw,52px); align-items:start; }
+  aside { position:sticky; top:20px; }
+  h1 { font:650 clamp(25px,3vw,31px)/1.25 "Bahnschrift","Microsoft YaHei UI","Segoe UI",sans-serif; margin:0 0 23px; }
+  nav { display:grid; gap:4px; }
+  nav button { text-align:left; padding:9px 12px; border:0; border-left:3px solid transparent; border-radius:6px; background:transparent; }
+  nav button:hover,nav button[aria-pressed=true] { background:var(--soft); }
+  nav button[aria-pressed=true] { border-left-color:var(--accent); color:var(--accent); font-weight:600; }
+  .content { min-width:0; }
+  input { width:100%; padding:11px 14px; margin:0 0 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface); }
+  input::placeholder { color:var(--muted); }
+  #feedback { color:var(--muted); margin:4px 0 16px; }
+  #feedback:empty { display:none; }
+  section { margin:15px 0 26px; }
+  h2 { font-size:15px; margin:0 0 9px; color:var(--muted); font-weight:650; }
+  ul { margin:0; padding:0; list-style:none; background:var(--surface); border:1px solid var(--line); border-radius:11px; }
+  li+li { border-top:1px solid var(--line); }
+  li:first-child button { border-radius:10px 10px 0 0; }
+  li:last-child button { border-radius:0 0 10px 10px; }
+  li:only-child button { border-radius:10px; }
+  li button { width:100%; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:15px; align-items:center; padding:13px 16px; border:0; background:transparent; text-align:left; }
+  li button:hover { background:var(--soft); }
+  li button:focus-visible { outline-offset:-3px; }
+  li button:disabled { cursor:wait; opacity:.65; }
+  strong,small { display:block; overflow-wrap:anywhere; }
+  strong { font-weight:650; }
+  small { color:var(--muted); font-size:13px; margin-top:2px; }
+  .arrow { color:var(--accent); font-size:18px; line-height:1; }
+  @media(max-width:620px) {
+    main { grid-template-columns:1fr; gap:18px; }
+    aside { position:static; }
+    h1 { margin-bottom:12px; }
+    nav { display:flex; flex-wrap:wrap; }
+    nav button { padding:7px 9px; }
+  }
+</style>
+<main>
+  <aside>
+    <h1>浏览器设置</h1>
+    <nav aria-label="设置分类" id="categories">
+      <button data-section="all" aria-pressed="true">全部</button>
+      <button data-section="general" aria-pressed="false" hidden>常规</button>
+      <button data-section="privacy" aria-pressed="false" hidden>隐私与安全</button>
+      <button data-section="developer" aria-pressed="false" hidden>开发者</button>
+      <button data-section="extensions" aria-pressed="false" hidden>扩展</button>
+    </nav>
+  </aside>
+  <div class="content">
+    <input id="search" type="search" maxlength="100" aria-label="搜索浏览器设置" placeholder="搜索设置">
+    <p id="feedback" role="status">正在读取设置…</p>
+    <div id="results"></div>
+  </div>
+</main>
+<script>
+  const search=document.getElementById('search'), results=document.getElementById('results'), feedback=document.getElementById('feedback');
+  const categories=[...document.querySelectorAll('[data-section]')];
+  let entries=[], section='all', serial=0, reading=false, opening=false;
+  async function host(method,params) {
+    const id='settings:' + ++serial;
+    const reply=JSON.parse(await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0',id,method,params})));
+    if (reply.id!==id || reply.error) throw Error(reply.error?.message || 'INVALID_RESPONSE');
+    return reply.result;
+  }
+  async function openSetting(entry,button) {
+    if (opening) return;
+    opening=true;
+    button.disabled=true;
+    feedback.textContent='';
+    try {
+      if (!await host('ui.settings.open',{id:entry.id})) {
+        await load();
+        feedback.textContent='无法打开此设置。请检查插件是否启用，或关闭一个标签后重试。';
+      }
+    } catch { feedback.textContent='无法打开设置。请检查插件权限。'; }
+    finally { opening=false; button.disabled=false; }
+  }
+  function render() {
+    const focused=document.activeElement?.dataset.setting;
+    const words=search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    let shown=0;
+    results.replaceChildren();
+    for (const category of categories.slice(1)) {
+      if (section!=='all' && section!==category.dataset.section) continue;
+      const label=category.textContent;
+      const matches=entries.filter(entry=>{
+        if (entry.section!==category.dataset.section) return false;
+        const searchable=[entry.title,entry.description,entry.id,label].join(' ').toLocaleLowerCase();
+        return words.every(word=>searchable.includes(word));
+      });
+      if (!matches.length) continue;
+      const group=document.createElement('section'), title=document.createElement('h2'), list=document.createElement('ul');
+      title.textContent=label;
+      group.append(title,list);
+      for (const entry of matches) {
+        const item=document.createElement('li'), button=document.createElement('button'), text=document.createElement('span');
+        const name=document.createElement('strong'), description=document.createElement('small'), arrow=document.createElement('span');
+        name.textContent=entry.title;
+        description.textContent=entry.description;
+        text.append(name,description);
+        arrow.className='arrow';
+        arrow.textContent='›';
+        arrow.setAttribute('aria-hidden','true');
+        button.dataset.setting=entry.id;
+        button.append(text,arrow);
+        button.onclick=()=>openSetting(entry,button);
+        item.append(button);
+        list.append(item);
+        if (focused===entry.id) queueMicrotask(()=>button.focus());
+      }
+      results.append(group);
+      shown+=matches.length;
+    }
+    feedback.textContent=shown ? '' : (words.length ? '没有匹配的设置。' : '暂无可打开的设置。');
+  }
+  async function load() {
+    if (reading) return;
+    reading=true;
+    const collected=new Map();
+    try {
+      let offset=0;
+      do {
+        const page=await host('ui.settings.list',{offset});
+        for (const entry of page.entries) collected.set(entry.id,entry);
+        offset=page.next;
+      } while (offset!==null);
+      entries=[...collected.values()];
+      for (const category of categories.slice(1)) category.hidden=!entries.some(entry=>entry.section===category.dataset.section);
+      if (categories.some(category=>category.dataset.section===section && category.hidden)) section='all';
+      selectSection(section);
+    } catch {
+      entries=[];
+      for (const category of categories.slice(1)) category.hidden=true;
+      results.replaceChildren();
+      feedback.textContent='无法读取浏览器设置。请检查插件的设置入口权限。';
+    } finally { reading=false; }
+  }
+  function selectSection(value) {
+    section=value;
+    for (const category of categories) category.setAttribute('aria-pressed',String(category.dataset.section===section));
+    render();
+  }
+  for (const button of categories) button.onclick=()=>selectSection(button.dataset.section);
+  search.oninput=()=>{
+    if (search.value.trim() && section!=='all') selectSection('all');
+    else render();
+  };
+  search.onkeydown=event=>{
+    if (event.key!=='Enter' || event.isComposing) return;
+    results.querySelector('button')?.click();
+  };
+  document.addEventListener('visibilitychange',()=>{ if (!document.hidden) load(); });
+  load();
+</script>
+</html>

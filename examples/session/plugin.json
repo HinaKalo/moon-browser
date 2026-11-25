@@ -7,6 +7,7 @@
   "entry": "MoonSession.exe",
   "settingsPage": "session.html",
   "contributes": {
+    "settings": {"section": "general", "title": "启动与会话", "description": "选择启动时的新标签页、上次会话或指定网页。"},
     "commands": [
       { "id": "restore", "label": "恢复上次会话", "menu": "page" },
       { "id": "preferences", "label": "管理启动与会话", "menu": "page" },

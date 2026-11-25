@@ -37,6 +37,7 @@ const Grant = struct {
     site_data_write: ?bool = null,
     site_data_cookie_details: ?bool = null,
     site_data_cookie_clear: ?bool = null,
+    ui_settings: ?bool = null,
     site_data_cache_write: ?bool = null,
     site_data_records: ?bool = null,
     site_data_database_write: ?bool = null,
@@ -124,6 +125,7 @@ const Plugin = struct {
     action_count: usize,
     executable: [4096:0]u8,
     settings_page: [96:0]u8 = @splat(0),
+    settings_entry: ?native.MoonSettingsEntry = null,
     network_rules: [96:0]u8 = @splat(0),
     protocol: Protocol,
     bundled: bool,
@@ -172,7 +174,7 @@ fn contains(items: []const []const u8, value: []const u8) bool {
     return false;
 }
 
-fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []const u8, entry: []const u8, settings_page: ?[]const u8, network_rules: ?[]const u8, commands: []const sdk.Command, requests: Permissions, subscribes: bool, protocol: Protocol, bundled: bool) void {
+fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []const u8, entry: []const u8, settings_page: ?[]const u8, network_rules: ?[]const u8, commands: []const sdk.Command, settings: ?sdk.SettingsContribution, requests: Permissions, subscribes: bool, protocol: Protocol, bundled: bool) void {
     if (!validComponent(id) or !validComponent(entry) or !std.ascii.endsWithIgnoreCase(entry, ".exe") or
         name.len == 0 or commands.len == 0 or commands.len > sdk.command_limit) return;
     if (protocol == .v2 and std.mem.indexOfScalar(u8, id, '.') == null) return;
@@ -193,6 +195,14 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
     };
     if (!copy(&plugin.id, id) or !copy(&plugin.label, name) or !copy(&plugin.executable, executable)) return;
     if (!copy(&plugin.settings_page,settings_page orelse "")) return;
+    if (settings) |contribution| {
+        if (settings_page==null or contribution.title.len==0 or contribution.description.len==0) return;
+        var destination: native.MoonSettingsEntry = std.mem.zeroes(native.MoonSettingsEntry);
+        if (!copy(&destination.id,id) or !copy(&destination.title,contribution.title) or
+            !copy(&destination.description,contribution.description)) return;
+        destination.section = @intFromEnum(contribution.section);
+        plugin.settings_entry = destination;
+    }
     if (!copy(&plugin.network_rules,network_rules orelse "")) return;
     var has_tab_drop = false;
     var has_inspect_element = false;
@@ -236,6 +246,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
             else if (std.mem.eql(u8,id,"moon.private-window")) .@"privacy.privateWindow"
             else if (std.mem.eql(u8,id,"moon.search")) .@"search.manage"
             else if (std.mem.eql(u8,id,"moon.session")) .@"tabs.session.manage"
+            else if (std.mem.eql(u8,id,"moon.settings")) .@"ui.settings"
             else if (std.mem.eql(u8,id,"moon.appearance")) .@"window.appearance" else null;
         if (default_permission) |scope| {
             if (requests.contains(scope)) {
@@ -345,7 +356,7 @@ fn discover(root: []const u8, bundled: bool) void {
             for (manifest.permissions) |permission| requested.insert(permission);
             const subscribes = std.mem.indexOfScalar(sdk.Event, manifest.events, .@"tabs.changed") != null;
             if (subscribes and !requested.contains(.@"tabs.read")) continue;
-            addManifest(directory, sub, manifest.id, manifest.name, manifest.entry, manifest.settingsPage, manifest.networkRules, manifest.contributes.commands, requested, subscribes, .v2, bundled);
+            addManifest(directory, sub, manifest.id, manifest.name, manifest.entry, manifest.settingsPage, manifest.networkRules, manifest.contributes.commands, manifest.contributes.settings, requested, subscribes, .v2, bundled);
         } else |_| {
             const parsed = std.json.parseFromSlice(LegacyManifest, allocator, bytes, .{}) catch continue;
             defer parsed.deinit();
@@ -354,7 +365,7 @@ fn discover(root: []const u8, bundled: bool) void {
             var requested = Permissions.empty;
             if (contains(manifest.permissions, "tabs.read")) requested.insert(.@"tabs.read");
             addManifest(directory, sub, manifest.id, manifest.name, manifest.executable, null, null, &.{.{ .id = "run", .label = manifest.command, .menu = manifest.menu }},
-                requested, contains(manifest.events, "tabs.changed"), .legacy, bundled);
+                null, requested, contains(manifest.events, "tabs.changed"), .legacy, bundled);
         }
     }
 }
@@ -415,6 +426,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
             plugin.requests.contains(.@"siteData.cookieDetails")) plugin.grants.insert(.@"siteData.cookieDetails");
         if (grant.enabled and (grant.site_data_cookie_clear orelse plugin.default_grants.contains(.@"siteData.cookieClear")) and
             plugin.requests.contains(.@"siteData.cookieClear")) plugin.grants.insert(.@"siteData.cookieClear");
+        if (grant.enabled and (grant.ui_settings orelse plugin.default_grants.contains(.@"ui.settings")) and
+            plugin.requests.contains(.@"ui.settings")) plugin.grants.insert(.@"ui.settings");
         if (grant.enabled and (grant.site_data_cache_write orelse plugin.default_grants.contains(.@"siteData.cacheWrite")) and
             plugin.requests.contains(.@"siteData.cacheWrite")) plugin.grants.insert(.@"siteData.cacheWrite");
         if (grant.enabled and (grant.site_data_records orelse plugin.default_grants.contains(.@"siteData.records")) and
@@ -515,6 +528,7 @@ fn persist() bool {
         .site_data_write = plugin.grants.contains(.@"siteData.write"),
         .site_data_cookie_details = plugin.grants.contains(.@"siteData.cookieDetails"),
         .site_data_cookie_clear = plugin.grants.contains(.@"siteData.cookieClear"),
+        .ui_settings = plugin.grants.contains(.@"ui.settings"),
         .site_data_cache_write = plugin.grants.contains(.@"siteData.cacheWrite"),
         .site_data_records = plugin.grants.contains(.@"siteData.records"),
         .site_data_database_write = plugin.grants.contains(.@"siteData.databaseWrite"),
@@ -586,6 +600,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"siteData.write" => "此插件可在绑定到网页的站点数据面板编辑或删除 Local Storage 和 Session Storage 条目。",
                 .@"siteData.cookieDetails" => "此插件可在绑定到网页的站点数据面板查看 Cookie 属性及值，包含可能用于登录的 HttpOnly Cookie。",
                 .@"siteData.cookieClear" => "此插件经确认可清除当前站点所属注册域及其子域的 Cookie，包含 HttpOnly Cookie。",
+                .@"ui.settings" => "此插件可列出并打开其他已启用插件登记的浏览器设置页面。",
                 .@"window.appearance" => "此插件可以切换浏览器亮色或深色主题，并显示或隐藏当前窗口的标签侧栏。",
                 .@"siteData.cacheWrite" => "此插件经你确认后，可删除当前站点数据面板中指定的 Cache Storage 缓存。",
                 .@"siteData.records" => "此插件可在当前站点数据面板按需读取 IndexedDB 记录的键和值预览。",
@@ -708,6 +723,29 @@ pub fn settingsAddress(index: usize, buffer: []u8) ?[:0]u8 {
     if (!hasSettings(index) or !all[index].enabled) return null;
     const plugin = &all[index];
     return std.fmt.bufPrintSentinel(buffer,"extension://{s}/{s}",.{ std.mem.sliceTo(&plugin.id,0),std.mem.sliceTo(&plugin.settings_page,0) },0) catch null;
+}
+
+pub fn listSettings(offset: usize, entries: []native.MoonSettingsEntry, next: *usize) usize {
+    var count_entries: usize = 0;
+    for (all[@min(offset,len)..len],offset..) |*plugin,index| {
+        if (!plugin.enabled) continue;
+        const entry = plugin.settings_entry orelse continue;
+        if (count_entries==entries.len) {
+            next.* = index;
+            break;
+        }
+        entries[count_entries] = entry;
+        count_entries += 1;
+    }
+    return count_entries;
+}
+
+pub fn contributedSettings(id: []const u8, buffer: []u8) ?[:0]u8 {
+    for (all[0..len],0..) |*plugin,index| {
+        if (plugin.settings_entry!=null and std.mem.eql(u8,std.mem.sliceTo(&plugin.id,0),id))
+            return settingsAddress(index,buffer);
+    }
+    return null;
 }
 
 fn enabledPlugin(id: []const u8) ?*const Plugin {
@@ -1013,6 +1051,7 @@ fn defaultShortcut(mods: c_uint, vk: c_uint) ?sdk.Shortcut {
             'F' => .@"Ctrl+F",
             'U' => .@"Ctrl+U",
             'S' => .@"Ctrl+S",
+            0xbc => .@"Ctrl+,",
             0xbd, 0x6d => .@"Ctrl+-",
             '0', 0x60 => .@"Ctrl+0",
             else => null,
