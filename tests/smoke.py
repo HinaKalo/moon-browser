@@ -23,9 +23,6 @@ from zipfile import ZipFile
 
 
 PAYLOAD = b"Moon Browser download fixture\n"
-_pcm = bytes(44100)
-AUTOPLAY_AUDIO = struct.pack("<4sI4s4sIHHIIHH4sI",b"RIFF",36+len(_pcm),b"WAVE",b"fmt ",16,
-                             1,2,44100,176400,4,16,b"data",len(_pcm))+_pcm
 # Generated AAC-LC 440 Hz track for WebKit's MP4 decoder, with no video.
 AUTOPLAY_AUDIO_MP4 = Path(__file__).with_name("autoplay-audible.m4a")
 # Generated black 32x32 H.264 baseline video, one second at 10 fps, without audio.
@@ -264,10 +261,8 @@ class Fixture(BaseHTTPRequestHandler):
                     '</script>').encode()
             content_type = "text/html"
         elif path in ("/autoplay.wav", "/autoplay.mp4", "/autoplay.m4a", "/media-control.wav"):
-            if path=="/media-control.wav":
+            if path.endswith(".wav"):
                 data, content_type = MEDIA_AUDIO, "audio/wav"
-            elif path.endswith(".wav"):
-                data, content_type = AUTOPLAY_AUDIO, "audio/wav"
             elif path.endswith(".m4a"):
                 data, content_type = AUTOPLAY_AUDIO_MP4.read_bytes(), "audio/mp4"
             else:
