@@ -103,7 +103,8 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.setSelectionMuted", .@"tabs.reorder" => .@"tabs.organize",
         .@"tabs.groups.open", .@"tabs.groups.create", .@"tabs.groups.removeTab", .@"tabs.groups.list",
         .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve", .@"tabs.groups.applySelection" => .@"tabs.groups",
-        .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup", .@"tabs.openSearch" => .@"tabs.manage",
+        .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup", .@"tabs.openSearch",
+        .@"tabs.activatePosition" => .@"tabs.manage",
         .@"privacy.clear", .@"privacy.status" => .@"privacy.clear",
         .@"privacy.openPrivateWindow" => .@"privacy.privateWindow",
         .@"search.getConfig", .@"search.setConfig" => .@"search.manage",
@@ -1095,6 +1096,13 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"tabs.openSearch" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
             return sdk.result(output,id,native.moon_tabs_open_search(context.target_tab_id));
+        },
+        .@"tabs.activatePosition" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(struct { position: c_uint },allocator,params) catch
+                return sdk.failure(output,id,.InvalidParams);
+            if (options.position<1 or options.position>9) return sdk.failure(output,id,.InvalidParams);
+            return sdk.result(output,id,native.moon_tabs_activate_position(options.position));
         },
         .@"tabs.reorder" => {
             const drop = context.drop orelse return sdk.failure(output,id,.PermissionDenied);

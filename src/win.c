@@ -1972,6 +1972,17 @@ static bool keyboard(MSG *msg) {
     if (in_content && !in_page && msg->wParam!=VK_F11 && msg->wParam!=VK_F12 && !shell_chord) return false;
     if ((ctrl || alt || msg->wParam==VK_F9 || msg->wParam==VK_F11 || msg->wParam==VK_F12) && !moon_ime_composing(msg->hwnd) &&
         moon_plugin_key(modifiers,(unsigned)msg->wParam,repeated)) return true;
+    const bool tab_number=msg->wParam>='1' && msg->wParam<='9';
+    const bool tab_page=msg->wParam==VK_PRIOR || msg->wParam==VK_NEXT;
+    if (modifiers==MOD_CONTROL && (tab_number || tab_page) && !moon_ime_composing(msg->hwnd) &&
+        (moon_tab_tools_permissions()&MOON_TAB_MANAGE)) {
+        if (tab_number) {
+            if (!repeated) moon_tabs_activate_position((unsigned)(msg->wParam-'0'));
+        } else {
+            moon_command(msg->wParam==VK_PRIOR?MOON_KEY_PREV:MOON_KEY_NEXT,0,NULL);
+        }
+        return true;
+    }
     return false;
 }
 bool moon_shell_register_hotkey(unsigned id, unsigned modifiers, unsigned key) {

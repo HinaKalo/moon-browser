@@ -234,6 +234,7 @@ const char *moon_tab_label(size_t index);
 const char *moon_tab_url(size_t index);
 size_t moon_tab_index(uint64_t tab);
 bool moon_tabs_open_search(uint64_t source);
+bool moon_tabs_activate_position(unsigned position);
 unsigned moon_tab_flags(size_t index);
 uint64_t moon_tab_id(size_t index);
 bool moon_tab_selection_pick(size_t index, bool range);

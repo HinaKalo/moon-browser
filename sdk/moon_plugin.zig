@@ -593,6 +593,7 @@ pub const Method = enum {
     @"tabs.setSelectionMuted",
     @"tabs.duplicate",
     @"tabs.openSearch",
+    @"tabs.activatePosition",
     @"tabs.copyAddress",
     @"tabs.openLink",
     @"tabs.copyLink",

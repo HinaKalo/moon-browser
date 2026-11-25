@@ -2175,6 +2175,13 @@ export fn moon_tabs_open_search(source: u64) bool {
     if (stopped or count==0 or tabs[active].id!=source) return false;
     return native.moon_shell_tab_search();
 }
+export fn moon_tabs_activate_position(position: c_uint) bool {
+    if (stopped or count==0 or position==0 or position>9) return false;
+    const index = if (position==9) count-1 else position-1;
+    if (index>=count) return false;
+    chooseTab(index,true);
+    return true;
+}
 export fn moon_tab_flags(index: usize) c_uint {
     if (index >= count) return 0;
     const tab = &tabs[index];

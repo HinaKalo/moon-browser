@@ -5426,6 +5426,52 @@ def run_win32(exe, base, root):
                     if read_address()!=a or "移出标签组" not in tab_menu(6):
                         raise RuntimeError("Entering a collapsed group changed the active page or lost a selected tab")
                     print("tab_group_selection=ok new_group=ok existing_group=ok ungroup=ok sidebar_order=ok stale_menu=ok pinned_kept=ok reveal_active=ok",flush=True)
+                    if tuple(map(int,tab_manifest["version"].split(".")[:2]))>=(1,9):
+                        user.GetForegroundWindow.restype=wt.HWND
+                        user.SetForegroundWindow.argtypes=[wt.HWND]
+                        user.SetForegroundWindow(frame)
+                        if user.GetForegroundWindow()!=frame:
+                            user.WindowFromPoint.argtypes=[wt.POINT]
+                            user.WindowFromPoint.restype=wt.HWND
+                            user.GetAncestor.argtypes=[wt.HWND,wt.UINT]
+                            user.GetAncestor.restype=wt.HWND
+                            point,original=wt.POINT(px(30),px(12)),wt.POINT()
+                            user.ClientToScreen(edit,ctypes.byref(point))
+                            user.GetCursorPos(ctypes.byref(original))
+                            user.SetWindowPos(frame,wt.HWND(-1),0,0,0,0,0x13)
+                            try:
+                                if user.GetAncestor(user.WindowFromPoint(point),2)!=frame:
+                                    raise RuntimeError("The tab shortcut test window is covered")
+                                if not user.SetCursorPos(point.x,point.y):
+                                    raise RuntimeError("Could not point to the test browser")
+                                user.mouse_event(2,0,0,0,0)
+                                user.mouse_event(4,0,0,0,0)
+                                wait_for(lambda: user.GetForegroundWindow()==frame,"Click did not focus the test browser")
+                            finally:
+                                user.SetCursorPos(original.x,original.y)
+                                user.SetWindowPos(frame,wt.HWND(-2),0,0,0,0,0x13)
+                        wait_for(lambda: user.GetForegroundWindow()==frame,"Could not focus the browser for tab shortcut input")
+
+                        def tab_shortcut(key):
+                            if user.GetForegroundWindow()!=frame:
+                                raise RuntimeError("The browser lost focus before the tab shortcut")
+                            user.keybd_event(0x11,0,0,0)
+                            try:
+                                user.keybd_event(key,0,0,0)
+                                user.keybd_event(key,0,2,0)
+                            finally:
+                                user.keybd_event(0x11,0,2,0)
+
+                        click(px(110),px(148+37*2))  # Collapse the active page's group.
+                        tab_shortcut(ord("4"))
+                        wait_for(lambda: read_address()==d,"Ctrl+4 did not activate and reveal the fourth tab")
+                        tab_shortcut(ord("9"))
+                        wait_for(lambda: read_address()==b,"Ctrl+9 did not activate the last tab")
+                        tab_shortcut(0x22)  # Page Down wraps around.
+                        wait_for(lambda: read_address()==keep,"Ctrl+PageDown did not wrap to the first tab")
+                        tab_shortcut(0x21)
+                        wait_for(lambda: read_address()==b,"Ctrl+PageUp did not wrap to the last tab")
+                        print("tab_position_shortcuts=ok exact_position=ok last=ok wrap=ok collapsed_group=ok",flush=True)
             if modern_example:
                 plugin_state = profile / "plugin-state.json"
                 retained = [item for item in read_settings(plugin_state) if item["id"] != "moon.example"]
