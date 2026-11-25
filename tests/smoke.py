@@ -814,8 +814,9 @@ def run_win32(exe, base, root):
     bookmark_bar = bookmarks.exists() and '"id": "bar"' in bookmarks.with_name("plugin.json").read_text(encoding="utf-8")
     downloads = exe.parent / "plugins" / "downloads" / "MoonDownloads.exe"
     has_bulk_clear = downloads.exists() and "clear-completed" in (downloads.parent / "downloads.html").read_text(encoding="utf-8")
-    download_preferences = downloads.is_file() and "downloads.preferences" in json.loads(
-        downloads.with_name("plugin.json").read_text(encoding="utf-8"))["permissions"]
+    download_permissions = json.loads(downloads.with_name("plugin.json").read_text(encoding="utf-8"))["permissions"] if downloads.is_file() else []
+    download_preferences = "downloads.preferences" in download_permissions
+    download_open = "downloads.open" in download_permissions
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     has_site_menu = site_data.exists() and json.loads(site_data.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"][0].get("siteMenu")
     cache_remove = site_data.exists() and '"siteData.cacheWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
@@ -870,7 +871,8 @@ def run_win32(exe, base, root):
              "popups_manage": popups.exists(), "site_settings_autoplay": autoplay_settings, "site_settings_sound": sound_settings},
             {"id": "moon.filter-settings-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
             {"id": "moon.bookmark-fixture", "enabled": True, "tabs_read": False, "bookmarks_manage": True, "bookmarks_transfer": bookmark_transfer},
-            {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True},
+            {"id": "moon.download-fixture", "enabled": True, "tabs_read": False, "downloads_manage": True,
+             "downloads_open": download_open},
             {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True,
              "site_data_write": True, "site_data_cookie_details": True, "site_data_cache_write": cache_remove,
              "site_data_records": database_records},
@@ -952,6 +954,9 @@ def run_win32(exe, base, root):
             ('const downloadPrefsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"17",method:"downloads.preferences.get",params:{}}));'
              'if(JSON.parse(downloadPrefsDenied).error?.code!==-32001)return;' if download_preferences else '') +
+            ('const downloadOpenDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"download-open-denied",method:"downloads.open",params:{id:1}}));'
+             'if(JSON.parse(downloadOpenDenied).error?.code!==-32001)return;' if download_open else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -1186,12 +1191,30 @@ def run_win32(exe, base, root):
         manifest["id"] = "moon.download-fixture"
         (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
         page = (downloads.parent / "downloads.html").read_text(encoding="utf-8")
+        open_contract = r'''
+            const {downloads: entries} = await host('downloads.list', {});
+            const saved = entries.find(item => item.name === 'completed-proof.txt');
+            const missing = entries.find(item => item.name === 'missing-proof.txt');
+            const active = entries.find(item => item.state === 'transferring');
+            if (!saved?.openable || !missing?.openable || !active || active.openable) throw Error('open eligibility');
+            if (await host('downloads.open', {id: missing.id}) !== 'missing' ||
+                await host('downloads.open', {id: active.id}) !== 'missing') throw Error('path or state guard');
+            try {
+                await host('downloads.open', {id: saved.id, path: 'invalid.exe'});
+                throw Error('arbitrary path was accepted');
+            } catch (error) { if (error.message !== 'INVALID_PARAMS') throw error; }
+            await host('downloads.remove', {id: missing.id});
+            const open = await wait(() => document.querySelector(`button[data-control="${saved.id}:open"]`));
+            open.click();
+            await wait(() => document.getElementById('feedback').textContent === '已取消打开。');
+        ''' if download_open else ''
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
             'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
             'const wait=async(fn)=>{for(let i=0;i<90;i++){const v=fn();if(v)return v;'
             'await new Promise(r=>setTimeout(r,50));}throw Error("downloads UI timeout");};'
             'try{await wait(()=>document.querySelector("progress")?.value>0);'
+            + open_contract +
             'const clear=document.getElementById("clear-completed");'
             'if(clear){const dialog=document.getElementById("clear-dialog");'
             'clear.click();if(!dialog.open)throw Error("missing clear confirmation");'
@@ -2701,11 +2724,18 @@ def run_win32(exe, base, root):
                     db.execute("INSERT INTO downloads(path,state,started,owner_pid,owner_birth) VALUES (?,2,1,0,0)",
                                (str(saved_download),))
                     db.execute("INSERT INTO downloads(path,state,started,owner_pid,owner_birth) VALUES ('failed-proof.txt',3,1,0,0)")
+                    if download_open:
+                        db.execute("INSERT INTO downloads(path,state,started,owner_pid,owner_birth) VALUES (?,2,1,0,0)",
+                                   (str(profile / "missing-proof.txt"),))
             invoke("查看下载")
             wait_for(lambda: read_address() == "extension://moon.downloads/downloads.html",
                      "The download system executable did not open its page")
             set_control(edit,"extension://moon.download-fixture/downloads.html")
             user.PostMessageW(edit,0x0100,0x0D,1)
+            if download_open:
+                consent = wait_for(lambda: owned_window("#32770", "打开下载文件？") or
+                                   owned_window("#32770", "打开下载文件"),"The download open confirmation did not appear")
+                user.PostMessageW(consent,0x0010,0,0)  # Closing the confirmation cancels the request.
             library_result("moon.download-fixture")
             with closing(sqlite3.connect(downloads_db)) as db:
                 row = db.execute("SELECT state,received FROM downloads WHERE state=4 ORDER BY id DESC LIMIT 1").fetchone()
@@ -2717,6 +2747,8 @@ def run_win32(exe, base, root):
                     raise RuntimeError(f"Clearing completed downloads changed a file or other record: {states}")
                 print("download_bulk_clear=ok search_scope=ok file_retained=ok active_transfer_retained=ok clear_cancel=ok",flush=True)
             print("download_system_plugin=ok download_live_progress=ok download_cancel=ok",flush=True)
+            if download_open:
+                print("download_open=ok native_cancel=ok missing=ok active_rejected=ok arbitrary_path_rejected=ok grant_required=ok",flush=True)
         if site_data.exists():
             target = base + "/page/site-data-contract"
             set_control(edit,target)

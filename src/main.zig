@@ -1726,6 +1726,40 @@ export fn moon_download_preferences_allowed(owner: [*c]const u8, panel: u64) boo
     return !native.moon_shell_private() and moon_extension_panel_active(panel) and
         plugins.hasGrant(slice(owner),.@"downloads.preferences");
 }
+export fn moon_download_open_allowed(owner: [*c]const u8, panel: u64) bool {
+    if (native.moon_shell_private() or !moon_extension_panel_active(panel)) return false;
+    const id = slice(owner);
+    if (!plugins.hasGrant(id,.@"downloads.manage") or !plugins.hasGrant(id,.@"downloads.open")) return false;
+    var buffer: [256]u8 = undefined;
+    const address = plugins.addressForId(id,&buffer) orelse return false;
+    return equals(slice(&tabs[active].url),address);
+}
+var download_open_pending = false;
+fn openDownloadedFile(owner: [*c]const u8, panel: u64, id: u32) sdk.DownloadOpen {
+    if (download_open_pending or !moon_download_open_allowed(owner,panel)) return .unavailable;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const path = downloads.completedPath(allocator,id) catch |err| return if (err==error.NotFound) .missing else .unavailable;
+    const status = native.moon_shell_download_open_status(path.ptr);
+    const system_prompt = status==native.MOON_OPEN_DOWNLOAD_SYSTEM_PROMPT;
+    if (!system_prompt and status!=native.MOON_OPEN_DOWNLOAD_DONE)
+        return std.enums.fromInt(sdk.DownloadOpen,status) orelse .unavailable;
+    download_open_pending = true;
+    defer download_open_pending = false;
+    if (!system_prompt) {
+        const message = std.fmt.allocPrintSentinel(allocator,"用 Windows 默认应用打开此文件？\n\n{s}",.{path},0) catch return .unavailable;
+        const navigation = tabs[active].navigation;
+        if (!native.moon_shell_confirm("打开下载文件？",message.ptr)) return .cancelled;
+        if (!moon_download_open_allowed(owner,panel) or tabs[active].navigation!=navigation) return .unavailable;
+        const current = downloads.completedPath(allocator,id) catch |err| return if (err==error.NotFound) .missing else .unavailable;
+        if (!std.mem.eql(u8,path,current)) return .unavailable;
+    }
+    return std.enums.fromInt(sdk.DownloadOpen,native.moon_shell_open_download(path.ptr,system_prompt)) orelse .unavailable;
+}
+export fn moon_download_open(owner: [*c]const u8, panel: u64, id: u32) c_int {
+    return @intFromEnum(openDownloadedFile(owner,panel,id));
+}
 export fn moon_download_progress(id: u32, chunk: u64, total: u64) void {
     if (!stopped) downloads.progress(id,chunk,total);
 }
@@ -1901,6 +1935,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"bookmarks.transfer" => "允许导入和导出 HTML 书签",
         .@"downloads.manage" => "允许管理下载",
         .@"downloads.preferences" => "允许查看和修改下载位置设置",
+        .@"downloads.open" => "允许在确认后打开下载文件",
         .@"siteData.read" => "允许查看站点数据",
         .@"siteData.write" => "允许编辑和删除站点存储",
         .@"siteData.cookieDetails" => "允许查看 Cookie 属性和 HttpOnly Cookie",

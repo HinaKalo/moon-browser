@@ -95,8 +95,8 @@
     {
       "id": "moon.downloads",
       "name": "下载",
-      "description": "查看下载进度、清理已完成的记录，以及设置默认下载文件夹。",
-      "permission": "管理下载记录和保存位置",
+      "description": "查看进度、打开已下载的文件、清理记录和设置默认下载文件夹。",
+      "permission": "管理下载记录和保存位置，经确认打开文件",
       "url": "https://docs.browser.moonl.cloud/library.html"
     },
     {

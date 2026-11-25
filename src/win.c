@@ -176,6 +176,61 @@ bool moon_shell_reveal_file(const char *path) {
     CoTaskMemFree(item);
     return SUCCEEDED(result);
 }
+static int local_download_path(const char *path,wchar_t *wide,size_t capacity) {
+    if (!moon_utf16(path,wide,capacity) || wcslen(wide)<4 ||
+        !((wide[0]>=L'A' && wide[0]<=L'Z') || (wide[0]>=L'a' && wide[0]<=L'z')) ||
+        wide[1]!=L':' || wide[2]!=L'\\' || wcschr(wide+2,L':')) return MOON_OPEN_DOWNLOAD_UNAVAILABLE;
+    const wchar_t root[]={wide[0],L':',L'\\',0};
+    if (GetDriveTypeW(root)==DRIVE_REMOTE) return MOON_OPEN_DOWNLOAD_UNAVAILABLE;
+    for (const wchar_t *ch=wide+3;*ch;++ch) {
+        if (*ch<32 || (*ch>=0x202a && *ch<=0x202e) || (*ch>=0x2066 && *ch<=0x2069))
+            return MOON_OPEN_DOWNLOAD_UNAVAILABLE;
+    }
+    const DWORD attrs=GetFileAttributesW(wide);
+    if (attrs==INVALID_FILE_ATTRIBUTES) {
+        const DWORD error=GetLastError();
+        return error==ERROR_FILE_NOT_FOUND || error==ERROR_PATH_NOT_FOUND ? MOON_OPEN_DOWNLOAD_MISSING : MOON_OPEN_DOWNLOAD_UNAVAILABLE;
+    }
+    if (attrs&FILE_ATTRIBUTE_DIRECTORY) return MOON_OPEN_DOWNLOAD_MISSING;
+    if (attrs&FILE_ATTRIBUTE_REPARSE_POINT) return MOON_OPEN_DOWNLOAD_UNAVAILABLE;
+    return MOON_OPEN_DOWNLOAD_DONE;
+}
+static int prepare_download_attachment(const char *path,IAttachmentExecute **attachment) {
+    wchar_t wide[4096];
+    const int status=local_download_path(path,wide,ARRAYSIZE(wide));
+    if (status!=MOON_OPEN_DOWNLOAD_DONE) return status;
+    HRESULT result=CoCreateInstance(&CLSID_AttachmentServices,NULL,CLSCTX_INPROC_SERVER,
+        &IID_IAttachmentExecute,(void **)attachment);
+    if (FAILED(result)) return MOON_OPEN_DOWNLOAD_UNAVAILABLE;
+    IAttachmentExecute_SetClientTitle(*attachment,L"打开下载文件");
+    result=IAttachmentExecute_SetLocalPath(*attachment,wide);
+    // Without verified origin metadata, let Windows use its default Restricted Zone.
+    if (FAILED(result)) return MOON_OPEN_DOWNLOAD_UNAVAILABLE;
+    result=IAttachmentExecute_CheckPolicy(*attachment);
+    if (result==S_OK) return MOON_OPEN_DOWNLOAD_DONE;
+    if (result==S_FALSE) return MOON_OPEN_DOWNLOAD_SYSTEM_PROMPT;
+    return MOON_OPEN_DOWNLOAD_BLOCKED;
+}
+int moon_shell_download_open_status(const char *path) {
+    IAttachmentExecute *attachment=NULL;
+    const int status=prepare_download_attachment(path,&attachment);
+    if (attachment) IAttachmentExecute_Release(attachment);
+    return status;
+}
+int moon_shell_open_download(const char *path,bool system_prompt) {
+    IAttachmentExecute *attachment=NULL;
+    const int status=prepare_download_attachment(path,&attachment);
+    if (status!=MOON_OPEN_DOWNLOAD_SYSTEM_PROMPT && (status!=MOON_OPEN_DOWNLOAD_DONE || system_prompt)) {
+        if (attachment) IAttachmentExecute_Release(attachment);
+        return status==MOON_OPEN_DOWNLOAD_DONE ? MOON_OPEN_DOWNLOAD_UNAVAILABLE : status;
+    }
+    const HRESULT result=IAttachmentExecute_Execute(attachment,frame,NULL,NULL);
+    IAttachmentExecute_Release(attachment);
+    if (result==S_OK) return MOON_OPEN_DOWNLOAD_DONE;
+    if (result==E_ABORT || result==HRESULT_FROM_WIN32(ERROR_CANCELLED)) return MOON_OPEN_DOWNLOAD_CANCELLED;
+    if (result==E_ACCESSDENIED || result==HRESULT_FROM_WIN32(ERROR_ACCESS_DISABLED_BY_POLICY)) return MOON_OPEN_DOWNLOAD_BLOCKED;
+    return MOON_OPEN_DOWNLOAD_UNAVAILABLE;
+}
 uint64_t moon_perf_us(void) {
     LARGE_INTEGER now, frequency;
     QueryPerformanceCounter(&now);

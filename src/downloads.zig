@@ -272,13 +272,19 @@ pub fn clearCompleted() !u32 {
     return @intCast(sqlite.sqlite3_changes(db));
 }
 
-pub fn reveal(allocator: std.mem.Allocator, id: u32) !void {
+pub fn completedPath(allocator: std.mem.Allocator, id: u32) ![:0]const u8 {
     const statement = try db_api.prepare(try connection(),"SELECT path FROM downloads WHERE id=?1 AND state=2");
     defer _ = sqlite.sqlite3_finalize(statement);
     try bind(statement,1,id);
     const result = sqlite.sqlite3_step(statement);
     if (result == db_api.done) return error.NotFound;
     if (result != db_api.row) return error.IOError;
-    const filename = try allocator.dupeSentinel(u8,try db_api.columnText(statement,0),0);
+    const filename = try db_api.columnText(statement,0);
+    if (filename.len==0 or filename.len>=4096 or std.mem.indexOfScalar(u8,filename,0)!=null) return error.NotFound;
+    return allocator.dupeSentinel(u8,filename,0);
+}
+
+pub fn reveal(allocator: std.mem.Allocator, id: u32) !void {
+    const filename = try completedPath(allocator,id);
     if (!native.moon_shell_reveal_file(filename.ptr)) return error.NotFound;
 }

@@ -16,17 +16,21 @@ Moon Browser `0.1.0-preview.10` 随包提供书签和下载系统插件。两项
 
 ## 下载
 
-按 Ctrl+J 打开下载页。网页下载通过 Windows 对话框选择保存位置。管理页显示文件名、已传输大小和状态，可取消当前浏览器进程的传输，或在资源管理器中选中已下载的文件。「移除记录」只清理列表。上一会话中断的下载显示为已中断。
+按 Ctrl+J 打开下载页。网页下载默认通过 Windows 对话框选择保存位置。管理页显示文件名、已传输大小和状态，可取消当前浏览器进程的传输，或在资源管理器中选中已下载的文件。「移除记录」只清理列表。上一会话中断的下载显示为已中断。
 
 从 0.1.0-preview.59 起，展开「下载设置」可更改默认文件夹，或恢复 Windows 的「下载」文件夹。默认每次询问保存位置。取消勾选后，普通窗口把下载存入默认文件夹。同名文件会加上编号，目标目录不可用时会弹出保存对话框。隐私窗口每次询问保存位置。
 
 点「清除已完成」并确认，可一次清理所有已完成的下载记录。已下载的文件、正在传输的下载、失败和取消等其他记录都会保留。即使正在搜索，清理范围仍为整个下载列表。
+
+从 0.1.0-preview.62 起，已完成的下载提供「打开文件」，支持本机盘符上的普通文件。Windows 策略要求确认时使用系统提示。策略允许直接打开时，Moon 会先显示完整路径供你确认。确认后由 Windows 附件管理器调用默认应用。[Windows 附件管理器](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iattachmentexecute-execute)
 
 ## 插件 API
 
 `bookmarks.manage` 允许维护书签，`downloads.manage` 允许查询下载状态、取消传输和显示文件位置。两个管理页都通过 `moonHost` 调用宿主。独立 EXE 使用同一组方法。在用户触发的命令中，可用 `bookmarks.saveActive` 保存命令触发时的网页。
 
 下载位置由独立的 `downloads.preferences` 权限管理。通过浏览器的原生文件夹选择器更改路径，取消选择时保留原设置。
+
+打开文件需要 `downloads.manage` 和 `downloads.open`。活动插件页面调用 `downloads.open({ id })`，宿主从下载记录读取路径并按 Windows 策略确认。返回 `opened`、`missing`、`cancelled`、`blocked` 或 `unavailable`。列表的 `openable` 字段表示当前页面可对该已完成记录发起打开请求。
 
 使用 `bookmarks.manage` 授权的原生用户命令可以调用 `bookmarks.bar.toggle({})` 切换书签栏，返回 `shown`、`hidden` 或 `unavailable`。
 

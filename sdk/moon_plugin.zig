@@ -44,6 +44,7 @@ pub const Permission = enum {
     @"window.appearance",
     @"siteSettings.zoom",
     @"downloads.preferences",
+    @"downloads.open",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -211,6 +212,7 @@ pub const BookmarkTransferState = enum { done, cancelled, invalidFile, limitExce
 pub const BookmarkTransfer = struct { state: BookmarkTransferState, count: usize = 0, skipped: usize = 0 };
 pub const BookmarkSave = enum { saved, alreadySaved, noPage };
 pub const DownloadState = enum { choosing, transferring, complete, failed, cancelled, interrupted };
+pub const DownloadOpen = enum(c_int) { opened, missing, cancelled, blocked, unavailable };
 pub const Download = struct {
     id: u32,
     name: []const u8,
@@ -218,6 +220,7 @@ pub const Download = struct {
     received: u64,
     total: ?u64,
     cancellable: bool,
+    openable: bool = false,
     startedAt: u64,
 };
 pub const DownloadPage = struct { downloads: []const Download, next: ?u32 };
@@ -366,6 +369,7 @@ pub const Method = enum {
     @"downloads.remove",
     @"downloads.clearCompleted",
     @"downloads.reveal",
+    @"downloads.open",
     @"downloads.preferences.get",
     @"downloads.preferences.setPrompt",
     @"downloads.preferences.chooseFolder",

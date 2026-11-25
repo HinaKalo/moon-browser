@@ -134,7 +134,14 @@
       control.disabled = true;
       list.dataset.working = 'true';
       try {
-        await host('downloads.' + operation,{ id:item.id });
+        const result = await host('downloads.' + operation,{ id:item.id });
+        if (operation === 'open') {
+          feedback.textContent = {
+            opened:'已交给 Windows 打开。', cancelled:'已取消打开。', missing:'文件已移动或删除。',
+            blocked:'Windows 策略阻止打开此文件。', unavailable:'当前无法直接打开此文件。',
+          }[result] || '无法打开文件。';
+          return;
+        }
         feedback.textContent = operation === 'remove' ? '已移除记录。' : '';
         if (operation !== 'reveal') await load(false,true);
       } catch (error) {
@@ -169,6 +176,7 @@
       const controls = document.createElement('div');
       controls.className = 'actions';
       if (item.cancellable) action(controls,item,'cancel','取消下载');
+      if (item.openable) action(controls,item,'open','打开文件');
       if (item.state === 'complete') action(controls,item,'reveal','在文件夹中显示');
       if (item.state !== 'choosing' && item.state !== 'transferring') action(controls,item,'remove','移除记录');
       row.append(entry,controls);

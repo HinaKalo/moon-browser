@@ -74,6 +74,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"bookmarks.bar.toggle" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
+        .@"downloads.open" => .@"downloads.open",
         .@"downloads.preferences.get", .@"downloads.preferences.setPrompt",
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => .@"downloads.preferences",
         .@"siteData.open", .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.database", .@"siteData.value",
@@ -205,6 +206,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
         .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
+        .@"downloads.open" => {},
         .@"downloads.preferences.get", .@"downloads.preferences.setPrompt",
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
@@ -565,7 +567,21 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const options = decode(sdk.HistoryQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             var rows: [24]sdk.Download = undefined;
             const page = downloads.list(allocator,options,&rows) catch |err| return sdk.failure(output,id,libraryReason(err));
+            if (context.from_page and context.grants.contains(.@"downloads.open")) {
+                const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+                if (native.moon_download_open_allowed(owner.ptr,context.target_tab_id)) {
+                    for (rows[0..page.downloads.len]) |*item| item.openable=item.state==.complete;
+                }
+            }
             break :list sdk.result(output,id,page);
+        },
+        .@"downloads.open" => {
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (!context.from_page or !native.moon_download_open_allowed(owner.ptr,context.target_tab_id))
+                return sdk.failure(output,id,.PermissionDenied);
+            const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const result = native.moon_download_open(owner.ptr,context.target_tab_id,value.id);
+            return sdk.result(output,id,std.enums.fromInt(sdk.DownloadOpen,result) orelse .unavailable);
         },
         .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => change: {
             const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
