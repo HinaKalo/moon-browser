@@ -3273,7 +3273,7 @@ fn removeSiteRecord(panel: u64, owner: []const u8, target: sdk.SiteDatabaseRecor
 }
 
 export fn moon_site_data_update(panel: u64, id: [*c]const u8, session: bool, entry: u32, generation: u64,
-    page_revision: u64, value: [*c]const u8, length: usize) bool {
+    page_revision: u64, value: [*c]const u8, length: usize, key: [*c]const u8, key_length: usize) bool {
     if (site_clear_confirming) return false;
     const owner = slice(id);
     const view = sitePanelView(panel,owner,.@"siteData.write") orelse return false;
@@ -3281,7 +3281,8 @@ export fn moon_site_data_update(panel: u64, id: [*c]const u8, session: bool, ent
         .group=if (session) .session else .local,.id=entry,.generation=generation,
         .pageRevision=if (page_revision!=0) page_revision else null,
     };
-    return site_data.update(view,panel,owner,target,if (value!=null) value[0..length] else null);
+    return site_data.update(view,panel,owner,target,
+        if (value!=null) value[0..length] else null,if (key!=null) key[0..key_length] else null);
 }
 
 export fn moon_site_data_create(panel: u64, id: [*c]const u8, session: bool, generation: u64,

@@ -162,7 +162,7 @@
   function lengthHint() {
     const length=new TextEncoder().encode(newValue.value).length;
     el('bytes').textContent=length + ' / 1024 字节';
-    commit.disabled=length>1024;
+    commit.disabled=length>1024 && (draft?.create || newValue.value!==draft?.initial);
   }
   async function openEditor(item, button, remove) {
     const current=page;
@@ -175,11 +175,11 @@
     if (current!==page || document.hidden || !button.isConnected) return;
     feedback.textContent='';
     el('editor-title').textContent=(remove?'删除条目「':'编辑条目「') + (item.name || '空名称') + '」';
-    el('editor-key').hidden=true;
-    el('editor-value').hidden=remove;
+    el('editor-key').hidden=el('editor-value').hidden=remove;
+    newKey.value=item.name;
     commit.textContent=remove?'确认删除':'保存';
     newValue.value=value;
-    draft={target,remove,button,initial:newValue.value};
+    draft={target,remove,button,initial:newValue.value,initialKey:newKey.value};
     lengthHint();
     editor.hidden=false;
     (remove ? el('cancel') : newValue).focus();
@@ -221,8 +221,10 @@
   editor.onsubmit=async event => {
     event.preventDefault();
     if (!draft || commit.disabled) return;
-    const {target,remove,initial,create}=draft;
-    if (!create && !remove && newValue.value===initial) {
+    const {target,remove,initial,initialKey,create}=draft;
+    const renamed=!create && !remove && newKey.value!==initialKey;
+    const changed=newValue.value!==initial;
+    if (!create && !remove && !renamed && !changed) {
       closeEditor(true);
       feedback.textContent='没有修改。';
       return;
@@ -230,7 +232,11 @@
     commit.disabled=true;
     try {
       if (create) await host('siteData.create',{...target,key:newKey.value,value:newValue.value});
-      else await host('siteData.update',{...target,value:remove ? null : newValue.value});
+      else {
+        const update={...target,value:remove || !changed ? null : newValue.value};
+        if (renamed) update.newKey=newKey.value;
+        await host('siteData.update',update);
+      }
       closeEditor();
       await update();
     } catch {

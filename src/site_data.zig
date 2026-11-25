@@ -194,14 +194,19 @@ pub fn request(view: *native.MoonView) bool {
     return received == .pending;
 }
 
-pub fn update(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteDataItem, replacement: ?[]const u8) bool {
+pub fn update(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteDataItem,
+    replacement: ?[]const u8, new_key: ?[]const u8) bool {
     if (!canMutate(tab,id,target.group,target.generation)) return false;
     if (replacement) |bytes| {
         if (bytes.len>sdk.site_data_value_limit or !std.unicode.utf8ValidateSlice(bytes)) return false;
     }
     const entry = storageEntry(target) orelse return false;
     if (entry.shortened) return false;
-    return mutate(view,.{ .group=target.group,.key=entry.name,.previous=entry.value,.replacement=replacement });
+    if (new_key) |key| {
+        if (key.len>sdk.site_data_key_limit or !std.unicode.utf8ValidateSlice(key) or std.mem.eql(u8,entry.name,key))
+            return false;
+    }
+    return mutate(view,.{ .group=target.group,.key=entry.name,.previous=entry.value,.replacement=replacement,.new_key=new_key });
 }
 
 pub fn canMutate(tab: u64, id: []const u8, group: sdk.SiteDataGroup, generation: u64) bool {
@@ -297,6 +302,7 @@ const Mutation = struct {
     key: []const u8 = "",
     previous: ?[]const u8 = null,
     replacement: ?[]const u8 = null,
+    new_key: ?[]const u8 = null,
     clear: bool = false,
     expire_cookie: ?[]const u8 = null,
 };

@@ -332,7 +332,7 @@ bool moon_site_data_action(uint64_t panel, const char *id, int action);
 int moon_site_remove_cookie(uint64_t panel, const char *owner, uint32_t entry, uint64_t generation, uint64_t page_revision);
 bool moon_site_data_cookie_url(uint64_t panel, const char *id, char *url, size_t cap);
 bool moon_site_data_update(uint64_t panel, const char *id, bool session, uint32_t entry, uint64_t generation,
-    uint64_t page_revision, const char *value, size_t length);
+    uint64_t page_revision, const char *value, size_t length, const char *key, size_t key_length);
 bool moon_site_data_create(uint64_t panel, const char *id, bool session, uint64_t generation,
     const char *key, size_t key_length, const char *value, size_t value_length);
 int moon_site_data_clear(uint64_t panel, const char *id, bool session, uint64_t generation);

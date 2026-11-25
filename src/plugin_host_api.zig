@@ -961,9 +961,12 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (options.group==.cookies or options.pageRevision==0) return sdk.failure(output,id,.InvalidParams);
             if (options.value) |raw| if (raw.len>sdk.site_data_value_limit) return sdk.failure(output,id,.LimitExceeded);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            if (options.newKey) |key| if (key.len>sdk.site_data_key_limit) return sdk.failure(output,id,.LimitExceeded);
             const value = options.value orelse "";
+            const key = options.newKey orelse "";
             const ok = native.moon_site_data_update(context.target_tab_id,owner.ptr,options.group==.session,
-                options.id,options.generation,options.pageRevision orelse 0,if (options.value!=null) value.ptr else null,value.len);
+                options.id,options.generation,options.pageRevision orelse 0,if (options.value!=null) value.ptr else null,value.len,
+                if (options.newKey!=null) key.ptr else null,key.len);
             if (!ok) return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,true);
         },

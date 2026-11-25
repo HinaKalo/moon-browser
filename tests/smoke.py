@@ -2232,6 +2232,33 @@ def run_win32(exe, base, root):
             'document.querySelector("[data-group=session]").click();'
             'await wait(()=>page?.total===42&&page.offset===0,"restored session storage");}'
         ) if 'id="storage-order"' in page else ""
+        storage_rename_contract = (
+            'button(rowFor(later),"编辑").click();'
+            'await wait(()=>!el("editor").hidden&&!el("editor-key").hidden&&el("key").value===later,"edit existing key name");'
+            'el("key").value="session-keep";el("editor").requestSubmit();seeded=await changed("conflict",seeded.generation);'
+            'await wait(()=>page?.generation===seeded.generation&&rowFor(later),"rename conflict preserved source");'
+            'const original=targetOnPage(page.entries[0].id);'
+            'if(await host("siteData.value",original)!=="second-page-edit")throw Error("rename conflict changed source value");'
+            'button(rowFor(later),"编辑").click();await wait(()=>!el("editor").hidden,"rename dialog");'
+            'el("key").value="renamed-"+later;el("editor").requestSubmit();seeded=await changed("saved",seeded.generation);'
+            'searchStorage("renamed-"+later);'
+            'await wait(()=>page?.generation===seeded.generation&&page.total===1&&rowFor("renamed-"+later),"new key");'
+            'if(await host("siteData.value",targetOnPage(page.entries[0].id))!=="second-page-edit")throw Error("rename changed value");'
+            'if(!await unavailable(host("siteData.value",original)))throw Error("renamed key remained bound");'
+            'searchStorage(later);await wait(()=>page?.total===1&&page.entries[0]?.name==="renamed-"+later,"old key removed and match preserved");'
+            'searchStorage("session-keep");await wait(()=>page?.total===1&&rowFor("session-keep"),"existing destination");'
+            'if(await host("siteData.value",targetOnPage(page.entries[0].id))!=="keep-value")throw Error("rename conflict overwrote destination");'
+            'searchStorage("");document.querySelector("[data-group=local]").click();'
+            'button(await wait(()=>rowFor("moon-local"),"local key before rename"),"编辑").click();'
+            'await wait(()=>!el("editor").hidden&&el("key").value==="moon-local","local rename editor");'
+            'el("key").value="renamed-local";el("new-value").value="new-local-value";el("editor").requestSubmit();'
+            'seeded=await changed("saved",seeded.generation);'
+            'await wait(()=>page?.generation===seeded.generation&&rowFor("renamed-local")&&!rowFor("moon-local"),"renamed local key");'
+            'const localTarget={...targetOnPage(page.entries.find(e=>e.name==="renamed-local").id),group:"local"};'
+            'if(await host("siteData.value",localTarget)!=="new-local-value")throw Error("rename with new value");'
+            'document.querySelector("[data-group=session]").click();'
+            'await wait(()=>rowFor("session-keep"),"session after local rename");'
+        ) if "update.newKey" in page else ""
         storage_paging_contract = (
             'const searchStorage=term=>{el("search").value=term;el("search").dispatchEvent(new Event("input"));};'
             'const targetOnPage=id=>({group:"session",id,generation:page.generation,pageRevision:page.pageRevision});'
@@ -2261,6 +2288,7 @@ def run_win32(exe, base, root):
             'await wait(()=>page?.generation===seeded.generation&&rowFor(later),"new storage page after edit");'
             'button(rowFor(later),"显示值").click();'
             'await wait(()=>rowFor(later)?.querySelector("pre").textContent==="second-page-edit","saved paged value");'
+            + storage_rename_contract
         ) if 'id="storage-pager"' in page else ""
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
@@ -4043,6 +4071,8 @@ def run_win32(exe, base, root):
                     print("site_storage_paging=ok full_key_search=ok page_edit=ok stale_page_rejected=ok filtered_clear=ok",flush=True)
                 if 'id="storage-order"' in (site_data.parent / "site-data.html").read_text(encoding="utf-8"):
                     print("site_storage_sort=ok local=ok session_ascending=ok session_descending=ok sort_invalidates_page=ok",flush=True)
+                if "update.newKey" in (site_data.parent / "site-data.html").read_text(encoding="utf-8"):
+                    print("site_storage_rename=ok editor=ok value_preserved=ok duplicate_preserved=ok old_key_removed=ok",flush=True)
         if page_source.exists():
             target = base + "/page/source-contract"
             set_control(edit,target)

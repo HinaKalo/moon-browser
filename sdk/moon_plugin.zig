@@ -461,7 +461,10 @@ pub const SiteStorageCatalog = struct {
 };
 pub const site_data_value_limit = 1024;
 pub const site_data_key_limit = 512;
-pub const SiteDataUpdate = struct { group: SiteDataGroup, id: u32, generation: u64, value: ?[]const u8, pageRevision: ?u64 = null };
+pub const SiteDataUpdate = struct {
+    group: SiteDataGroup, id: u32, generation: u64, value: ?[]const u8,
+    pageRevision: ?u64 = null, newKey: ?[]const u8 = null,
+};
 pub const SiteDataCreate = struct { group: SiteDataGroup, generation: u64, key: []const u8, value: []const u8 };
 pub const SiteDataClear = struct { group: SiteDataGroup, generation: u64 };
 pub const SiteCacheRemove = struct { index: u32, generation: u64 };

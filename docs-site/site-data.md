@@ -6,6 +6,8 @@
 
 从 0.1.0-preview.82 起，Local Storage 和 Session Storage 每页显示 32 条。筛选按完整键名匹配，覆盖此类存储中的全部条目。长条目会标记截断。普通窗口的 Cookie 列表可按名称、域或路径搜索全部与原网页匹配的 Cookie，每页最多 32 条。单条值最多预览 2048 UTF-8 字节。Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。
 
+从 0.1.0-preview.95 起，可在 Local Storage 和 Session Storage 的「编辑」中修改条目名称。只改名称时保留原值，也可在同一次提交中修改名称和值。目标名称已存在时保留两条原有数据。
+
 从 0.1.0-preview.94 起，Local Storage 和 Session Storage 可选内核顺序、名称升序或名称降序。排序应用于全部筛选结果，切换顺序时回到第一页。
 
 从 0.1.0-preview.84 起，普通窗口的 Cookie 列表可删除选中的网页可写 Cookie。确认框会显示名称、域和路径。同名、不同路径的 Cookie 可分别处理。HttpOnly Cookie 可按需查看，整站清除时一并移除。
@@ -58,7 +60,7 @@ Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限�
 
 `siteData.removeRecord({ index, generation, revision, store, pageRevision, row })` 还需要 `siteData.records`。传入当前记录页响应的 `pageRevision`，以及从 0 开始的行下标 `row`。浏览器用原记录的类型化主键执行删除。翻页、刷新或切换网页后，旧行会失效。收到 `started` 后通过 `siteData.status` 等待新快照，`mutation` 为 `removed`、`conflict` 或 `failed`。
 
-编辑还需要独立的 `siteData.write` 权限，并从当前显示且已绑定的面板调用 `siteData.update`。参数为 `{ group, id, generation, value, pageRevision? }`。`siteData.storagePage` 的条目需要附带 `pageRevision`。字符串表示替换值，`null` 表示删除。提交后通过 `siteData.status` 等待新一代快照，`mutation` 会返回 `saved`、`removed`、`conflict` 或 `failed`。浏览到其他文档、旧快照或截断条目均不能继续提交修改。
+编辑还需要独立的 `siteData.write` 权限，并从当前显示且已绑定的面板调用 `siteData.update`。参数为 `{ group, id, generation, value, pageRevision?, newKey? }`。`siteData.storagePage` 的条目需要附带 `pageRevision`。省略 `newKey` 时，字符串表示替换值，`null` 表示删除。传入不同的 `newKey`（最多 512 UTF-8 字节）时，字符串同时替换名称和值，`null` 只改名称。目标名称已存在时返回冲突。提交后通过 `siteData.status` 等待新一代快照，`mutation` 会返回 `saved`、`removed`、`conflict` 或 `failed`。浏览到其他文档、旧快照或截断条目均不能继续提交修改。
 
 `siteData.create` 传入 `{ group, generation, key, value }`。名称最多 512 UTF-8 字节，值最多 1024 UTF-8 字节。已有同名条目时，快照的 `mutation` 为 `conflict`。
 
