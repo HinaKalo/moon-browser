@@ -584,7 +584,7 @@ fn saveLastSession() void {
     var used: usize = 0;
     var selected: ?usize = null;
     for (tabs[0..count],0..) |*tab,index| {
-        if (tab.pinned or tab.unsafe_history or tab.loading or tab.opening!=.none or
+        if (tab.pinned or tab.unsafe_history or (tab.loading and !tab.document_committed) or tab.opening!=.none or
             (tab.phase!=.live and tab.phase!=.dormant) or !readCommittedAddress(tab,&addresses[used])) continue;
         const title = slice(&tab.title);
         entries[used] = .{ .title=if (std.unicode.utf8ValidateSlice(title)) title else "", .url=slice(&addresses[used]), .group=tab.group };

@@ -69,6 +69,9 @@ class Fixture(BaseHTTPRequestHandler):
     navigate_from_link_menu = Event()
     page_source_requests = 0
     bookmark_batch_requests = []
+    hold_session_asset = Event()
+    session_asset_requested = Event()
+    release_session_asset = Event()
     popup_attempts = set()
     popup_destinations = set()
     autoplay_reports = {}
@@ -255,6 +258,10 @@ class Fixture(BaseHTTPRequestHandler):
             page = path.removeprefix("/closed-ready/")
             self.closed_loaded[page] = self.closed_loaded.get(page, 0) + 1
             data, content_type = b"ok", "text/plain"
+        elif path == "/session-hold-asset":
+            self.session_asset_requested.set()
+            self.release_session_asset.wait(12)
+            data, content_type = b"", "image/png"
         elif path == "/privacy-cacheable":
             type(self).privacy_asset_requests += 1
             data, content_type = b"cache fixture", "text/plain"
@@ -282,6 +289,8 @@ class Fixture(BaseHTTPRequestHandler):
             if name == "中文":
                 self.seen_unicode.set()
             demo = ""
+            if name == "initial":
+                demo = '<script>Document.prototype.querySelectorAll=()=>{throw Error("page-world override");};</script>'
             if name in ("hard-reload-cold","hard-reload-warm"):
                 demo = (
                     '<script src="/hard-reload-asset.js"></script>'
@@ -461,6 +470,8 @@ class Fixture(BaseHTTPRequestHandler):
                         "session-external", "order-last", "order-edge", "group-first", "group-second", "group-outside",
                         "shell-cold", "shell-warm", "shell-plain", "address-visited", "address-saved", "bookmark-bar-live"):
                 demo = f'<script>addEventListener("pageshow",()=>fetch("/closed-ready/{name}"));</script>'
+                if name=="session-second" and self.hold_session_asset.is_set():
+                    demo += '<img src="/session-hold-asset" alt="">'
             if name == "chrome-window":
                 demo = (
                     '<style>:root{--fixture-narrow:0}@media(max-width:480px){:root{--fixture-narrow:1}}'
@@ -530,12 +541,14 @@ class Fixture(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", "moon-privacy-http=present; HttpOnly; Path=/")
         if path == "/privacy-cacheable":
             self.send_header("Cache-Control", "public, max-age=3600")
+        if path in ("/page/session-second","/session-hold-asset"):
+            self.send_header("Cache-Control","no-store")
         if path.startswith("/private-window-probe/"):
             self.send_header("Cache-Control","no-store")
             if initial:
                 self.send_header("Set-Cookie",cookie)
-        self.end_headers()
         try:
+            self.end_headers()
             self.wfile.write(data)
         except (ConnectionResetError, BrokenPipeError):
             pass
@@ -4633,14 +4646,23 @@ def run_win32(exe, base, root):
             wait_for(lambda: Fixture.closed_loaded.get("session-private"),"The isolated private-window fixture did not load")
             saved_bytes = saved_session.read_bytes()
             initial = counts()
+            Fixture.hold_session_asset.set()
             proc,frame = restart_session("--gdi")
             edit = user.GetDlgItem(frame,1001)
-            wait_for(lambda: read_address()==selected_url and counts()[1]>initial[1],"Automatic restore did not reopen the selected tab")
+            wait_for(lambda: read_address()==selected_url and Fixture.session_asset_requested.is_set(),
+                     "Automatic restore did not commit the selected tab with a pending subresource")
             if saved_session.read_bytes()!=saved_bytes or counts()[0]!=initial[0] or counts()[2]!=initial[2]:
                 raise RuntimeError("Private browsing rewrote the previous session or auto restore loaded its background tabs")
             external = base + "/page/session-external"
             initial = counts()
-            proc,frame = restart_session("--gdi",external)
+            try:
+                proc,frame = restart_session("--gdi",external)
+            finally:
+                Fixture.hold_session_asset.clear()
+                Fixture.release_session_asset.set()
+            checkpoint=json.loads(saved_session.read_text(encoding="utf-8"))
+            if [tab["url"] for tab in checkpoint["tabs"]]!=[first_url,selected_url] or checkpoint["selected"]!=1:
+                raise RuntimeError(f"The committed session tab was lost during a pending subresource: {checkpoint}")
             edit = user.GetDlgItem(frame,1001)
             wait_for(lambda: read_address()==external and Fixture.closed_loaded.get("session-external"),
                      "An explicit startup address did not take precedence over session restore")
@@ -4649,7 +4671,7 @@ def run_win32(exe, base, root):
             invoke("恢复上次会话")
             wait_for(lambda: read_address()==selected_url and counts()[1]>initial[1],
                      "The previous session was unavailable after explicit startup")
-            print("last_session=ok safe_checkpoint=ok selected_restore=ok no_duplicate=ok lazy_load=ok "
+            print("last_session=ok safe_checkpoint=ok committed_during_load=ok selected_restore=ok no_duplicate=ok lazy_load=ok "
                   "auto_startup=ok private_excluded=ok external_url_priority=ok forget_confirmation=ok",flush=True)
             if has_custom_startup:
                 signal = preference_report.with_suffix(".signal")

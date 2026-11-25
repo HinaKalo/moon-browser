@@ -44,6 +44,8 @@ moon.dom.addClass("#lua-status", "success")
 
 ## API
 
+从 0.1.0-preview.72 起，浏览器在主文档的隔离 JavaScript 环境应用 Lua DOM 操作。操作会修改实际页面，页面脚本对原生 DOM 方法的重写不会改变 Lua 操作的执行。
+
 | Lua 接口 | 行为 |
 | --- | --- |
 | `moon.apiVersion` | 数字 `1`。 |

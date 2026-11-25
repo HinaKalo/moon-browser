@@ -309,26 +309,13 @@ fn execute(script: *Script, view: *native.MoonView, href: [*:0]const u8) void {
         }
         output.* = .{ .kind = item.kind, .selector = selector, .value = value };
     }
-    const url_json = std.json.Stringify.valueAlloc(allocator, text(href), .{}) catch return;
-    defer allocator.free(url_json);
     const ops_json = std.json.Stringify.valueAlloc(allocator, wire[0..len], .{}) catch return;
     defer allocator.free(ops_json);
-    const apply_operations =
-        \\for (const op of ops) {
-        \\  try {
-        \\    const nodes = document.querySelectorAll(op.selector);
-        \\    for (let i = 0; i < nodes.length && i < 64; i++) {
-        \\      const node = nodes[i];
-        \\      if (op.kind === 1 && !node.matches('script,style,iframe,object,template')) node.textContent = op.value;
-        \\      if (op.kind === 2) node.hidden = true;
-        \\      if (op.kind === 3) node.classList.add(op.value);
-        \\    }
-        \\  } catch {}
-        \\}
-    ;
-    const javascript = std.fmt.allocPrintSentinel(allocator,
-        "if (location.href !== {s} || document.contentType !== 'text/html') return;\nconst ops = {s};\n{s}",
-        .{ url_json, ops_json, apply_operations }, 0) catch return;
-    defer allocator.free(javascript);
-    native.moon_engine_apply_dom(view, javascript.ptr);
+    const payload = allocator.dupeSentinel(u8, ops_json, 0) catch return;
+    defer allocator.free(payload);
+    if (!native.moon_engine_apply_lua_dom(view,payload.ptr)) {
+        const message = "WebKit DOM bridge unavailable";
+        @memcpy(script.last_error[0..message.len],message);
+        script.last_error[message.len] = 0;
+    }
 }

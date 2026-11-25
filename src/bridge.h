@@ -164,6 +164,7 @@ void moon_engine_mute(MoonView *view, bool muted);
 void moon_engine_read(MoonView *view, char *title, size_t title_cap, char *url, size_t url_cap);
 void moon_engine_committed_url(MoonView *view, char *url, size_t cap);
 void moon_engine_apply_dom(MoonView *view, const char *javascript);
+bool moon_engine_apply_lua_dom(MoonView *view, const char *operations);
 void moon_engine_trim(void);
 bool moon_engine_test_crash(MoonView *view);
 int moon_engine_test_download(MoonView *view, const char *path);

@@ -27,6 +27,7 @@ static struct {
     __typeof__(&WKStringCreateWithUTF8CString) new_string;
     __typeof__(&WKStringIsEqualToUTF8CString) text_equals;
     __typeof__(&WKStringGetUTF8CString) read_string;
+    __typeof__(&WKStringGetMaximumUTF8CStringSize) string_capacity;
     __typeof__(&WKURLCopyString) url_text;
     __typeof__(&WKRelease) release;
     JSStringRef (*source)(const char *);
@@ -60,6 +61,7 @@ static bool resolve(void) {
     GET(wk,new_string,WKStringCreateWithUTF8CString)
     GET(wk,text_equals,WKStringIsEqualToUTF8CString)
     GET(wk,read_string,WKStringGetUTF8CString)
+    GET(wk,string_capacity,WKStringGetMaximumUTF8CStringSize)
     GET(wk,url_text,WKURLCopyString)
     GET(wk,release,WKRelease)
     GET(js,source,JSStringCreateWithUTF8CString)
@@ -176,7 +178,23 @@ static JSValueRef database_finished(JSContextRef context,JSObjectRef function,JS
     return send_async_reply(context,argc,argv,exception,"MoonSiteDatabase");
 }
 
-typedef enum { SITE_SNAPSHOT, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE, SITE_DATABASE } SiteRequest;
+static const char lua_dom_script[] =
+    "((url,json) => {"
+      "if(location.href!==url || document.contentType!=='text/html') return;"
+      "for(const op of JSON.parse(json)) {"
+        "try {"
+          "const nodes=document.querySelectorAll(op.selector);"
+          "for(let i=0;i<nodes.length && i<64;++i) {"
+            "const node=nodes[i];"
+            "if(op.kind===1 && !node.matches('script,style,iframe,object,template')) node.textContent=op.value;"
+            "if(op.kind===2) node.hidden=true;"
+            "if(op.kind===3) node.classList.add(op.value);"
+          "}"
+        "} catch {}"
+      "}"
+    "})";
+
+typedef enum { SITE_SNAPSHOT, SITE_CATALOG, SITE_ARTICLE, SITE_CACHE_REMOVE, SITE_DATABASE, SITE_LUA_DOM } SiteRequest;
 
 static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char *expected,char *change,
                            SiteRequest kind,bool *scheduled,const char **failure) {
@@ -202,7 +220,8 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
     if (context) {
         *failure="\"evaluationFailed\"";
         const char *source = kind==SITE_ARTICLE ? change : kind==SITE_CATALOG ? catalog_script :
-                             kind==SITE_CACHE_REMOVE ? cache_remove_script : snapshot_script;
+                             kind==SITE_CACHE_REMOVE ? cache_remove_script :
+                             kind==SITE_LUA_DOM ? lua_dom_script : snapshot_script;
         if (kind==SITE_DATABASE) {
             char *separator=strchr(change,'\n');
             if (!separator || !separator[1]) return NULL;
@@ -217,16 +236,17 @@ static JSStringRef inspect(WKBundlePageRef page,const char *revision,const char 
             if (script) api.release_js(script);
             return result;
         }
-        JSStringRef id=api.source(revision), url=kind==SITE_SNAPSHOT ? NULL : api.source(expected);
+        const bool direct = kind==SITE_SNAPSHOT || kind==SITE_LUA_DOM;
+        JSStringRef id=api.source(kind==SITE_LUA_DOM ? expected : revision), url=direct ? NULL : api.source(expected);
         JSStringRef payload=kind==SITE_CATALOG ? NULL : api.source(change);
-        if (script && id && (url || kind==SITE_SNAPSHOT) && (payload || kind==SITE_CATALOG)) {
+        if (script && id && (url || direct) && (payload || kind==SITE_CATALOG)) {
             JSValueRef exception=NULL;
             JSValueRef function=api.evaluate(context,script,NULL,NULL,1,&exception);
             JSObjectRef callback=!exception && function ? api.to_object(context,function,&exception) : NULL;
             if (!exception && callback) {
                 JSValueRef arguments[4]={api.make_string(context,id)};
                 size_t count=2;
-                if (kind==SITE_SNAPSHOT) arguments[1]=api.make_string(context,payload);
+                if (direct) arguments[1]=api.make_string(context,payload);
                 else {
                     arguments[1]=api.make_string(context,url);
                     if (kind!=SITE_CATALOG) arguments[count++]=api.make_string(context,payload);
@@ -259,8 +279,14 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
     else if (api.text_equals(name,"MoonReadArticle")) { kind=SITE_ARTICLE; channel="MoonArticleSnapshot"; }
     else if (api.text_equals(name,"MoonRemoveSiteCache")) { kind=SITE_CACHE_REMOVE; channel="MoonSiteCacheRemoval"; }
     else if (api.text_equals(name,"MoonInspectDatabase")) { kind=SITE_DATABASE; channel="MoonSiteDatabase"; }
+    else if (api.text_equals(name,"MoonApplyLuaDOM")) { kind=SITE_LUA_DOM; channel=NULL; }
     else return;
-    const size_t request_cap=(kind==SITE_ARTICLE ? 144 : 32)*1024;
+    // Lua emits at most 32 operations with 1280 argument bytes each, before JSON escaping.
+    size_t request_cap=(kind==SITE_LUA_DOM ? 256 : kind==SITE_ARTICLE ? 144 : 32)*1024;
+    if (kind==SITE_LUA_DOM) {
+        const size_t needed=api.string_capacity((WKStringRef)data);
+        if (needed<request_cap) request_cap=needed+1;
+    }
     char *request=malloc(request_cap);
     if (!request) return;
     const size_t n=api.read_string((WKStringRef)data,request,request_cap);
@@ -275,7 +301,7 @@ void moon_bundle_site_message(WKBundleRef bundle,WKBundlePageRef page,WKStringRe
     *update=0;
     bool scheduled=false;
     JSStringRef snapshot=inspect(page,request,split+1,update+1,kind,&scheduled,&failure);
-    if (scheduled) { free(request); return; }
+    if (scheduled || !channel) { free(request); return; }
     *split='\n';
     const size_t capacity=snapshot ? api.size(snapshot) : 0;
     const size_t limit=(kind==SITE_ARTICLE ? 192 : 512)*1024;

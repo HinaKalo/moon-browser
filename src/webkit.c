@@ -813,6 +813,9 @@ bool moon_engine_remove_site_cache(MoonView *view,uint64_t request,const char *c
 bool moon_engine_inspect_database(MoonView *view,uint64_t request,const char *query) {
     return send_site_request(view,request,query,"MoonInspectDatabase");
 }
+bool moon_engine_apply_lua_dom(MoonView *view,const char *operations) {
+    return send_site_request(view,0,operations,"MoonApplyLuaDOM");
+}
 
 static MoonView *open_view(uint64_t token, const char *extension_id, const char *address) {
     if (!context) return NULL;
