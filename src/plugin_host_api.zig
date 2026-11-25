@@ -33,6 +33,7 @@ pub const Context = struct {
     target_navigation: u64 = 0,
     selection_epoch: u64 = 0,
     group_selection: ?sdk.TabGroupSelection = null,
+    mute_selection: ?bool = null,
     tab: ?*const Snapshot,
     consent: userscripts.Consent,
     from_page: bool = false,
@@ -99,7 +100,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"window.toggleFullscreen" => .@"window.fullscreen",
         .@"window.appearance.get", .@"window.appearance.set", .@"window.appearance.toggle" => .@"window.appearance",
         .@"tabs.closed.list", .@"tabs.closed.reopen", .@"tabs.closed.clear" => .@"tabs.closed.manage",
-        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.reorder" => .@"tabs.organize",
+        .@"tabs.togglePinned", .@"tabs.toggleMuted", .@"tabs.setSelectionMuted", .@"tabs.reorder" => .@"tabs.organize",
         .@"tabs.groups.open", .@"tabs.groups.create", .@"tabs.groups.removeTab", .@"tabs.groups.list",
         .@"tabs.groups.assign", .@"tabs.groups.update", .@"tabs.groups.dissolve", .@"tabs.groups.applySelection" => .@"tabs.groups",
         .@"tabs.duplicate", .@"tabs.copyAddress", .@"tabs.openLink", .@"tabs.copyLink", .@"tabs.closeGroup", .@"tabs.openSearch" => .@"tabs.manage",
@@ -1083,6 +1084,13 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             };
             const outcome = native.moon_tabs_organize(context.target_tab_id,@intFromEnum(operation));
             return sdk.result(output,id,@as(sdk.TabOrganization,@enumFromInt(outcome)));
+        },
+        .@"tabs.setSelectionMuted" => {
+            if (!context.user_command or !context.grants.contains(.@"tabs.manage")) return sdk.failure(output,id,.PermissionDenied);
+            const options = decode(struct { muted: bool },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (context.mute_selection) |bound| if (bound!=options.muted) return sdk.failure(output,id,.PermissionDenied);
+            const changed = native.moon_tab_selection_set_muted(context.selection_epoch,options.muted);
+            return sdk.result(output,id,if (changed<0) @as(?c_int,null) else @as(?c_int,changed));
         },
         .@"tabs.openSearch" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

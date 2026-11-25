@@ -1031,11 +1031,8 @@ fn organizeTab(id: u64, action: sdk.TabOperation) sdk.TabOrganization {
     }
     if (action==.duplicate) return duplicateTab(index);
     if (action==.mute) {
-        if (!tab.muted and (tab.extension or !safeURL(slice(&tab.url)))) return .unavailable;
-        tab.muted = !tab.muted;
-        if (tab.view) |view| {
-            if (!tab.extension) native.moon_engine_mute(view,tab.muted);
-        }
+        if (!canMuteTab(tab)) return .unavailable;
+        setTabMuted(tab,!tab.muted);
         native.moon_shell_refresh();
         return if (tab.muted) .muted else .unmuted;
     }
@@ -1061,6 +1058,43 @@ fn organizeTab(id: u64, action: sdk.TabOperation) sdk.TabOrganization {
     pruneTabGroup(old_group);
     native.moon_shell_refresh();
     return if (was_pinned) .unpinned else .pinned;
+}
+
+fn canMuteTab(tab: *const Tab) bool {
+    return tab.muted or (!tab.extension and safeURL(slice(&tab.url)));
+}
+
+fn setTabMuted(tab: *Tab, muted: bool) void {
+    tab.muted = muted;
+    if (!tab.extension) if (tab.view) |view| native.moon_engine_mute(view,muted);
+}
+
+export fn moon_tab_selection_mute_action() c_int {
+    var found = false;
+    for (tabs[0..count]) |*tab| {
+        if (!tab.selected or !canMuteTab(tab)) continue;
+        if (!tab.muted) return 1;
+        found = true;
+    }
+    return if (found) 0 else -1;
+}
+
+export fn moon_tab_selection_mute_command(epoch: u64, muted: bool) void {
+    if (stopped or epoch==0 or epoch!=moon_tab_selection_epoch() or !plugins.systemEnabled(.@"tabs.organize")) return;
+    const snapshot = tabSnapshot() orelse return;
+    _ = plugins.launchTabMuteSelection(muted,snapshot);
+}
+
+export fn moon_tab_selection_set_muted(epoch: u64, muted: bool) c_int {
+    if (stopped or epoch==0 or epoch!=moon_tab_selection_epoch()) return -1;
+    var changed: c_int = 0;
+    for (tabs[0..count]) |*tab| {
+        if (!tab.selected or !canMuteTab(tab) or tab.muted==muted) continue;
+        setTabMuted(tab,muted);
+        changed += 1;
+    }
+    if (changed!=0) native.moon_shell_refresh_tab_order(false);
+    return changed;
 }
 
 fn canDuplicate(tab: *const Tab) bool {
@@ -2152,7 +2186,7 @@ export fn moon_tab_flags(index: usize) c_uint {
         (if (tab.view!=null and native.moon_engine_site_muted(tab.view.?)) @as(c_uint,native.MOON_TAB_SITE_MUTED) else 0) |
         (if (!native.moon_shell_private() and (tab.pinned or (!tab.extension and tab.has_document and !tab.unsafe_history and !tab.loading and safeURL(slice(&tab.url)))))
             @as(c_uint,native.MOON_TAB_CAN_PIN) else 0) |
-        (if (tab.muted or (!tab.extension and safeURL(slice(&tab.url)))) @as(c_uint,native.MOON_TAB_CAN_MUTE) else 0) |
+        (if (canMuteTab(tab)) @as(c_uint,native.MOON_TAB_CAN_MUTE) else 0) |
         (if (canDuplicate(tab) and safeURL(slice(&tab.url))) @as(c_uint,native.MOON_TAB_CAN_DUPLICATE) else 0) |
         (if (tab.has_document and !tab.extension and safeURL(slice(&tab.url))) @as(c_uint,native.MOON_TAB_CAN_COPY_ADDRESS) else 0) |
         (if (hasSite(tab)) @as(c_uint,native.MOON_TAB_HAS_SITE) else 0) |

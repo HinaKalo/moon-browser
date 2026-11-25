@@ -590,6 +590,7 @@ pub const Method = enum {
     @"tabs.session.forget",
     @"tabs.togglePinned",
     @"tabs.toggleMuted",
+    @"tabs.setSelectionMuted",
     @"tabs.duplicate",
     @"tabs.openSearch",
     @"tabs.copyAddress",

@@ -238,6 +238,9 @@ unsigned moon_tab_flags(size_t index);
 uint64_t moon_tab_id(size_t index);
 bool moon_tab_selection_pick(size_t index, bool range);
 bool moon_tab_selection_clear(void);
+int moon_tab_selection_mute_action(void);
+void moon_tab_selection_mute_command(uint64_t epoch, bool muted);
+int moon_tab_selection_set_muted(uint64_t epoch, bool muted);
 uint64_t moon_tab_selection_epoch(void);
 size_t moon_tab_selection_count(void);
 enum {

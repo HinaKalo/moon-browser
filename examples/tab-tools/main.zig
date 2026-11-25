@@ -21,7 +21,7 @@ pub fn main() !void {
             break :search null;
         },
         .pin => try organize(&client,.@"tabs.togglePinned"),
-        .mute => try organize(&client,.@"tabs.toggleMuted"),
+        .mute => try mute(&client,params.object.get("muteSelection") orelse .null),
         .duplicate => try organize(&client,.@"tabs.duplicate"),
         .copyAddress => try organize(&client,.@"tabs.copyAddress"),
         .closeOthers => try close(&client,.others),
@@ -35,6 +35,16 @@ pub fn main() !void {
         .groupRemove => try groupCommand(&client,.@"tabs.groups.removeTab"),
     };
     try client.reply(id, sdk.CommandResult{ .message = message, .toast = true });
+}
+
+fn mute(client: *sdk.Client, selection: std.json.Value) !?[]const u8 {
+    if (selection==.null) return organize(client,.@"tabs.toggleMuted");
+    if (selection!=.bool) return error.InvalidCommand;
+    const response = try client.call(.@"tabs.setSelectionMuted",.{ .muted=selection.bool });
+    const result = response.get("result") orelse return "请检查标签管理权限。";
+    if (result!=.integer) return "标签选择已变化，请重试。";
+    return if (selection.bool) try std.fmt.allocPrint(client.allocator,"已静音 {d} 个标签。",.{result.integer})
+        else try std.fmt.allocPrint(client.allocator,"已取消 {d} 个标签的静音。",.{result.integer});
 }
 
 fn createGroup(client: *sdk.Client, selection: std.json.Value) !?[]const u8 {

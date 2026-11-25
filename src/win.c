@@ -1429,10 +1429,13 @@ static bool within(int x,int y,int left,int top,int w,int h) {
     return x>=left && x<left+w && y>=top && y<top+h;
 }
 static void selection_context_menu(HWND hwnd, HMENU popup, POINT screen, uint64_t selection, unsigned permission) {
-    enum { CANCEL_SELECTION = 1, GROUP_CREATE = 100, GROUP_REMOVE, GROUP_FIRST };
+    enum { CANCEL_SELECTION = 1, MUTE_SELECTION, UNMUTE_SELECTION, GROUP_CREATE = 100, GROUP_REMOVE, GROUP_FIRST };
     wchar_t close_label[48];
     swprintf(close_label,ARRAYSIZE(close_label),L"关闭所选标签（%u）",(unsigned)moon_tab_selection_count());
     AppendMenuW(popup,MF_STRING,MOON_TAB_CLOSE_SELECTED,close_label);
+    const int mute_action=(permission&MOON_TAB_ORGANIZE)?moon_tab_selection_mute_action():-1;
+    if (mute_action==1) AppendMenuW(popup,MF_STRING,MUTE_SELECTION,L"静音所选标签");
+    if (mute_action==0) AppendMenuW(popup,MF_STRING,UNMUTE_SELECTION,L"取消所选标签静音");
     MoonTabGroup groups[MOON_MAX_GROUPS];
     size_t count=0;
     if (permission&MOON_TAB_GROUPS) {
@@ -1463,6 +1466,8 @@ static void selection_context_menu(HWND hwnd, HMENU popup, POINT screen, uint64_
     const UINT command=TrackPopupMenuEx(popup,TPM_RETURNCMD|TPM_NONOTIFY|TPM_RIGHTBUTTON,screen.x,screen.y,hwnd,NULL);
     if (command==CANCEL_SELECTION && selection==moon_tab_selection_epoch()) moon_tab_selection_clear();
     else if (command==MOON_TAB_CLOSE_SELECTED) moon_command((int)command,selection,NULL);
+    else if (command==MUTE_SELECTION || command==UNMUTE_SELECTION)
+        moon_tab_selection_mute_command(selection,command==MUTE_SELECTION);
     else if (command==GROUP_CREATE) moon_group_selection_command(selection,MOON_GROUP_CREATE,0);
     else if (command==GROUP_REMOVE) moon_group_selection_command(selection,MOON_GROUP_REMOVE,0);
     else if (command>=GROUP_FIRST && command-GROUP_FIRST<count)

@@ -81,6 +81,7 @@ const Task = struct {
     target_navigation: u64,
     selection_epoch: u64,
     group_selection: ?sdk.TabGroupSelection,
+    mute_selection: ?bool,
     trigger: Trigger,
     plugin_id: [*:0]const u8,
     command_id: [*:0]const u8,
@@ -1230,6 +1231,7 @@ const Invocation = struct {
     link: ?*api.LinkInvocation = null,
     drop: ?api.TabDropInvocation = null,
     group_selection: ?sdk.TabGroupSelection = null,
+    mute_selection: ?bool = null,
 };
 
 fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?Snapshot, binding: Invocation) bool {
@@ -1253,6 +1255,7 @@ fn launchBound(index: usize, command_index: usize, trigger: Trigger, snapshot: ?
         .target_navigation = if (snapshot) |tab| tab.navigation else 0,
         .selection_epoch = if (trigger == .command and plugin.grants.contains(.@"tabs.manage")) native.moon_tab_selection_epoch() else 0,
         .group_selection = binding.group_selection,
+        .mute_selection = binding.mute_selection,
         .trigger = trigger,
         .plugin_id = &plugin.id,
         .command_id = &plugin.actions[command_index].id,
@@ -1330,6 +1333,9 @@ fn launchBundled(id: []const u8, action_id: []const u8, snapshot: Snapshot, bind
 pub fn launchTabGroupSelection(selection: sdk.TabGroupSelection, snapshot: Snapshot) bool {
     return launchBundled("moon.tab-tools","groupCreate",snapshot,.{ .group_selection=selection });
 }
+pub fn launchTabMuteSelection(muted: bool, snapshot: Snapshot) bool {
+    return launchBundled("moon.tab-tools","mute",snapshot,.{ .mute_selection=muted });
+}
 pub fn changed(snapshot: ?Snapshot) void {
     for (all[0..len], 0..) |*plugin, index| {
         if (!plugin.enabled or !plugin.subscribes) continue;
@@ -1357,6 +1363,7 @@ fn serviceRpc(task: *Task, rpc: *Rpc) void {
         .target_navigation = task.target_navigation,
         .selection_epoch = task.selection_epoch,
         .group_selection = task.group_selection,
+        .mute_selection = task.mute_selection,
         .tab = if (task.snapshot) |*snapshot| snapshot else null,
         .consent = .{ .context = task, .valid = invocationActive },
         .user_command = task.trigger == .command,
@@ -1522,6 +1529,8 @@ fn exchangeV2(task: *Task, pipe: *native.MoonPipe, rpc: *Rpc) Outcome {
         },
     }) catch return .failed else if (task.group_selection) |group| sdk.request(allocator, "h:2", "commands.run", .{
         .id = command_id, .groupSelection = group,
+    }) catch return .failed else if (task.mute_selection) |muted| sdk.request(allocator, "h:2", "commands.run", .{
+        .id = command_id, .muteSelection = muted,
     }) catch return .failed else sdk.request(allocator, "h:2", "commands.run", .{ .id = command_id }) catch return .failed;
     defer allocator.free(invocation);
     if (!sendRpc(rpc, pipe, invocation)) return .failed;

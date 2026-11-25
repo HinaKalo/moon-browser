@@ -3368,8 +3368,8 @@ def run_win32(exe, base, root):
                 user.SendMessageW(palette_items,0x0189,i,ctypes.addressof(label))  # LB_GETTEXT
                 labels.append(label.value)
             user.PostMessageW(user.GetDlgItem(palette_window,1003),0x0100,0x1B,1)
-            if labels.count("管理插件 · Moon Browser") != 1:
-                raise RuntimeError(f"Expected one loaded plugin manager tab: {labels}")
+            if sum(label in ("管理插件 · Moon Browser","moon://plugins/") for label in labels) != 1:
+                raise RuntimeError(f"Expected one plugin manager tab: {labels}")
             print("plugin_manager_entry=ok plugin_manager_tab_reuse=ok extension_admin_isolation=ok",flush=True)
         if history.exists():
             database = profile / "history.sqlite3"
@@ -5166,6 +5166,25 @@ def run_win32(exe, base, root):
                 tab_menu(4,"取消选择")
                 if "关闭标签" not in tab_menu(4):
                     raise RuntimeError("The tab menu did not clear the selection")
+
+                if tuple(map(int,json.loads(tab_tools_manifest)["version"].split(".")[:2]))>=(1,8):
+                    tab_menu(3,"静音此标签")
+                    wait_for(lambda: "取消标签静音" in tab_menu(3),"Could not create a mixed mute selection")
+                    select_row(3,0x0008)
+                    tab_menu(3,"静音所选标签",lambda: select_row(2,0x0008))
+                    if "静音所选标签" not in tab_menu(3):
+                        raise RuntimeError("An old menu applied mute after the selection changed")
+                    select_row(2,0x0008)
+                    tab_menu(3,"静音所选标签")
+                    wait_for(lambda: "取消所选标签静音" in tab_menu(3),"Batch mute did not update the selection")
+                    if read_address()!=second or "取消标签静音" in tab_menu(2):
+                        raise RuntimeError("Batch mute switched tabs or muted an unselected tab")
+                    tab_menu(3,"取消所选标签静音")
+                    wait_for(lambda: "静音所选标签" in tab_menu(3),"Batch unmute did not update the selection")
+                    tab_menu(3,"取消选择")
+                    if any("取消标签静音" in tab_menu(row) for row in (1,3)):
+                        raise RuntimeError("Batch unmute left a selected tab muted")
+                    print("tab_selection_mute=ok mixed_selection=ok stale_menu=ok unselected_kept=ok unmute=ok",flush=True)
 
                 for row in (0,3,4):
                     select_row(row,0x0008)
