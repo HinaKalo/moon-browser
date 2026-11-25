@@ -1950,6 +1950,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"siteSettings.zoom" => "允许查看和修改网站缩放比例",
         .@"siteData.cacheWrite" => "允许经确认删除单个站点缓存",
         .@"siteData.records" => "允许查看 IndexedDB 记录预览",
+        .@"siteData.databaseWrite" => "允许经确认清空 IndexedDB 对象仓库",
         .@"page.source" => "允许查看当前网页源代码",
         .@"page.reader" => "允许提取当前网页正文以打开阅读模式",
         .@"page.save" => "允许通过文件对话框保存当前网页",
@@ -2491,8 +2492,8 @@ export fn moon_site_data_database(panel: u64, id: [*c]const u8, index: c_uint, g
     return site_data.requestDatabase(view,panel,owner,.{ .index=index,.generation=generation,.refresh=refresh });
 }
 
-export fn moon_site_database_result(tab: u64, request: u64, result: [*c]const u8) void {
-    if (!stopped and result!=null) site_data.completeDatabase(tab,request,slice(result));
+export fn moon_site_database_result(view: *native.MoonView, tab: u64, request: u64, result: [*c]const u8) void {
+    if (!stopped and result!=null) site_data.completeDatabase(view,tab,request,slice(result));
 }
 
 export fn moon_site_database_records(panel: u64, id: [*c]const u8, index: c_uint, generation: u64,
@@ -2502,6 +2503,30 @@ export fn moon_site_database_records(panel: u64, id: [*c]const u8, index: c_uint
     return site_data.requestRecords(view,panel,owner,.{
         .index=index,.generation=generation,.revision=revision,.store=store,.offset=offset,.refresh=refresh,
     });
+}
+
+export fn moon_site_database_clear(panel: u64, id: [*c]const u8, index: c_uint, generation: u64,
+    revision: u64, store: c_uint) c_int {
+    return @intFromEnum(clearSiteDatabaseStore(panel,slice(id),.{
+        .index=index,.generation=generation,.revision=revision,.store=store,
+    }));
+}
+
+fn clearSiteDatabaseStore(panel: u64, owner: []const u8, target: sdk.SiteDatabaseStoreTarget) sdk.SiteDataClearStart {
+    const permission: sdk.Permission = .@"siteData.databaseWrite";
+    if (site_clear_confirming or sitePanelView(panel,owner,permission)==null) return .unavailable;
+    const store = site_data.objectStore(panel,owner,target) orelse return .unavailable;
+    const allocator = std.heap.page_allocator;
+    const names = std.json.Stringify.valueAlloc(allocator,.{ store.database.name,store.name },.{}) catch return .unavailable;
+    defer allocator.free(names);
+    const origin = site_data.status(panel,owner,false,false,false,false).origin;
+    const message = std.fmt.allocPrintSentinel(allocator,"清空 {s} 中的 IndexedDB 记录？\n数据库和对象仓库：{s}\n此仓库的所有记录都会删除，索引和其他仓库会保留。",.{origin,names},0) catch return .unavailable;
+    defer allocator.free(message);
+    site_clear_confirming = true;
+    defer site_clear_confirming = false;
+    if (!native.moon_shell_confirm("清空对象仓库？",message.ptr)) return .cancelled;
+    const view = sitePanelView(panel,owner,permission) orelse return .unavailable;
+    return if (site_data.clearObjectStore(view,panel,owner,target)) .started else .unavailable;
 }
 
 export fn moon_site_data_cookie_url(panel: u64, id: [*c]const u8, url: [*c]u8, cap: usize) bool {

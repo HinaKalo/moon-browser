@@ -99,7 +99,7 @@
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
   let clearing=false, cookieGeneration, cacheWritable=false;
   let databasePreview;
-  let recordView, recordsAllowed=false;
+  let recordView, recordsAllowed=false, databaseWritable=false;
   let dismissedMutation;
   const isCatalog=() => group==='indexedDB' || group==='cacheStorage';
   async function host(method,params={}) {
@@ -270,17 +270,18 @@
       '当前显示网页可读的 Cookie。可使用开发者工具查看其他 Cookie 属性。') : '') +
       (page.more ? ` 已显示前 ${page.entries.length} 条。` : '');
   }
-  async function removeCache(index,generation,button) {
+  async function changeCatalog(method,target,button) {
     if (clearing) return;
+    const currentGroup=group;
     clearing=true;
     button.disabled=true;
     feedback.textContent='';
     try {
-      const outcome=await host('siteData.cacheRemove',{index,generation});
+      const outcome=await host(method,target);
       if (outcome==='started') await update();
-      else if (group==='cacheStorage') feedback.textContent=outcome==='cancelled' ? '已取消。' : '缓存已变化，请刷新。';
+      else if (group===currentGroup) feedback.textContent=outcome==='cancelled' ? '已取消。' : '条目已变化，请刷新。';
     } catch {
-      if (group==='cacheStorage') feedback.textContent='无法删除此缓存，请刷新后重试。';
+      if (group===currentGroup) feedback.textContent='无法修改所选条目，请刷新后重试。';
     } finally {
       clearing=false;
       button.disabled=false;
@@ -411,6 +412,14 @@
       summary.textContent='键路径 ' + displayKey(store.keyPath) + (store.autoIncrement ? ' · 自动递增' : '') +
         (store.shortened ? ' · 名称已截断' : '');
       item.append(title,summary);
+      if (databaseWritable && !store.shortened) {
+        const clear=document.createElement('button');
+        const {index:databaseIndex,generation,revision}=databasePreview;
+        clear.textContent='清空记录…';
+        clear.setAttribute('aria-label','清空记录 '+(store.name || '（空名称）'));
+        clear.onclick=() => changeCatalog('siteData.clearObjectStore',{index:databaseIndex,generation,revision,store:index},clear);
+        item.append(clear);
+      }
       if (recordsAllowed && !store.shortened) {
         const open=document.createElement('button'), expanded=recordView?.store===index;
         open.textContent=expanded ? '收起记录' : '查看记录';
@@ -482,7 +491,7 @@
         const generation=catalog.generation;
         remove.textContent='删除缓存';
         remove.setAttribute('aria-label', '删除缓存 '+(item.name || '（空名称）'));
-        remove.onclick=() => removeCache(index,generation,remove);
+        remove.onclick=() => changeCatalog('siteData.cacheRemove',{index,generation},remove);
         heading.append(remove);
       }
       if (group==='indexedDB' && !item.shortened && item.version!=null) {
@@ -546,7 +555,7 @@
     unavailable:'WebKit 暂时无法读取此网页的数据。'
   };
   const messages={
-    saved:'已保存。', removed:'已删除。', cleared:'已清空此类存储。', conflict:'名称已存在或条目已变更，已刷新为当前值。',
+    saved:'已保存。', removed:'已删除。', cleared:'已清空所选存储。', conflict:'名称已存在或条目已变更，已刷新为当前值。',
     failed:'此网页的存储不可写，修改未保存。'
   };
   async function update() {
@@ -557,11 +566,12 @@
       writable=current.writable;
       cacheWritable=current.cacheWritable;
       recordsAllowed=current.recordPreview;
+      databaseWritable=current.databaseWritable;
       cookieGeneration=current.cookieDetails ? current.generation : undefined;
       el('origin').textContent=current.origin;
       const unavailable=['idle','stale','pending'].includes(current.state);
       el('refresh').disabled=el('inspector').disabled=unavailable;
-      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails + ':' + cacheWritable + ':' + recordsAllowed;
+      const identity=current.state + ':' + current.generation + ':' + writable + ':' + current.cookieDetails + ':' + cacheWritable + ':' + recordsAllowed + ':' + databaseWritable;
       if (identity===latest) {
         if (selected==='ready' && isCatalog() && (!catalog || catalog.state==='pending')) await load();
         return;

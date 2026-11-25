@@ -374,7 +374,8 @@ class Fixture(BaseHTTPRequestHandler):
                     'if(id===2){row.cycle={};row.cycle.self=row.cycle;}'
                     'if(id===3)row.bytes=new Uint8Array([9,7,5,3]);'
                     'if(id===4)row.note="长".repeat(2000);store.put(row);}'
-                    'for(let i=0;i<12;i++)db.createObjectStore("z-extra-"+i);};'
+                    'for(let i=0;i<12;i++){const extra=db.createObjectStore("z-extra-"+i);'
+                    'if(i===1)extra.put("preserve sibling",1);}};'
                     'request.onsuccess=()=>{request.result.close();ok()};request.onerror=fail}),'
                     'new Promise((ok,fail)=>{const request=indexedDB.open("moon-temporary-schema",1);'
                     'request.onupgradeneeded=()=>request.result.createObjectStore("temporary");'
@@ -383,6 +384,7 @@ class Fixture(BaseHTTPRequestHandler):
                     'await Promise.all(Array.from({length:32},(_,i)=>caches.open("cache-"+i)))})()]);'
                     'IDBFactory.prototype.databases=async()=>[{name:"forged",version:88}];'
                     'IDBFactory.prototype.open=()=>{throw Error("forged open");};'
+                    'IDBObjectStore.prototype.clear=()=>{throw Error("forged clear");};'
                     'CacheStorage.prototype.keys=async()=>["forged"];'
                     'CacheStorage.prototype.delete=async()=>false;'
                     'fetch("/site-data-catalog-ready");})().catch(()=>{});'
@@ -823,6 +825,7 @@ def run_win32(exe, base, root):
     cache_remove = site_data.exists() and '"siteData.cacheWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     database_schema = site_data.exists() and "siteData.database" in site_data.with_name("site-data.html").read_text(encoding="utf-8")
     database_records = site_data.exists() and '"siteData.records"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
+    database_write = site_data.exists() and '"siteData.databaseWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
     has_page_save = page_source.exists() and any(
         command["id"]=="save" for command in
@@ -876,7 +879,7 @@ def run_win32(exe, base, root):
              "downloads_open": download_open},
             {"id": "moon.site-data-fixture", "enabled": True, "tabs_read": False, "site_data_read": True,
              "site_data_write": True, "site_data_cookie_details": True, "site_data_cache_write": cache_remove,
-             "site_data_records": database_records},
+             "site_data_records": database_records, "site_data_database_write": database_write},
             {"id": "moon.source-fixture", "enabled": True, "tabs_read": False, "page_source": True},
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
@@ -915,6 +918,9 @@ def run_win32(exe, base, root):
             ('const recordsDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"13",method:"siteData.databaseRecords",params:{index:0,generation:1,revision:1,store:0}}));'
              'if(JSON.parse(recordsDenied).error?.code!==-32001)return;' if database_records else '') +
+            ('const clearDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"object-store-denied",method:"siteData.clearObjectStore",params:{index:0,generation:1,revision:1,store:0}}));'
+             'if(JSON.parse(clearDenied).error?.code!==-32001)return;' if database_write else '') +
             ('const readingDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"3",method:"reading.find",params:{}}));'
              'if(JSON.parse(readingDenied).error?.code!==-32601)return;' if reading.exists() else '') +
@@ -1475,6 +1481,37 @@ def run_win32(exe, base, root):
             '.then(()=>false,e=>e.message==="NOT_FOUND");'
             'if(!limit||!stale)throw Error("invalid record scope was accepted");'
         ) if database_records else ""
+        object_store_contract = r'''
+            if (!result.databaseWritable) throw Error('IndexedDB write grant missing');
+            const clearQuery = {index:(await inventory('indexedDB')).indexedDB.entries.findIndex(db=>db.name==='moon-inventory'),
+                generation:result.generation};
+            const openStructure = () => el('results').querySelector(`button[data-database-index="${clearQuery.index}"]`);
+            (await wait(() => catalog?.generation===clearQuery.generation && openStructure(),'object store schema action')).click();
+            const clearButton = await wait(() => el('database-preview')?.querySelector('[aria-label="清空记录 records"]'),'clear store action');
+            const beforeClear = await readSchema(clearQuery);
+            const target = {...clearQuery,revision:beforeClear.revision,store:beforeClear.stores.findIndex(store=>store.name==='records')};
+            if (await host('siteData.clearObjectStore',{...target,revision:target.revision-1})!=='unavailable' ||
+                await host('siteData.clearObjectStore',{...target,store:999})!=='unavailable') throw Error('invalid object store accepted');
+            await emit({storeStage:'cancel'});
+            clearButton.click();
+            await wait(() => el('feedback').textContent==='已取消。','clear store cancellation');
+            if ((await recordsOf(target)).records[0]?.key.text!=='1') throw Error('cancelled clear modified records');
+            await emit({storeStage:'confirm'});
+            clearButton.click();
+            result=await wait(async()=>{const state=await host('siteData.status');
+                return state.state==='ready'&&state.generation>target.generation&&state;},'clear store result');
+            if (result.mutation!=='cleared') throw Error('clear store failed '+JSON.stringify(result));
+            if (await host('siteData.clearObjectStore',target)!=='unavailable') throw Error('old clear snapshot accepted');
+            const afterCatalog = await inventory('indexedDB');
+            const afterQuery = {index:afterCatalog.indexedDB.entries.findIndex(db=>db.name==='moon-inventory'&&db.version===3),generation:result.generation};
+            const afterClear = await readSchema(afterQuery);
+            if (JSON.stringify(afterClear.stores)!==JSON.stringify(beforeClear.stores)) throw Error('store structure or indexes changed');
+            const cleared = await recordsOf({...afterQuery,revision:afterClear.revision,store:target.store});
+            const sibling = await recordsOf({...afterQuery,revision:afterClear.revision,store:afterClear.stores.findIndex(store=>store.name==='z-extra-1')});
+            if (cleared.state!=='ready'||cleared.records.length||sibling.state!=='ready'||sibling.records[0]?.value.text!=='"preserve sibling"')
+                throw Error('clear affected wrong records');
+            await wait(()=>el('feedback').textContent==='已清空所选存储。','clear store feedback');
+        ''' if database_write else ""
         database_contract = (
             'const dbIndex=databases.indexedDB.entries.findIndex(db=>db.name==="moon-inventory");'
             'const schemaQuery={index:dbIndex,generation:databases.generation};'
@@ -1511,6 +1548,7 @@ def run_win32(exe, base, root):
             'const listed=(await inventory("indexedDB")).indexedDB.entries;'
             'if(listed.some(db=>db.name==="moon-temporary-schema")||!listed.some(db=>db.name==="moon-inventory"&&db.version===3))'
             'throw Error("removed database was recreated or an existing version changed");'
+            + object_store_contract
         ) if database_schema else ""
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
@@ -2893,6 +2931,16 @@ def run_win32(exe, base, root):
                 signal = config.with_suffix(".signal")
                 signal.write_text('{"schemaReady":true}',encoding="utf-8")
                 signal.replace(config)
+            if database_write:
+                for stage,button in (("cancel",7),("confirm",6)):
+                    def object_store_dialog():
+                        result = read_settings(config)
+                        if result.get("error"):
+                            raise RuntimeError(f"IndexedDB clear: {result['error']}")
+                        return owned_window("#32770","清空对象仓库？") if result.get("storeStage")==stage else None
+                    question = wait_for(object_store_dialog,f"Object-store confirmation for {stage} did not open",15)
+                    user.PostMessageW(question,0x0111,button,0)
+                    wait_for(lambda: not user.IsWindow(question),"The object-store confirmation did not close")
             if cache_remove:
                 for stage,button in (("cancel",7),("confirm",6)):
                     def cache_dialog():
@@ -2954,6 +3002,8 @@ def run_win32(exe, base, root):
                 print("indexeddb_schema=ok store_and_index_limits=ok compound_key=ok index_flags=ok isolated_open=ok stale_database=ok no_recreation=ok",flush=True)
             if database_records:
                 print("indexeddb_records=ok primary_key_pages=ok preview_limit=ok literal_values=ok cyclic_and_binary=ok empty_store=ok stale_revision=ok",flush=True)
+            if database_write:
+                print("indexeddb_clear=ok native_cancel=ok store_only=ok indexes_preserved=ok stale_target_rejected=ok grant_required=ok",flush=True)
             if cache_remove:
                 print("site_cache_removal=ok native_cancel=ok named_cache_only=ok stale_generation=ok long_name_rejected=ok",flush=True)
             if "siteData.cookieDetails" in json.loads((site_data.parent / "plugin.json").read_text(encoding="utf-8"))["permissions"]:

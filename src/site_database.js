@@ -3,7 +3,10 @@
   const sameDocument = () => location.href === url && globalThis.__moonSiteDataRevision === String(expected.revision);
   let finished = false;
   function finish(state, data = {}) {
-    if (!finished && sameDocument()) reply(request + '\n' + JSON.stringify({ state, ...data }));
+    if (!finished && sameDocument()) {
+      const result = expected.clear ? { mutation: { ready: 'cleared', changed: 'conflict', unavailable: 'failed' }[state] } : { state, ...data };
+      reply(request + '\n' + JSON.stringify(result));
+    }
     finished = true;
   }
 
@@ -128,10 +131,30 @@
     };
   }
 
+  function clearStore(db, change) {
+    if (!db.objectStoreNames.contains(change.store)) { finish('changed'); return; }
+    if (Date.now() >= change.expires) { finish('unavailable'); return; }
+    const transaction = db.transaction(change.store, 'readwrite');
+    const abort = () => { try { transaction.abort(); } catch {} };
+    const deadline = setTimeout(abort, Math.max(0, change.expires - Date.now()));
+    transaction.onabort = () => { clearTimeout(deadline); finish('unavailable'); };
+    transaction.oncomplete = () => { clearTimeout(deadline); finish('ready'); };
+    try {
+      const store = transaction.objectStore(change.store);
+      // Recheck the document and deadline after any earlier writer releases this store.
+      const probe = store.getKey(0);
+      probe.onsuccess = () => {
+        if (!sameDocument() || Date.now() >= change.expires) { abort(); return; }
+        try { store.clear(); } catch { abort(); }
+      };
+    } catch { abort(); }
+  }
+
   if (!sameDocument()) return;
   indexedDB.databases().then(databases => {
     if (!sameDocument()) return;
     if (!databases.some(db => db.name === expected.name && db.version === expected.version)) { finish('changed'); return; }
+    if (expected.clear && Date.now() >= expected.clear.expires) { finish('unavailable'); return; }
     const open = indexedDB.open(expected.name);
     open.onupgradeneeded = () => { open.transaction.abort(); finish('changed'); };
     open.onerror = () => finish('unavailable');
@@ -140,7 +163,8 @@
       try {
         if (!sameDocument()) return;
         if (db.version !== expected.version) { finish('changed'); return; }
-        if (expected.records) inspectRecords(db, expected.records);
+        if (expected.clear) clearStore(db, expected.clear);
+        else if (expected.records) inspectRecords(db, expected.records);
         else finish('ready', inspectStructure(db));
       } catch {
         finish('unavailable');

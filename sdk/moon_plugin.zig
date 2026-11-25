@@ -41,6 +41,7 @@ pub const Permission = enum {
     @"page.reader",
     @"siteData.cacheWrite",
     @"siteData.records",
+    @"siteData.databaseWrite",
     @"window.appearance",
     @"siteSettings.zoom",
     @"downloads.preferences",
@@ -243,6 +244,7 @@ pub const SiteDataStatus = struct {
     cookieDetails: bool = false,
     cacheWritable: bool = false,
     recordPreview: bool = false,
+    databaseWritable: bool = false,
 };
 pub const SiteDataEntry = struct { id: u32, name: []const u8, length: usize, shortened: bool };
 pub const SiteDataPage = struct { available: bool, entries: []const SiteDataEntry, more: bool, generation: u64 };
@@ -283,6 +285,7 @@ pub const SiteDatabaseDetails = struct {
 pub const SiteDatabaseRecordsQuery = struct {
     index: u32, generation: u64, revision: u64, store: u32, offset: u16 = 0, refresh: bool = false,
 };
+pub const SiteDatabaseStoreTarget = struct { index: u32, generation: u64, revision: u64, store: u32 };
 pub const SiteRecordPreview = struct { text: []const u8, shortened: bool };
 pub const SiteRecord = struct { key: SiteRecordPreview, value: SiteRecordPreview };
 pub const SiteDatabaseRecords = struct {
@@ -387,6 +390,7 @@ pub const Method = enum {
     @"siteData.catalog",
     @"siteData.database",
     @"siteData.databaseRecords",
+    @"siteData.clearObjectStore",
     @"siteData.value",
     @"siteData.cookieDetails",
     @"siteData.cookieValue",

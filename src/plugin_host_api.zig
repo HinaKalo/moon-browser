@@ -83,6 +83,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"siteData.update", .@"siteData.create", .@"siteData.clear" => .@"siteData.write",
         .@"siteData.cacheRemove" => .@"siteData.cacheWrite",
         .@"siteData.databaseRecords" => .@"siteData.records",
+        .@"siteData.clearObjectStore" => .@"siteData.databaseWrite",
         .@"reading.find", .@"reading.zoom" => .@"page.reading",
         .@"reading.open", .@"reading.article", .@"reading.read", .@"reading.returnToPage" => .@"page.reader",
         .@"window.toggleFullscreen" => .@"window.fullscreen",
@@ -212,7 +213,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => {},
         .@"siteData.status", .@"siteData.list", .@"siteData.catalog", .@"siteData.value", .@"siteData.refresh", .@"siteData.openInspector", .@"siteData.update" => {},
         .@"siteData.create", .@"siteData.clear", .@"siteData.cookieDetails", .@"siteData.cookieValue", .@"siteData.cacheRemove", .@"siteData.database" => {},
-        .@"siteData.databaseRecords" => {},
+        .@"siteData.databaseRecords", .@"siteData.clearObjectStore" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
@@ -651,10 +652,12 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         },
         .@"siteData.status" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
-            return sdk.result(output,id,site_data.status(context.target_tab_id,context.plugin_id,
+            var state = site_data.status(context.target_tab_id,context.plugin_id,
                 context.grants.contains(.@"siteData.write"),
                 !native.moon_shell_private() and context.grants.contains(.@"siteData.cookieDetails"),
-                context.grants.contains(.@"siteData.cacheWrite"),context.grants.contains(.@"siteData.records")));
+                context.grants.contains(.@"siteData.cacheWrite"),context.grants.contains(.@"siteData.records"));
+            state.databaseWritable = state.state!=.idle and context.grants.contains(.@"siteData.databaseWrite");
+            return sdk.result(output,id,state);
         },
         .@"siteData.list" => {
             if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
@@ -715,6 +718,13 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             if (!native.moon_site_database_records(context.target_tab_id,owner.ptr,query.index,query.generation,
                 query.revision,query.store,query.offset,query.refresh)) return sdk.failure(output,id,.NotFound);
             return sdk.result(output,id,site_data.databaseRecords(query));
+        },
+        .@"siteData.clearObjectStore" => {
+            if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);
+            const target = decode(sdk.SiteDatabaseStoreTarget,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
+            const outcome = native.moon_site_database_clear(context.target_tab_id,owner.ptr,target.index,target.generation,target.revision,target.store);
+            return sdk.result(output,id,std.enums.fromInt(sdk.SiteDataClearStart,outcome) orelse .unavailable);
         },
         .@"siteData.update" => {
             if (!context.from_page or !context.grants.contains(.@"siteData.read")) return sdk.failure(output,id,.PermissionDenied);

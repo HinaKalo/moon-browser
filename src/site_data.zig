@@ -34,6 +34,7 @@ const RecordsRequest = struct {
     deadline: ?u64 = null,
     result: ?std.json.Parsed(RecordsSnapshot) = null,
 };
+const AsyncMutation = union(enum) { cache, database: u64 };
 const allocator = std.heap.page_allocator;
 var captured: ?std.json.Parsed(Snapshot) = null;
 var cookies: ?cookie_store.Snapshot = null;
@@ -49,7 +50,7 @@ var sequence: u64 = 0;
 var received: sdk.SiteDataState = .idle;
 var failure: ?sdk.SiteDataFailure = null;
 var mutation: ?sdk.SiteDataMutation = null;
-var cache_pending = false;
+var async_mutation: ?AsyncMutation = null;
 var deadline: u64 = 0;
 var owner: [96]u8 = undefined;
 var owner_len: usize = 0;
@@ -57,7 +58,7 @@ var origin: [4096]u8 = undefined;
 var origin_len: usize = 0;
 
 fn dropValues() void {
-    cache_pending = false;
+    async_mutation = null;
     if (captured) |result| result.deinit();
     captured = null;
     dropCookies();
@@ -153,7 +154,7 @@ fn failedRequest() void {
 }
 
 pub fn request(view: *native.MoonView) bool {
-    if (cache_pending) return false;
+    if (async_mutation != null) return false;
     startRequest();
     if (!native.moon_engine_inspect_site(view,sequence)) failedRequest();
     return received == .pending;
@@ -205,14 +206,22 @@ pub fn removeCache(view: *native.MoonView, tab: u64, id: []const u8, target: sdk
     const payload = allocator.dupeSentinel(u8,bytes,0) catch return false;
     defer allocator.free(payload);
     startRequest();
-    cache_pending = native.moon_engine_remove_site_cache(view,sequence,payload.ptr);
-    if (!cache_pending) failedRequest();
-    return cache_pending;
+    if (!native.moon_engine_remove_site_cache(view,sequence,payload.ptr)) {
+        failedRequest();
+        return false;
+    }
+    async_mutation = .cache;
+    return true;
 }
 
 pub fn completeCache(view: *native.MoonView, tab: u64, token: u64, json: []const u8) void {
-    if (!cache_pending or tab != source or token != sequence or received != .pending) return;
-    cache_pending = false;
+    const pending = async_mutation orelse return;
+    if (std.meta.activeTag(pending)!=.cache or tab!=source or token!=sequence) return;
+    completeAsyncMutation(view,json);
+}
+
+fn completeAsyncMutation(view: *native.MoonView, json: []const u8) void {
+    async_mutation = null;
     const result = std.json.parseFromSlice(struct { mutation: sdk.SiteDataMutation },allocator,json,.{}) catch {
         failedRequest();
         return;
@@ -290,7 +299,7 @@ pub fn tick(now: u64) void {
         }
     }
     if (received == .pending and now >= deadline) {
-        cache_pending = false;
+        async_mutation = null;
         received=.unavailable;
         failure=.timedOut;
     } else if (received == .ready and now >= deadline) {
@@ -358,15 +367,26 @@ pub fn requestDatabase(view: *native.MoonView, tab: u64, id: []const u8, query: 
     return true;
 }
 
-fn inspectDatabase(view: *native.MoonView, query: anytype) bool {
-    const bytes = std.json.Stringify.valueAlloc(allocator,query,.{}) catch return false;
+fn databasePayload(query: anytype) ![:0]u8 {
+    const bytes = try std.json.Stringify.valueAlloc(allocator,query,.{});
     defer allocator.free(bytes);
-    const payload = std.fmt.allocPrintSentinel(allocator,"{s}\n{s}",.{bytes,@embedFile("site_database.js")},0) catch return false;
+    return std.fmt.allocPrintSentinel(allocator,"{s}\n{s}",.{bytes,@embedFile("site_database.js")},0);
+}
+
+fn inspectDatabase(view: *native.MoonView, query: anytype) bool {
+    const payload = databasePayload(query) catch return false;
     defer allocator.free(payload);
     return native.moon_engine_inspect_database(view,database_serial,payload.ptr);
 }
 
-pub fn completeDatabase(tab: u64, token: u64, json: []const u8) void {
+pub fn completeDatabase(view: *native.MoonView, tab: u64, token: u64, json: []const u8) void {
+    if (async_mutation) |pending| switch (pending) {
+        .database => |request_id| if (tab==source and request_id==token) {
+            completeAsyncMutation(view,json);
+            return;
+        },
+        .cache => {},
+    };
     if (tab!=source or received!=.ready or json.len>20*1024) return;
     if (record_page) |*preview| {
         if (preview.token==token and preview.deadline!=null) {
@@ -404,15 +424,39 @@ pub fn databaseDetails(tab: u64, id: []const u8, query: sdk.SiteDatabaseQuery) ?
     return result;
 }
 
+const ObjectStore = struct { database: sdk.SiteDatabase, name: []const u8 };
+
+pub fn objectStore(tab: u64, id: []const u8, target: sdk.SiteDatabaseStoreTarget) ?ObjectStore {
+    const entry = selectedDatabase(tab,id,.{ .index=target.index,.generation=target.generation }) orelse return null;
+    const inspection = database orelse return null;
+    if (inspection.index!=target.index or inspection.token!=target.revision) return null;
+    const parsed = inspection.result orelse return null;
+    if (parsed.value.state!=.ready or target.store>=parsed.value.stores.len) return null;
+    const store = parsed.value.stores[target.store];
+    if (store.shortened) return null;
+    return .{ .database=entry,.name=store.name };
+}
+
+pub fn clearObjectStore(view: *native.MoonView, tab: u64, id: []const u8, target: sdk.SiteDatabaseStoreTarget) bool {
+    const store = objectStore(tab,id,target) orelse return false;
+    const payload = databasePayload(.{
+        .name=store.database.name,.version=store.database.version.?,.revision=sequence,
+        .clear=.{ .store=store.name,.expires=native.moon_wall_ms()+3500 },
+    }) catch return false;
+    defer allocator.free(payload);
+    database_serial += 1;
+    startRequest();
+    if (!native.moon_engine_inspect_database(view,database_serial,payload.ptr)) {
+        failedRequest();
+        return false;
+    }
+    async_mutation = .{ .database=database_serial };
+    return true;
+}
+
 pub fn requestRecords(view: *native.MoonView, tab: u64, id: []const u8, query: sdk.SiteDatabaseRecordsQuery) bool {
     if (query.offset>=sdk.site_record_preview_limit or query.offset%sdk.site_record_page_size!=0) return false;
-    const entry = selectedDatabase(tab,id,.{ .index=query.index,.generation=query.generation }) orelse return false;
-    const inspection = database orelse return false;
-    if (inspection.index!=query.index or inspection.token!=query.revision) return false;
-    const parsed = inspection.result orelse return false;
-    if (parsed.value.state!=.ready or query.store>=parsed.value.stores.len) return false;
-    const store = parsed.value.stores[query.store];
-    if (store.shortened) return false;
+    const store = objectStore(tab,id,.{ .index=query.index,.generation=query.generation,.revision=query.revision,.store=query.store }) orelse return false;
     if (record_page) |preview| {
         if (preview.deadline!=null or (preview.store==query.store and preview.offset==query.offset and !query.refresh)) return true;
     }
@@ -420,7 +464,7 @@ pub fn requestRecords(view: *native.MoonView, tab: u64, id: []const u8, query: s
     database_serial += 1;
     record_page = .{ .store=query.store,.offset=query.offset,.token=database_serial };
     if (inspectDatabase(view,.{
-        .name=entry.name,.version=entry.version.?,.revision=sequence,
+        .name=store.database.name,.version=store.database.version.?,.revision=sequence,
         .records=.{ .store=store.name,.offset=query.offset,.size=sdk.site_record_page_size,.limit=sdk.site_record_preview_limit },
     })) record_page.?.deadline = native.moon_clock()+5000;
     return true;

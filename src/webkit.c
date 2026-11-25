@@ -768,7 +768,7 @@ static void site_snapshot_received(WKPageRef page,WKStringRef name,WKTypeRef bod
         if (end!=response && *end=='\n') {
             if (reader) moon_reader_result(view->token,request,end+1);
             else if (cache) moon_site_cache_result(view,view->token,request,end+1);
-            else if (database) moon_site_database_result(view->token,request,end+1);
+            else if (database) moon_site_database_result(view,view->token,request,end+1);
             else moon_site_data_result(view->token,request,end+1,catalog);
         }
     }

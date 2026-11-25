@@ -254,7 +254,9 @@ bool moon_engine_inspect_database(MoonView *view, uint64_t request, const char *
 bool moon_site_data_database(uint64_t panel, const char *owner, unsigned index, uint64_t generation, bool refresh);
 bool moon_site_database_records(uint64_t panel, const char *owner, unsigned index, uint64_t generation,
     uint64_t revision, unsigned store, uint16_t offset, bool refresh);
-void moon_site_database_result(uint64_t tab, uint64_t request, const char *result);
+void moon_site_database_result(MoonView *view, uint64_t tab, uint64_t request, const char *result);
+int moon_site_database_clear(uint64_t panel, const char *owner, unsigned index, uint64_t generation,
+    uint64_t revision, unsigned store);
 void moon_site_cache_result(MoonView *view, uint64_t tab, uint64_t generation, const char *result);
 int moon_site_cache_remove(uint64_t panel, const char *owner, unsigned index, uint64_t generation);
 bool moon_site_data_action(uint64_t panel, const char *id, int action);

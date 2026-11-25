@@ -15,7 +15,7 @@
     "entry": { "type": "string", "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*\\.[eE][xX][eE]$" },
     "permissions": {
       "type": "array",
-      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage", "network.filter", "bookmarks.manage", "downloads.manage", "siteData.read", "page.reading", "tabs.closed.manage", "privacy.clear", "taskManager.manage", "ui.commands", "tabs.organize", "privacy.privateWindow", "tabs.manage", "search.manage", "siteData.write", "tabs.session.manage", "bookmarks.transfer", "page.source", "popups.manage", "window.fullscreen", "page.save", "tabs.groups", "browser.defaultApp", "siteData.cookieDetails", "siteSettings.autoplay", "siteSettings.sound", "page.reader", "siteData.cacheWrite", "siteData.records", "window.appearance", "siteSettings.zoom", "downloads.preferences", "downloads.open"] }
+      "items": { "enum": ["tabs.read", "lua.scripts.manage", "page.inspect", "history.manage", "network.filter", "bookmarks.manage", "downloads.manage", "siteData.read", "page.reading", "tabs.closed.manage", "privacy.clear", "taskManager.manage", "ui.commands", "tabs.organize", "privacy.privateWindow", "tabs.manage", "search.manage", "siteData.write", "tabs.session.manage", "bookmarks.transfer", "page.source", "popups.manage", "window.fullscreen", "page.save", "tabs.groups", "browser.defaultApp", "siteData.cookieDetails", "siteSettings.autoplay", "siteSettings.sound", "page.reader", "siteData.cacheWrite", "siteData.records", "siteData.databaseWrite", "window.appearance", "siteSettings.zoom", "downloads.preferences", "downloads.open"] }
     },
     "events": {
       "type": "array",
