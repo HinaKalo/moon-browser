@@ -10,6 +10,7 @@ const StorageSnapshot = struct { entries: []Entry, total: u32, storageCount: u32
 const StorageRequest = struct {
     group: sdk.SiteDataGroup,
     offset: u32,
+    order: sdk.SiteStorageOrder,
     token: u64,
     term: [sdk.site_storage_query_limit]u8 = undefined,
     term_len: usize,
@@ -660,21 +661,21 @@ pub fn requestStoragePage(view: *native.MoonView, tab: u64, id: []const u8, quer
     if (!canMutate(tab,id,query.group,query.generation) or query.query.len>sdk.site_storage_query_limit) return false;
     if (!query.refresh) {
         if (storage_page) |*page| {
-            if (page.group==query.group and page.offset==query.offset and
+            if (page.group==query.group and page.offset==query.offset and page.order==query.order and
                 std.mem.eql(u8,page.term[0..page.term_len],query.query)) return true;
         }
     }
     var generation: [20]u8 = undefined;
     const bytes = std.json.Stringify.valueAlloc(allocator,.{
         .generation=std.fmt.bufPrint(&generation,"{d}",.{sequence}) catch unreachable,
-        .group=query.group,.query=query.query,.offset=query.offset,
+        .group=query.group,.query=query.query,.offset=query.offset,.order=query.order,
     },.{}) catch return false;
     defer allocator.free(bytes);
     const payload = allocator.dupeSentinel(u8,bytes,0) catch return false;
     defer allocator.free(payload);
     dropStoragePage();
     storage_serial+=1;
-    storage_page=.{ .group=query.group,.offset=query.offset,.token=storage_serial,
+    storage_page=.{ .group=query.group,.offset=query.offset,.order=query.order,.token=storage_serial,
         .term_len=query.query.len,.deadline=native.moon_clock()+5000 };
     @memcpy(storage_page.?.term[0..query.query.len],query.query);
     if (!native.moon_engine_inspect_storage_page(view,storage_serial,payload.ptr))

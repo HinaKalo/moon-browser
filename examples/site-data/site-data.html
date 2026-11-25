@@ -51,7 +51,7 @@
   #feedback:empty { display:none; }
   .pager:not([hidden]) { display:flex; justify-content:flex-end; flex-wrap:wrap; align-items:center; gap:8px; margin-top:12px; }
   #storage-range { color:var(--muted); }
-  #cookie-order:not([hidden]) { display:flex; align-items:center; gap:8px; margin-top:10px; }
+  .data-order:not([hidden]) { display:flex; align-items:center; gap:8px; margin-top:10px; }
 </style>
 <main>
   <div class="heading">
@@ -73,13 +73,21 @@
       <button id="create">新增条目</button> <button id="clear-storage">清空此类</button>
     </div>
   </div>
-  <div id="cookie-order" hidden>
+  <div class="data-order" id="cookie-order" hidden>
     <label for="cookie-sort">排序</label>
     <select id="cookie-sort">
       <option value="name">名称</option><option value="domain">域</option><option value="path">路径</option>
       <option value="expires">到期时间</option><option value="size">大小</option>
     </select>
     <button id="cookie-direction" aria-label="降序排列 Cookie" aria-pressed="false">↑ 升序</button>
+  </div>
+  <div class="data-order" id="storage-order-controls" hidden>
+    <label for="storage-order">排序</label>
+    <select id="storage-order">
+      <option value="native">存储顺序</option>
+      <option value="nameAsc">名称升序</option>
+      <option value="nameDesc">名称降序</option>
+    </select>
   </div>
   <p id="status" role="status">正在连接浏览器…</p>
   <p id="feedback" role="status"></p>
@@ -115,6 +123,7 @@
   const newKey=el('key'), storageActions=el('storage-actions'), clearStorage=el('clear-storage');
   const clearCookies=el('clear-cookies');
   const cookieOrder=el('cookie-order'), cookieSort=el('cookie-sort'), cookieDirection=el('cookie-direction');
+  const storageOrder=el('storage-order'), storageOrderControls=el('storage-order-controls');
   let cookieDescending=false;
   const storagePager=el('storage-pager'), storagePrev=el('storage-prev'), storageNext=el('storage-next');
   let seq=0, group='cookies', selected, page, catalog, request=0, latest, refreshing=false, writable=false, draft;
@@ -142,12 +151,12 @@
     editor.hidden=true;
     if (refocus && previous?.button.isConnected) previous.button.focus();
   }
-  function clear(keepCookieOrder=false) {
+  function clear(keepOrder=false) {
     rows.replaceChildren();
     rows.hidden=storagePager.hidden=true;
     page=catalog=databasePreview=recordView=undefined;
     storageActions.hidden=clearCookies.hidden=true;
-    if (!keepCookieOrder) cookieOrder.hidden=true;
+    if (!keepOrder) cookieOrder.hidden=storageOrderControls.hidden=true;
     closeEditor();
   }
   function lengthHint() {
@@ -233,6 +242,7 @@
     storageActions.hidden=!(writable && page?.available && isDOMStorage());
     clearCookies.hidden=group!=='cookies' || selected!=='ready' || !cookieClear || !page;
     cookieOrder.hidden=group!=='cookies' || !page?.cookieDetails;
+    storageOrderControls.hidden=selected!=='ready' || !isDOMStorage();
     el('create').disabled=clearing;
     clearStorage.disabled=clearing || !page?.storageCount;
   }
@@ -614,7 +624,7 @@
       (group==='indexedDB' ? '可在开发者工具的 Storage 面板继续检查。' : '');
   }
   async function loadStorage(ticket) {
-    const query={group,generation:storageGeneration,query:search.value.trim(),offset:storageOffset};
+    const query={group,generation:storageGeneration,query:search.value.trim(),offset:storageOffset,order:storageOrder.value};
     const focus=document.activeElement;
     rows.replaceChildren();
     rows.hidden=true;
@@ -788,19 +798,19 @@
       searchTimer=setTimeout(load,150);
     } else if (page || catalog) render();
   };
-  function reorderCookies() {
+  function reorderEntries() {
     clearTimeout(searchTimer);
     storageOffset=0;
     cookieTrail.length=0;
     clear(true);
     load();
   }
-  cookieSort.onchange=reorderCookies;
+  cookieSort.onchange=storageOrder.onchange=reorderEntries;
   cookieDirection.onclick=() => {
     cookieDescending=!cookieDescending;
     cookieDirection.setAttribute('aria-pressed',String(cookieDescending));
     cookieDirection.textContent=cookieDescending?'↓ 降序':'↑ 升序';
-    reorderCookies();
+    reorderEntries();
   };
   el('refresh').onclick=async () => {
     try { if (!await host('siteData.refresh')) throw Error(); await update(); }

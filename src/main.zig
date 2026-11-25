@@ -3126,12 +3126,12 @@ fn sitePanelView(panel: u64, owner: []const u8, permission: sdk.Permission) ?*na
 }
 
 export fn moon_site_storage_page(panel: u64, id: [*c]const u8, session: bool, generation: u64,
-    query: [*c]const u8, length: usize, offset: u32, refresh: bool) bool {
+    query: [*c]const u8, length: usize, offset: u32, order: c_int, refresh: bool) bool {
     const owner = slice(id);
     const view = sitePanelView(panel,owner,.@"siteData.read") orelse return false;
     return site_data.requestStoragePage(view,panel,owner,.{
         .group=if (session) .session else .local,.generation=generation,.query=query[0..length],
-        .offset=offset,.refresh=refresh,
+        .offset=offset,.order=std.enums.fromInt(sdk.SiteStorageOrder,order) orelse return false,.refresh=refresh,
     });
 }
 

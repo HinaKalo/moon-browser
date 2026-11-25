@@ -2210,10 +2210,33 @@ def run_win32(exe, base, root):
             + remove_record_contract
             + object_store_contract
         ) if database_schema else ""
+        storage_sort_contract = (
+            '{const sortStorage=order=>{el("storage-order").value=order;el("storage-order").dispatchEvent(new Event("change"));};'
+            'if(el("storage-order-controls").hidden)throw Error("storage sort controls hidden");'
+            'searchStorage("BULK-");await wait(()=>page?.total===40&&page.offset===0,"unsorted storage page");'
+            'const prior=targetOnPage(page.entries[0].id), sorted=Array.from({length:40},(_,i)=>"bulk-"+i).sort();'
+            'const matches=(expected,offset)=>page?.offset===offset&&page.total===40&&'
+            'JSON.stringify(page.entries.map(row=>row.name))===JSON.stringify(expected);'
+            'sortStorage("nameDesc");await wait(()=>matches(sorted.slice(8).reverse(),0),"descending first page");'
+            'if(!await unavailable(host("siteData.value",prior))||'
+            '!await unavailable(host("siteData.update",{...prior,value:"stale after sort"})))throw Error("sort kept old page");'
+            'if(el("results").querySelector("pre")?.textContent)throw Error("sort revealed a value");'
+            'el("storage-next").click();await wait(()=>matches(sorted.slice(0,8).reverse(),32),"descending second page");'
+            'sortStorage("nameAsc");await wait(()=>matches(sorted.slice(0,32),0),"ascending resets to first page");'
+            'el("storage-next").click();await wait(()=>matches(sorted.slice(32),32),"ascending second page");'
+            'searchStorage("");document.querySelector("[data-group=local]").click();'
+            'await wait(()=>rowFor("moon-local")&&rowFor("月亮"),"local storage keys");'
+            'sortStorage("nameDesc");await wait(()=>page?.entries[0]?.name==="月亮","descending local storage");'
+            'sortStorage("nameAsc");await wait(()=>page?.entries[0]?.name==="moon-local","ascending local storage");'
+            'sortStorage("native");await wait(()=>page?.entries.length===2,"native local storage");'
+            'document.querySelector("[data-group=session]").click();'
+            'await wait(()=>page?.total===42&&page.offset===0,"restored session storage");}'
+        ) if 'id="storage-order"' in page else ""
         storage_paging_contract = (
             'const searchStorage=term=>{el("search").value=term;el("search").dispatchEvent(new Event("input"));};'
             'const targetOnPage=id=>({group:"session",id,generation:page.generation,pageRevision:page.pageRevision});'
             'const unavailable=request=>request.then(()=>false,error=>error.message==="NOT_FOUND");'
+            + storage_sort_contract +
             'searchStorage("length");'
             'const reserved=await wait(()=>page?.total===1&&rowFor("length"),"storage name shared with the DOM API");'
             'button(reserved,"显示值").click();'
@@ -4018,6 +4041,8 @@ def run_win32(exe, base, root):
                 print("site_storage_create=ok duplicate_conflict=ok full_group_clear=ok other_group_kept=ok cancel=ok stale_confirmation=ok",flush=True)
                 if 'id="storage-pager"' in (site_data.parent / "site-data.html").read_text(encoding="utf-8"):
                     print("site_storage_paging=ok full_key_search=ok page_edit=ok stale_page_rejected=ok filtered_clear=ok",flush=True)
+                if 'id="storage-order"' in (site_data.parent / "site-data.html").read_text(encoding="utf-8"):
+                    print("site_storage_sort=ok local=ok session_ascending=ok session_descending=ok sort_invalidates_page=ok",flush=True)
         if page_source.exists():
             target = base + "/page/source-contract"
             set_control(edit,target)

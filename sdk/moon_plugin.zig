@@ -372,8 +372,10 @@ pub const SiteStorageQuery = struct {
     generation: u64,
     query: []const u8 = "",
     offset: u32 = 0,
+    order: SiteStorageOrder = .native,
     refresh: bool = false,
 };
+pub const SiteStorageOrder = enum(c_int) { native, nameAsc, nameDesc };
 pub const SiteStoragePage = struct {
     state: enum { pending, ready, unavailable },
     generation: u64,

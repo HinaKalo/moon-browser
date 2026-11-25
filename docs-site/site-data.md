@@ -6,6 +6,8 @@
 
 从 0.1.0-preview.82 起，Local Storage 和 Session Storage 每页显示 32 条。筛选按完整键名匹配，覆盖此类存储中的全部条目。长条目会标记截断。普通窗口的 Cookie 列表可按名称、域或路径搜索全部与原网页匹配的 Cookie，每页最多 32 条。单条值最多预览 2048 UTF-8 字节。Local Storage 和 Session Storage 的完整条目支持编辑与删除。编辑值最多 1024 UTF-8 字节。删除需要在面板内确认。网页在操作前已改变条目时，面板会刷新并保留网页的最新值。
 
+从 0.1.0-preview.94 起，Local Storage 和 Session Storage 可选内核顺序、名称升序或名称降序。排序应用于全部筛选结果，切换顺序时回到第一页。
+
 从 0.1.0-preview.84 起，普通窗口的 Cookie 列表可删除选中的网页可写 Cookie。确认框会显示名称、域和路径。同名、不同路径的 Cookie 可分别处理。HttpOnly Cookie 可按需查看，整站清除时一并移除。
 
 从 0.1.0-preview.93 起，普通窗口可按名称、域、路径、到期时间或大小排序。支持升序和降序，排序覆盖全部筛选结果，再按页显示。按到期时间排序时，会话 Cookie 始终排在有到期时间的条目之后。
@@ -34,7 +36,7 @@
 
 面板通过 `moonHost` 请求 `siteData.status`、`siteData.list` 和 `siteData.value`。列表只返回名称和长度。读取值需要同时传入类别、条目 ID 和列表返回的快照代数 `generation`。EXE 负责发起查看命令，查看结果由绑定面板读取。
 
-`siteData.storagePage({ group, generation, query?, offset?, refresh? })` 需要 `siteData.read`，且仅支持 `local` 和 `session`。按完整键名做不区分大小写的匹配。`query` 默认为空，最多 512 UTF-8 字节，`offset` 默认为 0。返回 `{ state, generation, pageRevision, offset, entries, total, storageCount }`。`total` 为匹配数，`storageCount` 为当前存储中的键数。通过相同参数轮询 `pending`，直到 `ready` 或 `unavailable`。主动重新读取可传 `refresh: true`，轮询时省略。使用 `offset + entries.length` 翻页。读取或修改此接口返回的条目时，必须同时提交该页的 `pageRevision`。新查询、翻页、刷新、切走面板和原网页导航均会使旧页失效。
+`siteData.storagePage({ group, generation, query?, offset?, order?, refresh? })` 需要 `siteData.read`，且仅支持 `local` 和 `session`。按完整键名做不区分大小写的匹配。`query` 默认为空，最多 512 UTF-8 字节，`offset` 默认为 0。`order` 可为 `native`（默认，内核枚举顺序）、`nameAsc` 或 `nameDesc`。名称按完整键名的 UTF-16 码元排序，先排序再分页。改变顺序会使上一页失效。返回 `{ state, generation, pageRevision, offset, entries, total, storageCount }`。`total` 为匹配数，`storageCount` 为当前存储中的键数。通过相同参数轮询 `pending`，直到 `ready` 或 `unavailable`。主动重新读取可传 `refresh: true`，轮询时省略。使用 `offset + entries.length` 翻页。读取或修改此接口返回的条目时，必须同时提交该页的 `pageRevision`。新查询、翻页、刷新、切走面板和原网页导航均会使旧页失效。
 
 Cookie 属性和 HttpOnly 读取需要额外的 `siteData.cookieDetails` 权限。`siteData.status` 的 `cookieDetails` 字段表示该窗口允许尝试读取。当前活动且已绑定的面板调用 `siteData.cookieDetails({ generation })`，返回 `{ available, entries, more, generation }`。条目包含 `id`、`name`、`domain`、`path`、`expiresAt`、`httpOnly`、`secure`、`length`、`shortened` 和 `metadataShortened`。`expiresAt` 是 Unix 毫秒时间戳，会话 Cookie 传 `null`。`available: false` 时可调用 `siteData.list({ group: "cookies" })` 显示网页可读的 Cookie。通过 `siteData.cookieValue({ id, generation })` 单独读取一个预览值。面板切换到其他标签、网页导航、权限撤销或 Cookie 更新后，旧条目无法继续读取。
 

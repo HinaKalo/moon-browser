@@ -315,7 +315,7 @@ int moon_site_clear_cookies(uint64_t panel, const char *owner, uint64_t generati
 void moon_site_cookies_cleared(uint64_t request);
 bool moon_engine_inspect_storage_page(MoonView *view, uint64_t request, const char *query);
 bool moon_site_storage_page(uint64_t panel, const char *owner, bool session, uint64_t generation,
-    const char *query, size_t length, uint32_t offset, bool refresh);
+    const char *query, size_t length, uint32_t offset, int order, bool refresh);
 void moon_site_storage_page_result(uint64_t tab, uint64_t request, const char *result);
 bool moon_engine_inspect_database(MoonView *view, uint64_t request, const char *query);
 bool moon_site_data_database(uint64_t panel, const char *owner, unsigned index, uint64_t generation, bool refresh);

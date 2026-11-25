@@ -859,7 +859,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
                 !std.unicode.utf8ValidateSlice(query.query)) return sdk.failure(output,id,.InvalidParams);
             const owner = try allocator.dupeSentinel(u8,context.plugin_id,0);
             if (!native.moon_site_storage_page(context.target_tab_id,owner.ptr,query.group==.session,query.generation,
-                query.query.ptr,query.query.len,query.offset,query.refresh)) return sdk.failure(output,id,.NotFound);
+                query.query.ptr,query.query.len,query.offset,@intFromEnum(query.order),query.refresh)) return sdk.failure(output,id,.NotFound);
             var entries: [sdk.site_storage_page_size]sdk.SiteDataEntry = undefined;
             return sdk.result(output,id,site_data.storagePage(query,&entries));
         },
