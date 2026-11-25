@@ -53,7 +53,7 @@ extern void WKWebsitePoliciesSetAutoplayPolicy(WKWebsitePoliciesRef, enum WKWebs
     X(WKRelease) X(WKGetTypeID) X(WKSessionStateGetTypeID) X(WKSessionStateCopyData) X(WKDataGetSize) \
     X(WKStringCreateWithUTF8CString) X(WKStringGetUTF8CString) X(WKStringIsEqualToUTF8CString) \
     X(WKURLCreateWithUTF8CString) X(WKURLCopyString) X(WKURLCopyScheme) X(WKURLRequestCopyURL) \
-    X(WKURLRequestCopyHTTPMethod) X(WKURLResponseIsAttachment) X(WKURLResponseGetExpectedContentLength) \
+    X(WKURLRequestCopyHTTPMethod) X(WKURLResponseIsAttachment) X(WKURLResponseGetExpectedContentLength) X(WKURLResponseHTTPStatusCode) X(WKURLResponseCopyURL) \
     X(WKContextConfigurationCreate) X(WKContextConfigurationSetPrewarmsProcessesAutomatically) \
     X(WKContextConfigurationSetUsesWebProcessCache) X(WKContextConfigurationSetAlwaysKeepAndReuseSwappedProcesses) \
     X(WKContextCreateWithConfiguration) X(WKContextSetCacheModel) X(WKContextSetDownloadClient) \
@@ -99,7 +99,7 @@ extern void WKWebsitePoliciesSetAutoplayPolicy(WKWebsitePoliciesRef, enum WKWebs
     X(WKNavigationResponseCopyResponse) X(WKNavigationResponseCanShowMIMEType) \
     X(WKFramePolicyListenerUse) X(WKFramePolicyListenerIgnore) X(WKFramePolicyListenerDownload) \
     X(WKFramePolicyListenerUseWithPolicies) X(WKWebsitePoliciesCreate) X(WKWebsitePoliciesSetAutoplayPolicy) \
-    X(WKErrorCopyLocalizedDescription) X(WKDownloadGetOriginatingPage) X(WKDownloadCancel) \
+    X(WKErrorCopyLocalizedDescription) X(WKDownloadGetOriginatingPage) X(WKDownloadCopyRequest) X(WKDownloadCancel) \
     X(WKPageListenForLayoutMilestones) X(WKPageCallAfterNextPresentationUpdate)
 
 static struct {
@@ -160,6 +160,8 @@ typedef struct {
     wchar_t *path;
 } DownloadSlot;
 static DownloadSlot downloads[64];
+typedef enum { RETRY_LOADING, RETRY_CONVERTING, RETRY_TRANSFERRING, RETRY_DONE, RETRY_FAILED } RetryState;
+static struct { MoonView *view; uint32_t id; uint64_t deadline; RetryState state; } download_retry;
 
 static void release(WKTypeRef ref) { if (ref) wk.WKRelease(ref); }
 static void find_succeeded(WKPageRef page, WKStringRef string, unsigned matches, const void *client) {
@@ -207,6 +209,16 @@ static bool safe_method(WKURLRequestRef request) {
     release(method);
     return safe;
 }
+static bool copy_retry_url(WKURLRef url,char target[4096]) {
+    target[0]=0;
+    WKStringRef text=url ? wk.WKURLCopyString(url) : NULL;
+    release(url);
+    const bool valid=text && wk.WKStringGetUTF8CString(text,target,4096)>1 &&
+        wk.WKStringIsEqualToUTF8CString(text,target) && moon_download_source_allowed(target);
+    release(text);
+    if (!valid) target[0]=0;
+    return valid;
+}
 static WKWebsitePoliciesRef media_policies(MoonView *view, WKNavigationActionRef action, WKURLRequestRef request) {
     const bool autoplay=moon_autoplay_rules_active(), sound=moon_site_sound_rules_active();
     if (!request || (!autoplay && !sound)) return NULL;
@@ -235,6 +247,16 @@ static void navigation_action(WKPageRef page, WKNavigationActionRef action, WKFr
                               WKTypeRef user, const void *client) {
     WKURLRequestRef request = wk.WKNavigationActionCopyRequest(action);
     MoonView *view = (MoonView *)client;
+    if (view==download_retry.view) {
+        char url[4096];
+        if (safe_method(request) && copy_retry_url(wk.WKURLRequestCopyURL(request),url)) wk.WKFramePolicyListenerUse(listener);
+        else {
+            download_retry.state=RETRY_FAILED;
+            wk.WKFramePolicyListenerIgnore(listener);
+        }
+        release(request);
+        return;
+    }
     if (view->extension_address) {
         char url[4096];
         copy_url(request ? wk.WKURLRequestCopyURL(request) : NULL,url,sizeof(url));
@@ -270,6 +292,16 @@ static void navigation_response(WKPageRef page, WKNavigationResponseRef response
     WKURLResponseRef url_response = wk.WKNavigationResponseCopyResponse(response);
     bool download = (url_response && wk.WKURLResponseIsAttachment(url_response)) ||
         !wk.WKNavigationResponseCanShowMIMEType(response);
+    if (client==download_retry.view) {
+        const int32_t status=url_response ? wk.WKURLResponseHTTPStatusCode(url_response) : 0;
+        char final_url[4096];
+        download=download && status>=200 && status<300 && copy_retry_url(wk.WKURLResponseCopyURL(url_response),final_url);
+        download_retry.state=download ? RETRY_CONVERTING : RETRY_FAILED;
+        release(url_response);
+        if (download) wk.WKFramePolicyListenerDownload(listener);
+        else wk.WKFramePolicyListenerIgnore(listener);
+        return;
+    }
     release(url_response);
     if (download) wk.WKFramePolicyListenerDownload(listener);
     else wk.WKFramePolicyListenerUse(listener);
@@ -289,12 +321,14 @@ static void same_document(WKPageRef page, WKNavigationRef nav, WKSameDocumentNav
     emit(client, MOON_SAME_DOCUMENT, NULL);
 }
 static void failed(WKPageRef page, WKNavigationRef nav, WKErrorRef error, WKTypeRef user, const void *client) {
+    if (client==download_retry.view && download_retry.state==RETRY_LOADING) download_retry.state=RETRY_FAILED;
     char description[512];
     copy_string(error ? wk.WKErrorCopyLocalizedDescription(error) : NULL, description, sizeof(description));
     emit(client, MOON_FAILED, description);
 }
 static void changed(const void *client) { emit(client, MOON_CHANGED, NULL); }
 static void terminated(WKPageRef page, WKProcessTerminationReason reason, const void *client) {
+    if (client==download_retry.view && download_retry.state<RETRY_TRANSFERRING) download_retry.state=RETRY_FAILED;
     const char *detail;
     switch (reason) {
         case kWKProcessTerminationReasonExceededMemoryLimit: detail="memory_limit"; break;
@@ -337,10 +371,25 @@ static DownloadSlot *download_slot(WKDownloadRef download) {
     return NULL;
 }
 static void download_started(WKContextRef unused, WKDownloadRef download, const void *client) {
-    DownloadSlot *slot=download_slot(NULL);
-    if (!slot) return;
-    *slot=(DownloadSlot){ .download=download,.id=moon_download_begin() };
     WKPageRef page = wk.WKDownloadGetOriginatingPage(download);
+    const bool retry = download_retry.view && page==download_retry.view->page;
+    if (retry && download_retry.state!=RETRY_CONVERTING) return;
+    DownloadSlot *slot=download_slot(NULL);
+    if (!slot) {
+        if (retry) download_retry.state=RETRY_FAILED;
+        return;
+    }
+    char source[4096]={0};
+    if (!retry) {
+        WKURLRequestRef request=wk.WKDownloadCopyRequest(download);
+        if (safe_method(request)) copy_retry_url(wk.WKURLRequestCopyURL(request),source);
+        release(request);
+    }
+    *slot=(DownloadSlot){ .download=download,.id=retry ? download_retry.id : moon_download_begin(source) };
+    if (retry) {
+        download_retry.state=RETRY_TRANSFERRING;
+        return;
+    }
     for (MoonView *view=views;view;view=view->next) {
         if (view->page != page) continue;
         slot->token=view->token;
@@ -364,6 +413,7 @@ static void finish_download(WKDownloadRef download, int state, const char *detai
     const DownloadSlot result=*slot;
     *slot=(DownloadSlot){0};
     free(result.path);
+    if (download_retry.view && result.id==download_retry.id) download_retry.state=RETRY_DONE;
     if (result.id) moon_download_finish(result.id,state);
     if (*test_download_path) test_download_result = state==MOON_DL_COMPLETE ? 1 : -1;
     if (result.token) moon_engine_event(MOON_DOWNLOAD_END,result.token,detail);
@@ -605,6 +655,8 @@ void moon_engine_shutdown(void) {
         wk.WKContextSetDownloadClient(context,NULL);
         if (filter_bundle_available) wk.WKContextSetInjectedBundleClient(context,NULL);
     }
+    if (download_retry.view) moon_engine_close(download_retry.view);
+    download_retry.view=NULL;
     release(current_request_policy);
     current_request_policy = NULL;
     if (store) release(store);
@@ -986,6 +1038,28 @@ bool moon_engine_load(MoonView *view, const char *url) {
     wk.WKPageLoadURL(view->page,target_url);
     release(target_url);
     return true;
+}
+bool moon_engine_retry_available(void) { return !download_retry.view && download_slot(NULL)!=NULL; }
+bool moon_engine_retry_download(uint32_t id, const char *url) {
+    if (!moon_engine_retry_available() || !moon_download_source_allowed(url)) return false;
+    MoonView *view=open_view(0,NULL,NULL);
+    if (!view) return false;
+    download_retry.view=view;
+    download_retry.id=id;
+    download_retry.deadline=moon_clock()+30000;
+    download_retry.state=RETRY_LOADING;
+    if (moon_engine_load(view,url)) return true;
+    download_retry.view=NULL;
+    moon_engine_close(view);
+    return false;
+}
+void moon_engine_retry_poll(uint64_t now) {
+    MoonView *view=download_retry.view;
+    if (!view || download_retry.state==RETRY_TRANSFERRING) return;
+    if (download_retry.state<RETRY_DONE && now<download_retry.deadline) return;
+    if (download_retry.state!=RETRY_DONE) moon_download_finish(download_retry.id,MOON_DL_FAILED);
+    download_retry.view=NULL;
+    moon_engine_close(view);
 }
 void moon_engine_back(MoonView *view) { if (wk.WKPageCanGoBack(view->page)) wk.WKPageGoBack(view->page); }
 void moon_engine_forward(MoonView *view) { if (wk.WKPageCanGoForward(view->page)) wk.WKPageGoForward(view->page); }

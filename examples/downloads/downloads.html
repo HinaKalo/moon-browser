@@ -142,7 +142,11 @@
           }[result] || '无法打开文件。';
           return;
         }
-        feedback.textContent = operation === 'remove' ? '已移除记录。' : '';
+        if (operation === 'retry') {
+          feedback.textContent = {
+            started:'正在重新请求下载。', busy:'已有下载正在重试。完成后可再试。', unavailable:'此下载暂时无法重试。'
+          }[result] || '无法重试下载。';
+        } else feedback.textContent = operation === 'remove' ? '已移除记录。' : '';
         if (operation !== 'reveal') await load(false,true);
       } catch (error) {
         feedback.textContent = operation === 'reveal' && error.message === 'NOT_FOUND' ? '文件已移动或删除。' : '该操作无法完成。';
@@ -176,6 +180,7 @@
       const controls = document.createElement('div');
       controls.className = 'actions';
       if (item.cancellable) action(controls,item,'cancel','取消下载');
+      if (item.retryable) action(controls,item,'retry','重试下载');
       if (item.openable) action(controls,item,'open','打开文件');
       if (item.state === 'complete') action(controls,item,'reveal','在文件夹中显示');
       if (item.state !== 'choosing' && item.state !== 'transferring') action(controls,item,'remove','移除记录');

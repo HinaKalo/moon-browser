@@ -72,6 +72,9 @@ class Fixture(BaseHTTPRequestHandler):
     hold_session_asset = Event()
     session_asset_requested = Event()
     release_session_asset = Event()
+    retry_download_requests = []
+    release_retry_download = Event()
+    retry_html_requested = Event()
     popup_attempts = set()
     popup_destinations = set()
     autoplay_reports = {}
@@ -96,7 +99,23 @@ class Fixture(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = unquote(urlsplit(self.path).path)
-        if path == "/slow-download":
+        if path == "/retry-download":
+            self.retry_download_requests.append(self.path)
+            if len(self.retry_download_requests)==1:
+                self.send_response(200)
+                self.send_header("Content-Type","application/octet-stream")
+                self.send_header("Content-Disposition",'attachment; filename="retry-proof.txt"')
+                self.send_header("Content-Length",str(256*1024+len(PAYLOAD)))
+                self.send_header("Cache-Control","no-store")
+                try:
+                    self.end_headers()
+                    self.wfile.write(b"x"*(128*1024))
+                    self.wfile.flush()
+                    self.release_retry_download.wait(18)
+                except (ConnectionResetError,BrokenPipeError):
+                    pass
+                return
+        elif path == "/slow-download":
             chunk = b"x" * (64 * 1024)
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
@@ -111,7 +130,7 @@ class Fixture(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
             return
-        if path == "/download":
+        if path in ("/download","/retry-download"):
             data, content_type = PAYLOAD, "application/octet-stream"
         elif path == "/lua-demo-verified":
             self.seen_lua_demo.set()
@@ -284,6 +303,8 @@ class Fixture(BaseHTTPRequestHandler):
             data, content_type = b"ok", "text/plain"
         elif path.startswith("/page/"):
             name = path.removeprefix("/page/")
+            if name=="retry-html":
+                self.retry_html_requested.set()
             if name.startswith("bookmark-batch-open-"):
                 self.bookmark_batch_requests.append(name)
             if name == "中文":
@@ -530,6 +551,9 @@ class Fixture(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         if path == "/download":
             self.send_header("Content-Disposition", 'attachment; filename="moon.txt"')
+        if path == "/retry-download":
+            self.send_header("Content-Disposition",'attachment; filename="retry-proof.txt"')
+            self.send_header("Cache-Control","no-store")
         if path == "/page/site-data-contract":
             self.send_header("Set-Cookie", "moon-visible=cookie-value; Path=/")
             self.send_header("Set-Cookie", "moon-http-only=private-value; HttpOnly; Path=/")
@@ -842,6 +866,7 @@ def run_win32(exe, base, root):
     download_permissions = json.loads(downloads.with_name("plugin.json").read_text(encoding="utf-8"))["permissions"] if downloads.is_file() else []
     download_preferences = "downloads.preferences" in download_permissions
     download_open = "downloads.open" in download_permissions
+    download_retry = downloads.is_file() and "item.retryable" in downloads.with_name("downloads.html").read_text(encoding="utf-8")
     site_data = exe.parent / "plugins" / "site-data" / "MoonSiteData.exe"
     cookie_clear = site_data.exists() and '"siteData.cookieClear"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     has_site_menu = site_data.exists() and json.loads(site_data.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"][0].get("siteMenu")
@@ -1000,6 +1025,9 @@ def run_win32(exe, base, root):
             ('const downloadOpenDenied=await window.webkit.messageHandlers.moonHost.postMessage('
              'JSON.stringify({jsonrpc:"2.0",id:"download-open-denied",method:"downloads.open",params:{id:1}}));'
              'if(JSON.parse(downloadOpenDenied).error?.code!==-32001)return;' if download_open else '') +
+            ('const downloadRetryDenied=await window.webkit.messageHandlers.moonHost.postMessage('
+             'JSON.stringify({jsonrpc:"2.0",id:"download-retry-denied",method:"downloads.retry",params:{id:1}}));'
+             'if(JSON.parse(downloadRetryDenied).error?.code!==-32001)return;' if download_retry else '') +
             f'let blocked=false; try{{await fetch("{base}/extension-network");}}catch{{blocked=true;}}'
             'if(!blocked)return;'
             'const write=await call({op:"write",value:{roundTrip:7}});'
@@ -5137,6 +5165,13 @@ def run_win32(exe, base, root):
                 "contributes":{"commands":[{"id":"open","label":"Fixture"}]}
             }),encoding="utf-8")
             page=downloads.with_name("downloads.html").read_text(encoding="utf-8")
+            if download_retry:
+                with closing(sqlite3.connect(settings_profile/"downloads.sqlite3")) as db:
+                    db.execute("CREATE TABLE downloads(id INTEGER PRIMARY KEY AUTOINCREMENT,path TEXT NOT NULL DEFAULT '',"
+                               "state INTEGER NOT NULL DEFAULT 0,received INTEGER NOT NULL DEFAULT 0,total INTEGER NOT NULL DEFAULT 0,"
+                               "started INTEGER NOT NULL,owner_pid INTEGER NOT NULL,owner_birth INTEGER NOT NULL)")
+                    db.execute("INSERT INTO downloads(path,state,started,owner_pid,owner_birth) VALUES('legacy-retry.txt',3,1,0,0)")
+                    db.commit()
             contract="""
 <script>(async()=>{
     const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:"write",value}));
@@ -5198,6 +5233,89 @@ def run_win32(exe, base, root):
                     raise RuntimeError("Automatic download contained the wrong response bytes")
             if original.read_bytes()!=b"Keep this existing download":
                 raise RuntimeError("The automatic download overwrote an existing file")
+            if download_retry:
+                retry_url=base+"/retry-download?ticket=fixture"
+                protected_file=chosen_folder/"retry-proof.txt"
+                def download_record(source):
+                    try:
+                        with closing(sqlite3.connect(settings_profile/"downloads.sqlite3",timeout=.2)) as db:
+                            return db.execute("SELECT id,path,state,received FROM downloads WHERE source=? ORDER BY id",(source,)).fetchall()
+                    except sqlite3.OperationalError:
+                        return []
+
+                def prepare_download_contract(code):
+                    contract=r"""<script>(async()=>{
+                        const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:'write',value}));
+                        const wait=async(fn,message)=>{for(let i=0;i<180;i++){
+                            const value=await fn();if(value)return value;
+                            await new Promise(resolve=>setTimeout(resolve,50));
+                        }throw Error(message);};
+                        const control=(id,action)=>list.querySelector(`button[data-control="${id}:${action}"]`);
+                        const entry=async id=>(await host('downloads.list',{})).downloads.find(row=>row.id===id);
+                        try {""" + code + r"""
+                            await emit({passed:true});
+                        } catch(error) { await emit({error:String(error)}); }
+                    })();</script>"""
+                    (fixture/"downloads.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
+                    config.unlink(missing_ok=True)
+
+                fixture_url=f"extension://{fixture_id}/downloads.html"
+                def open_download_contract():
+                    set_control(edit,fixture_url)
+                    user.PostMessageW(edit,0x0100,0x0D,1)
+                    report=wait_for(lambda: read_settings(config),"The download retry fixture did not report",18)
+                    if not report.get("passed"):
+                        raise RuntimeError(f"Download retry fixture: {report}")
+
+                set_control(edit,retry_url+"#not-sent")
+                user.PostMessageW(edit,0x0100,0x0D,1)
+                row=wait_for(lambda: (values:=download_record(retry_url)) and values[0][2]==1 and values[0],
+                             "The original download did not retain its GET source")
+                retry_id=row[0]
+                prepare_download_contract(f"""
+                    const id={retry_id};
+                    if((await entry(id)).retryable||await host('downloads.retry',{{id}})!=='unavailable')
+                        throw Error('retry accepted an active transfer');
+                    (await wait(()=>control(id,'cancel'),'cancel action')).click();
+                    await wait(async()=>(await entry(id)).state==='cancelled','original download did not cancel');
+                """)
+                invoke("查看下载")
+                wait_for(lambda: read_address()=="extension://moon.downloads/downloads.html",
+                         "The download manager did not open to cancel the original transfer")
+                open_download_contract()
+                Fixture.release_retry_download.set()
+                protected_file.write_bytes(b"Existing retry destination")
+                proc,frame,edit=restart_download_settings()
+                html_url=base+"/page/retry-html"
+                with closing(sqlite3.connect(settings_profile/"downloads.sqlite3")) as db:
+                    login_id=db.execute("INSERT INTO downloads(path,state,started,owner_pid,owner_birth,source) VALUES(?,3,1,0,0,?)",
+                                        ("bad-response.txt",html_url)).lastrowid
+                    db.commit()
+                prepare_download_contract(f"""
+                    const id={retry_id}, htmlId={login_id};
+                    const original=await entry(id), old=await entry(1);
+                    if(!original.retryable||old.retryable||await host('downloads.retry',{{id:1}})!=='unavailable'||
+                       Object.hasOwn(original,'source')) throw Error('source eligibility or legacy migration');
+                    (await wait(()=>control(id,'retry'),'retry action')).click();
+                    await wait(async()=>(await entry(id)).state==='complete','restarted download did not finish');
+                    if((await entry(id)).retryable) throw Error('completed transfer is still retryable');
+                    const rejected=await wait(async()=>{{
+                        const value=await host('downloads.retry',{{id:htmlId}});
+                        return value==='busy' ? false : value;
+                    }},'the retry request did not release its background view');
+                    if(rejected!=='started') throw Error('could not request the ordinary webpage fixture');
+                    await wait(async()=>(await entry(htmlId)).state==='failed','ordinary webpage was not rejected');
+                """)
+                open_download_contract()
+                expected=chosen_folder/"retry-proof (1).txt"
+                rows=download_record(retry_url)
+                if rows!=[(retry_id,str(expected),2,len(PAYLOAD))] or expected.read_bytes()!=PAYLOAD or protected_file.read_bytes()!=b"Existing retry destination":
+                    raise RuntimeError(f"Retry duplicated the record, overwrote a file, or produced unexpected bytes: {rows}")
+                if Fixture.retry_download_requests!=["/retry-download?ticket=fixture"]*2 or not Fixture.retry_html_requested.is_set() or read_address()!=fixture_url:
+                    raise RuntimeError("Retry changed the request target or navigated away from the downloads panel")
+                if (chosen_folder/"bad-response.txt").exists():
+                    raise RuntimeError("Retry saved an ordinary webpage as the original download")
+                print("download_retry=ok restart=ok same_record=ok query_preserved=ok no_overwrite=ok html_rejected=ok legacy_migration=ok grant_required=ok",flush=True)
             chosen_folder.rename(chosen_folder.with_name("已选择目录已移动"))
             set_control(edit,base+"/download?missing-folder")
             user.PostMessageW(edit,0x0100,0x0D,1)
@@ -5301,6 +5419,7 @@ def run_win32(exe, base, root):
             print("plugin_capacity=ok count=64 excess_rejected=ok manager_count=ok large_grants_restart=ok native_command=ok user_shortcut_label=ok webkit_link_menu=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
+        Fixture.release_retry_download.set()
         if frame:
             user.PostMessageW(frame, 0x0010, 0, 0)
         try:

@@ -2,6 +2,7 @@ const std = @import("std");
 const sdk = @import("moon_plugin");
 const native = @import("native");
 const db_api = @import("profile_db.zig");
+const history = @import("history.zig");
 
 const sqlite = &db_api.sqlite;
 const State = sdk.DownloadState;
@@ -83,11 +84,13 @@ fn connection() !*db_api.Database {
     if (database) |db| return db;
     const db = try db_api.open(std.mem.sliceTo(&path,0));
     errdefer db_api.close(db);
+    if (sqlite.sqlite3_exec(db,"BEGIN IMMEDIATE",null,null,null)!=db_api.ok) return error.IOError;
+    errdefer _ = sqlite.sqlite3_exec(db,"ROLLBACK",null,null,null);
     if (sqlite.sqlite3_exec(db,
         \\CREATE TABLE IF NOT EXISTS downloads (
         \\  id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL DEFAULT '', state INTEGER NOT NULL DEFAULT 0,
         \\  received INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL DEFAULT 0, started INTEGER NOT NULL,
-        \\  owner_pid INTEGER NOT NULL, owner_birth INTEGER NOT NULL
+        \\  owner_pid INTEGER NOT NULL, owner_birth INTEGER NOT NULL, source TEXT NOT NULL DEFAULT ''
         \\);
         \\CREATE TRIGGER IF NOT EXISTS limit_finished_downloads AFTER UPDATE OF state ON downloads WHEN NEW.state >= 2 BEGIN
         \\  DELETE FROM downloads WHERE state >= 2 AND id < (
@@ -95,6 +98,16 @@ fn connection() !*db_api.Database {
         \\  );
         \\END;
     ,null,null,null) != db_api.ok) return error.IOError;
+    const needs_source = check: {
+        const columns = try db_api.prepare(db,"SELECT 1 FROM pragma_table_info('downloads') WHERE name='source'");
+        defer _ = sqlite.sqlite3_finalize(columns);
+        break :check switch (sqlite.sqlite3_step(columns)) {
+            db_api.row => false, db_api.done => true, else => return error.IOError,
+        };
+    };
+    if (needs_source and sqlite.sqlite3_exec(db,"ALTER TABLE downloads ADD COLUMN source TEXT NOT NULL DEFAULT ''",null,null,null)!=db_api.ok)
+        return error.IOError;
+    if (sqlite.sqlite3_exec(db,"COMMIT",null,null,null)!=db_api.ok) return error.IOError;
     database = db;
     return db;
 }
@@ -114,16 +127,25 @@ fn number(statement: *db_api.Statement, column: c_int) u64 {
     return @intCast(@max(0,sqlite.sqlite3_column_int64(statement,column)));
 }
 
-pub fn begin() u32 {
-    const slot = for (&slots) |*entry| {
-        if (entry.id == 0) break entry;
-    } else return 0;
+pub fn sourceAllowed(url: []const u8) bool {
+    return history.validURL(url) and std.mem.indexOfScalar(u8,url,'\\')==null;
+}
+
+fn freeSlot() ?*Active {
+    for (&slots) |*entry| if (entry.id==0) return entry;
+    return null;
+}
+
+pub fn begin(source: []const u8) u32 {
+    const slot = freeSlot() orelse return 0;
     const db = connection() catch return 0;
-    const statement = db_api.prepare(db,"INSERT INTO downloads(started,owner_pid,owner_birth) VALUES (?1,?2,?3)") catch return 0;
+    const statement = db_api.prepare(db,"INSERT INTO downloads(started,owner_pid,owner_birth,source) VALUES (?1,?2,?3,?4)") catch return 0;
     defer _ = sqlite.sqlite3_finalize(statement);
     bind(statement,1,native.moon_wall_ms()) catch return 0;
     bind(statement,2,process) catch return 0;
     bind(statement,3,birth) catch return 0;
+    const url = if (sourceAllowed(source)) source[0..std.mem.indexOfScalar(u8,source,'#') orelse source.len] else "";
+    db_api.bindText(statement,4,url) catch return 0;
     if (sqlite.sqlite3_step(statement) != db_api.done) return 0;
     const id = std.math.cast(u32,sqlite.sqlite3_last_insert_rowid(db)) orelse return 0;
     slot.* = .{ .id=id };
@@ -200,7 +222,7 @@ pub fn list(allocator: std.mem.Allocator, options: sdk.HistoryQuery, buffer: *[2
     if (options.query.len > 256) return error.InvalidParams;
     flush();
     const statement = try db_api.prepare(try connection(),
-        \\SELECT id,path,state,received,total,started,owner_pid,owner_birth FROM downloads
+        \\SELECT id,path,state,received,total,started,owner_pid,owner_birth,source FROM downloads
         \\WHERE id>0 AND id<?1 AND instr(lower(path),lower(?2)) ORDER BY id DESC LIMIT 25
     );
     defer _ = sqlite.sqlite3_finalize(statement);
@@ -221,15 +243,56 @@ pub fn list(allocator: std.mem.Allocator, options: sdk.HistoryQuery, buffer: *[2
         const id: u32 = @intCast(number(statement,0));
         const entry = lookup(id);
         const total = if (entry) |transfer| transfer.total else number(statement,4);
+        const state = readState(statement,id,2,6);
         buffer[length] = .{
-            .id=id,.name=try allocator.dupe(u8,name),.state=readState(statement,id,2,6),
+            .id=id,.name=try allocator.dupe(u8,name),.state=state,
             .received=if (entry) |transfer| transfer.received else number(statement,3),
             .total=if (total != 0) total else null,.startedAt=number(statement,5),
             .cancellable=if (entry) |transfer| transfer.state == .transferring and !transfer.cancelling else false,
+            .retryable=retryState(state) and sourceAllowed(try db_api.columnText(statement,8)),
         };
         length += 1;
         budget -= cost;
     }
+}
+
+fn retryState(state: State) bool {
+    return state==.failed or state==.cancelled or state==.interrupted;
+}
+
+fn reserveRetry(id: u32, source: *[4096:0]u8) !void {
+    const db = try connection();
+    if (sqlite.sqlite3_exec(db,"BEGIN IMMEDIATE",null,null,null)!=db_api.ok) return error.IOError;
+    errdefer _ = sqlite.sqlite3_exec(db,"ROLLBACK",null,null,null);
+    {
+        const statement = try db_api.prepare(db,"SELECT state,owner_pid,owner_birth,source FROM downloads WHERE id=?1");
+        defer _ = sqlite.sqlite3_finalize(statement);
+        try bind(statement,1,id);
+        if (sqlite.sqlite3_step(statement)!=db_api.row or !retryState(readState(statement,id,0,1))) return error.NotFound;
+        const url = try db_api.columnText(statement,3);
+        if (!sourceAllowed(url)) return error.NotFound;
+        _ = try std.fmt.bufPrintSentinel(source,"{s}",.{url},0);
+    }
+    const update = try db_api.prepare(db,"UPDATE downloads SET state=0,received=0,total=0,started=?1,owner_pid=?2,owner_birth=?3 WHERE id=?4");
+    defer _ = sqlite.sqlite3_finalize(update);
+    try bind(update,1,native.moon_wall_ms());
+    try bind(update,2,process);
+    try bind(update,3,birth);
+    try bind(update,4,id);
+    if (sqlite.sqlite3_step(update)!=db_api.done or sqlite.sqlite3_changes(db)!=1 or
+        sqlite.sqlite3_exec(db,"COMMIT",null,null,null)!=db_api.ok) return error.IOError;
+}
+
+pub fn retry(id: u32) sdk.DownloadRetry {
+    if (!native.moon_engine_retry_available()) return .busy;
+    flush();
+    const slot = freeSlot() orelse return .busy;
+    var url: [4096:0]u8 = undefined;
+    reserveRetry(id,&url) catch return .unavailable;
+    slot.* = .{ .id=id };
+    if (native.moon_engine_retry_download(id,&url)) return .started;
+    finish(id,.failed);
+    return .unavailable;
 }
 
 pub fn cancel(id: u32) !void {

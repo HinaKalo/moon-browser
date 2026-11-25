@@ -593,7 +593,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",
                 .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",
                 .@"bookmarks.transfer" => "此插件可打开文件选择框，从所选 HTML 文件导入书签，或导出书签到你选的位置。",
-                .@"downloads.manage" => "此插件可读取本机下载记录、取消传输，并在文件夹中显示已保存的文件。",
+                .@"downloads.manage" => "此插件可读取本机下载记录、取消或重试传输，并在文件夹中显示已保存的文件。",
                 .@"downloads.preferences" => "此插件可查看和更改是否询问保存位置，并通过系统对话框选择默认下载文件夹。",
                 .@"downloads.open" => "此插件可在活动页面请求打开已下载的文件。浏览器确认文件后，Windows 会按系统策略处理。",
                 .@"siteData.read" => "你从网页触发此插件命令时，它的页面可读取该网页可见的 Cookie 和站点存储。",

@@ -1286,6 +1286,7 @@ fn maintenance() void {
         if (now>=save_at and !savePinnedTabs()) pins_save_at = now+5000;
     }
     native.moon_engine_update_inspectors();
+    native.moon_engine_retry_poll(now);
     downloads.flush();
     site_data.tick(now);
     page_source.tick(now);
@@ -1739,9 +1740,17 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
     };
     if (index == active) updateChrome(false) else native.moon_shell_refresh();
 }
-export fn moon_download_begin() u32 {
-    if (stopped or !plugins.systemEnabled(.@"downloads.manage")) return 0;
-    return downloads.begin();
+export fn moon_download_source_allowed(source: [*c]const u8) bool {
+    return downloads.sourceAllowed(slice(source));
+}
+export fn moon_download_begin(source: [*c]const u8) u32 {
+    if (stopped or native.moon_shell_private() or !plugins.systemEnabled(.@"downloads.manage")) return 0;
+    return downloads.begin(slice(source));
+}
+export fn moon_download_retry(panel: u64, id: u32) c_int {
+    if (native.moon_shell_private() or !moon_extension_panel_active(panel) or !network.mayNavigate())
+        return @intFromEnum(sdk.DownloadRetry.unavailable);
+    return @intFromEnum(downloads.retry(id));
 }
 export fn moon_download_destination(id: u32, path: [*c]const u8) void {
     if (!stopped) downloads.destination(id,slice(path));
@@ -2362,7 +2371,7 @@ export fn moon_page_save_result(request: u64, html: [*c]const u8, bytes: usize, 
             break :result "无法写入所选位置。请检查文件和目录权限。";
         if (!native.moon_shell_private() and plugins.systemEnabled(.@"downloads.manage")) {
             const length = bytes + @as(usize,if (std.mem.startsWith(u8,html[0..bytes],"\xef\xbb\xbf")) 0 else 3);
-            const id = downloads.begin();
+            const id = downloads.begin("");
             downloads.destination(id,slice(&job.path));
             downloads.progress(id,length,length);
             downloads.finish(id,.complete);

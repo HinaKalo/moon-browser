@@ -32,6 +32,8 @@ Moon Browser `0.1.0-preview.10` 随包提供书签和下载系统插件。两项
 
 从 0.1.0-preview.62 起，已完成的下载提供「打开文件」，支持本机盘符上的普通文件。Windows 策略要求确认时使用系统提示。策略允许直接打开时，Moon 会先显示完整路径供你确认。确认后由 Windows 附件管理器调用默认应用。[Windows 附件管理器](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-iattachmentexecute-execute)
 
+从 0.1.0-preview.75 起，失败、取消或中断的 HTTP(S) GET 下载可以点「重试下载」。浏览器从头请求原地址，沿用同一条下载记录和当前保存设置。服务器返回普通网页时，重试会标为失败。下载地址保存在本地下载记录中，插件列表只返回该条目能否重试。早期版本的记录和其他下载方式会保留原有操作。
+
 ## 插件 API
 
 `bookmarks.manage` 允许维护书签，`downloads.manage` 允许查询下载状态、取消传输和显示文件位置。两个管理页都通过 `moonHost` 调用宿主。独立 EXE 使用同一组方法。在用户触发的命令中，可用 `bookmarks.saveActive` 保存命令触发时的网页。

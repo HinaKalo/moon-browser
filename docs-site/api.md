@@ -87,6 +87,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `downloads.list` | `downloads.manage` | 传入 `{ query?, before? }`，返回 `{ downloads, next }`。记录包含名称、状态、已传字节、可选总字节数及开始时间。`openable` 表示当前页面可发起打开请求。 |
 | `downloads.cancel` / `downloads.remove` / `downloads.reveal` | `downloads.manage` | 传入 `{ id }`，操作活动传输、终态记录或已完成的文件。成功返回 `null`。 |
 | `downloads.open` | `downloads.manage`、`downloads.open` | 活动插件页面传入 `{ id }`。宿主从记录读取路径，按 Windows 策略确认并打开。返回 `opened`、`missing`、`cancelled`、`blocked` 或 `unavailable`。 |
+| `downloads.retry` | `downloads.manage` | 普通窗口的活动插件页传入 `{ id }`，用已记录的 HTTP(S) GET 地址重试原下载。列表项的 `retryable` 表示条目是否适用。返回 `started`、`unavailable` 或 `busy`，可通过 `downloads.list` 跟踪该条记录。 |
 | `downloads.clearCompleted` | `downloads.manage` | 传入 `{}`，清理已完成的下载记录并返回 `{ removed }`。下载文件与其他状态的记录会保留。 |
 | `downloads.preferences.get` | `downloads.preferences` | 普通窗口的活动配置页传入 `{}`，返回 `{ folder, custom, askWhereToSave }`。系统未能解析默认目录时 `folder` 为 `null`。 |
 | `downloads.preferences.setPrompt` | `downloads.preferences` | 普通窗口的活动配置页传入 `{ askWhereToSave }`，保存是否询问位置并返回更新后的设置。 |

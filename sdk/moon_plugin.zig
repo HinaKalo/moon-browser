@@ -253,6 +253,7 @@ pub const BookmarkTransfer = struct { state: BookmarkTransferState, count: usize
 pub const BookmarkSave = enum { saved, alreadySaved, noPage };
 pub const DownloadState = enum { choosing, transferring, complete, failed, cancelled, interrupted };
 pub const DownloadOpen = enum(c_int) { opened, missing, cancelled, blocked, unavailable };
+pub const DownloadRetry = enum(c_int) { started, unavailable, busy };
 pub const Download = struct {
     id: u32,
     name: []const u8,
@@ -261,6 +262,7 @@ pub const Download = struct {
     total: ?u64,
     cancellable: bool,
     openable: bool = false,
+    retryable: bool = false,
     startedAt: u64,
 };
 pub const DownloadPage = struct { downloads: []const Download, next: ?u32 };
@@ -425,6 +427,7 @@ pub const Method = enum {
     @"downloads.clearCompleted",
     @"downloads.reveal",
     @"downloads.open",
+    @"downloads.retry",
     @"downloads.preferences.get",
     @"downloads.preferences.setPrompt",
     @"downloads.preferences.chooseFolder",

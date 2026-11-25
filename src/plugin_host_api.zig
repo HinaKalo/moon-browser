@@ -75,7 +75,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.saveActive", .@"bookmarks.saveLink", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.bar.toggle", .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany", .@"bookmarks.openMany" => .@"bookmarks.manage",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml" => .@"bookmarks.transfer",
-        .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
+        .@"downloads.list", .@"downloads.cancel", .@"downloads.retry", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => .@"downloads.manage",
         .@"downloads.open" => .@"downloads.open",
         .@"downloads.preferences.get", .@"downloads.preferences.setPrompt",
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => .@"downloads.preferences",
@@ -211,7 +211,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"bookmarks.list", .@"bookmarks.save", .@"bookmarks.update", .@"bookmarks.remove",
         .@"bookmarks.folders", .@"bookmarks.move", .@"bookmarks.removeMany", .@"bookmarks.openMany",
         .@"bookmarks.importHtml", .@"bookmarks.exportHtml",
-        .@"downloads.list", .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
+        .@"downloads.list", .@"downloads.cancel", .@"downloads.retry", .@"downloads.remove", .@"downloads.reveal", .@"downloads.clearCompleted" => {},
         .@"downloads.open" => {},
         .@"downloads.preferences.get", .@"downloads.preferences.setPrompt",
         .@"downloads.preferences.chooseFolder", .@"downloads.preferences.resetFolder" => {},
@@ -685,6 +685,14 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             const result = native.moon_download_open(owner.ptr,context.target_tab_id,value.id);
             return sdk.result(output,id,std.enums.fromInt(sdk.DownloadOpen,result) orelse .unavailable);
+        },
+        .@"downloads.retry" => {
+            if (!context.from_page or !native.moon_extension_panel_active(context.target_tab_id) or native.moon_shell_private())
+                return sdk.failure(output,id,.PermissionDenied);
+            const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            if (value.id==0) return sdk.failure(output,id,.InvalidParams);
+            const result = native.moon_download_retry(context.target_tab_id,value.id);
+            return sdk.result(output,id,std.enums.fromInt(sdk.DownloadRetry,result) orelse .unavailable);
         },
         .@"downloads.cancel", .@"downloads.remove", .@"downloads.reveal" => change: {
             const value = decode(struct { id: u32 },allocator,params) catch return sdk.failure(output,id,.InvalidParams);
