@@ -334,6 +334,10 @@ pub const BookmarkTransferState = enum { done, cancelled, invalidFile, limitExce
 pub const BookmarkTransfer = struct { state: BookmarkTransferState, count: usize = 0, skipped: usize = 0 };
 pub const BookmarkSave = enum { saved, alreadySaved, noPage };
 pub const DownloadState = enum { choosing, transferring, complete, failed, cancelled, interrupted };
+pub const DownloadFilter = enum { all, active, complete, unsuccessful };
+pub const DownloadQuery = struct {
+    query: []const u8 = "", before: ?u32 = null, filter: DownloadFilter = .all,
+};
 pub const DownloadOpen = enum(c_int) { opened, missing, cancelled, blocked, unavailable };
 pub const DownloadRetry = enum(c_int) { started, unavailable, busy };
 pub const Download = struct {

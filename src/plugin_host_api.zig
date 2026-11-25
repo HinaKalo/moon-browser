@@ -752,7 +752,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             return sdk.result(output,id,result);
         },
         .@"downloads.list" => list: {
-            const options = decode(sdk.HistoryQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
+            const options = decode(sdk.DownloadQuery,allocator,params) catch return sdk.failure(output,id,.InvalidParams);
             var rows: [24]sdk.Download = undefined;
             const page = downloads.list(allocator,options,&rows) catch |err| return sdk.failure(output,id,libraryReason(err));
             if (context.from_page and context.grants.contains(.@"downloads.open")) {

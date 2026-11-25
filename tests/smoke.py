@@ -1733,13 +1733,55 @@ def run_win32(exe, base, root):
             open.click();
             await wait(() => document.getElementById('feedback').textContent === '已取消打开。');
         ''' if download_open else ''
+        filter_contract = r'''
+            const selectFilter=filter=>{
+                const select=document.getElementById("download-filter");
+                select.value=filter;
+                select.dispatchEvent(new Event("change"));
+            };
+            const results=document.getElementById("results");
+            selectFilter("complete");
+            await wait(()=>results.textContent.includes("completed-proof.txt")&&!results.querySelector("progress"));
+            selectFilter("active");
+            await wait(()=>results.querySelector("progress")&&!results.textContent.includes("completed-proof.txt"));
+            selectFilter("unsuccessful");
+            await wait(()=>results.textContent.includes("failed-proof.txt")&&!results.querySelector("progress"));
+            selectFilter("all");
+            await wait(()=>results.querySelector("progress"));
+        ''' if 'id="download-filter"' in page else ''
+        filter_paging_contract = r'''
+            await emit({phase:"download-filter-pagination"});
+            const read=async()=>JSON.parse(await api.postMessage('{"op":"read"}')).value;
+            await wait(async()=> (await read())?.phase==="download-filter-seeded");
+            const query="filter-page-";
+            const first=await host("downloads.list",{query,filter:"unsuccessful"});
+            const last=await host("downloads.list",{query,filter:"unsuccessful",before:first.next});
+            if(first.downloads.length!==24||first.next==null||last.downloads.length!==5||last.next!=null||
+               new Set([...first.downloads,...last.downloads].map(item=>item.id)).size!==29||
+               !last.downloads.some(item=>item.name==="filter-page-interrupted.txt"&&item.state==="interrupted")||
+               !last.downloads.some(item=>item.name==="filter-page-cancelled.txt"&&item.state==="cancelled")||
+               (await host("downloads.list",{query,filter:"active"})).downloads.length)
+                throw Error("filters did not scan all pages or resolve dead transfers");
+            const input=document.getElementById("search");
+            input.value=query;
+            input.dispatchEvent(new Event("input"));
+            selectFilter("unsuccessful");
+            await wait(()=>results.children.length===24&&!document.getElementById("more").disabled);
+            const more=document.getElementById("more");
+            if(more.hidden||results.textContent.includes("filter-page-completed"))throw Error("first filtered page");
+            more.click();
+            await wait(()=>results.children.length===29&&results.textContent.includes("filter-page-interrupted")&&more.hidden);
+            selectFilter("complete");
+            await wait(()=>results.children.length===24&&results.textContent.includes("filter-page-completed")&&
+                !results.textContent.includes("filter-page-interrupted"));
+        ''' if filter_contract else ''
         contract = (
             '<script>(async()=>{const api=window.webkit.messageHandlers.moonSettings;'
             'const emit=value=>api.postMessage(JSON.stringify({op:"write",value}));'
-            'const wait=async(fn)=>{for(let i=0;i<90;i++){const v=fn();if(v)return v;'
+            'const wait=async(fn)=>{for(let i=0;i<160;i++){const v=await fn();if(v)return v;'
             'await new Promise(r=>setTimeout(r,50));}throw Error("downloads UI timeout");};'
             'try{await wait(()=>document.querySelector("progress")?.value>0);'
-            + open_contract +
+            + open_contract + filter_contract +
             'const clear=document.getElementById("clear-completed");'
             'if(clear){const dialog=document.getElementById("clear-dialog");'
             'clear.click();if(!dialog.open)throw Error("missing clear confirmation");'
@@ -1753,6 +1795,7 @@ def run_win32(exe, base, root):
             'if(remaining.join(",")!=="failed,transferring")throw Error("unexpected download states: "+remaining);}'
             'const cancel=await wait(()=>document.querySelector(\'button[data-control$=":cancel"]\'));cancel.click();'
             'await wait(()=>document.querySelector("#results").textContent.includes("已取消"));'
+            + filter_paging_contract +
             'await emit({passed:true});}catch(error){await emit({error:String(error)});}})();</script>'
         )
         (fixture / "downloads.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
@@ -3954,7 +3997,36 @@ def run_win32(exe, base, root):
                 consent = wait_for(lambda: owned_window("#32770", "打开下载文件？") or
                                    owned_window("#32770", "打开下载文件"),"The download open confirmation did not appear")
                 user.PostMessageW(consent,0x0010,0,0)  # Closing the confirmation cancels the request.
-            library_result("moon.download-fixture")
+            filter_paging = 'id="download-filter"' in (downloads.parent / "downloads.html").read_text(encoding="utf-8")
+            if filter_paging:
+                config = profile / f'extension-{sha256(b"moon.download-fixture").hexdigest()}.json'
+                phase = wait_for(lambda: (value:=read_settings(config)) and
+                    (value.get("phase")=="download-filter-pagination" or value.get("error")) and value,
+                    "The download filter did not reach its pagination test",15)
+                if phase.get("error"):
+                    raise RuntimeError(phase["error"])
+                with closing(sqlite3.connect(downloads_db)) as db, db:
+                    db.executemany("INSERT INTO downloads(path,state,started,owner_pid,owner_birth) VALUES (?,?,1,0,0)",[
+                        ("filter-page-interrupted.txt",1),
+                        ("filter-page-cancelled.txt",4),
+                        *((f"filter-page-failed-{index}.txt",3) for index in range(27)),
+                        *((f"filter-page-completed-{index}.txt",2) for index in range(27)),
+                    ])
+                signal=config.with_suffix(".signal")
+                signal.write_text('{"phase":"download-filter-seeded"}',encoding="utf-8")
+                signal.replace(config)
+                try:
+                    result = wait_for(lambda: (value:=read_settings(config)) and
+                        (value.get("passed") or value.get("error")) and value,
+                        "The paged download filter did not report its result",15)
+                    if not result.get("passed"):
+                        raise RuntimeError(f"Download filter: {result.get('error')}")
+                finally:
+                    with closing(sqlite3.connect(downloads_db)) as db, db:
+                        db.execute("DELETE FROM downloads WHERE path LIKE 'filter-page-%'")
+                print("download_filters=ok status_groups=ok search_and_paging=ok recovered_interruption=ok",flush=True)
+            else:
+                library_result("moon.download-fixture")
             with closing(sqlite3.connect(downloads_db)) as db:
                 row = db.execute("SELECT state,received FROM downloads WHERE state=4 ORDER BY id DESC LIMIT 1").fetchone()
                 states = db.execute("SELECT state FROM downloads ORDER BY state").fetchall()

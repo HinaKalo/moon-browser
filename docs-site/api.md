@@ -93,7 +93,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 | `bookmarks.bar.toggle` | `bookmarks.manage` | 在原生用户命令中传入 `{}`，切换并保存书签栏的显示状态。返回 `shown`、`hidden` 或 `unavailable`。参见[书签栏](./library#书签栏)。 |
 | `bookmarks.saveLink` | `bookmarks.manage` | 从 `linkMenu: bookmark` 命令传入 `{}`，保存右键选中的链接。返回 `saved`、`alreadySaved` 或 `unavailable`。 |
 | `bookmarks.update` / `bookmarks.remove` | `bookmarks.manage` | 编辑时传入 `{ id, title, url, folder? }`，删除时传入 `{ id }`。成功返回 `null`。 |
-| `downloads.list` | `downloads.manage` | 传入 `{ query?, before? }`，返回 `{ downloads, next }`。记录包含名称、状态、已传字节、可选总字节数及开始时间。`openable` 表示当前页面可发起打开请求。 |
+| `downloads.list` | `downloads.manage` | 传入 `{ query?, before?, filter? }`，返回 `{ downloads, next }`。状态筛选可选 `all`、`active`（等待保存位置或传输中）、`complete` 或 `unsuccessful`（失败、取消或中断），会在分页前应用。记录包含名称、状态、已传字节、可选总字节数及开始时间。`openable` 表示当前页面可发起打开请求。 |
 | `downloads.cancel` / `downloads.remove` / `downloads.reveal` | `downloads.manage` | 传入 `{ id }`，操作活动传输、终态记录或已完成的文件。成功返回 `null`。 |
 | `downloads.open` | `downloads.manage`、`downloads.open` | 活动插件页面传入 `{ id }`。宿主从记录读取路径，按 Windows 策略确认并打开。返回 `opened`、`missing`、`cancelled`、`blocked` 或 `unavailable`。 |
 | `downloads.retry` | `downloads.manage` | 普通窗口的活动插件页传入 `{ id }`，用已记录的 HTTP(S) GET 地址重试原下载。列表项的 `retryable` 表示条目是否适用。返回 `started`、`unavailable` 或 `busy`，可通过 `downloads.list` 跟踪该条记录。 |

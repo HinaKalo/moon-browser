@@ -10,8 +10,10 @@
   body { margin:0; }
   main { max-width:900px; margin:auto; padding:42px clamp(20px,5vw,48px); }
   h1 { margin:0; font-size:30px; }
-  input,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
-  input { width:100%; }
+  input,select,button { font:inherit; color:inherit; background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 11px; }
+  .filters { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .filters input { flex:1; min-width:160px; }
+  .filters label { display:flex; align-items:center; gap:6px; }
   button { cursor:pointer; }
   button:hover:not(:disabled) { background:var(--soft); }
   button:disabled { opacity:.5; cursor:default; }
@@ -58,7 +60,15 @@
       <p id="download-preferences-status" role="status"></p>
     </div>
   </details>
-  <input id="search" type="search" placeholder="搜索下载" aria-label="搜索下载" maxlength="64">
+  <div class="filters">
+    <input id="search" type="search" placeholder="搜索下载" aria-label="搜索下载" maxlength="64">
+    <label>状态 <select id="download-filter">
+      <option value="all">全部</option>
+      <option value="active">进行中</option>
+      <option value="complete">已完成</option>
+      <option value="unsuccessful">失败、取消或中断</option>
+    </select></label>
+  </div>
   <p id="status" role="status">正在读取下载…</p>
   <p id="feedback" role="status"></p>
   <ul id="results" aria-label="下载列表" hidden></ul>
@@ -75,6 +85,7 @@
 <script>
   const el = id => document.getElementById(id);
   const search = el('search'), list = el('results'), status = el('status'), more = el('more'), feedback = el('feedback');
+  const filter = el('download-filter');
   const clear = el('clear-completed'), dialog = el('clear-dialog'), confirmClear = el('confirm-clear');
   const names = { choosing:'等待保存位置', transferring:'下载中', complete:'已完成', failed:'失败', cancelled:'已取消', interrupted:'已中断' };
   const date = new Intl.DateTimeFormat('zh-CN',{ month:'short',day:'numeric',hour:'2-digit',minute:'2-digit' });
@@ -199,7 +210,8 @@
     if (reset) older = [];
     try {
       const query = search.value.trim();
-      const page = await host('downloads.list',{ query,before:append ? cursor : null });
+      const selected = filter.value;
+      const page = await host('downloads.list',{ query,filter:selected,before:append ? cursor : null });
       if (request !== version) return;
       if (append) {
         older = older.concat(page.downloads);
@@ -212,7 +224,7 @@
         draw(page.downloads.concat(older.filter(item => item.id < threshold)));
       }
       list.hidden = !list.children.length;
-      status.textContent = list.hidden ? (query ? '没有匹配的下载。' : '网页下载会显示在这里。') : '';
+      status.textContent = list.hidden ? (query || selected!=='all' ? '没有匹配的下载。' : '网页下载会显示在这里。') : '';
       more.hidden = cursor === null;
     } catch (error) {
       if (request !== version) return;
@@ -228,6 +240,11 @@
     feedback.textContent = '';
     clearTimeout(timer);
     timer = setTimeout(() => load(false,true),120);
+  };
+  filter.onchange = () => {
+    clearTimeout(timer);
+    feedback.textContent = '';
+    load(false,true);
   };
   more.onclick = () => load(true);
   clear.onclick = () => dialog.showModal();

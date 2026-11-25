@@ -218,12 +218,12 @@ fn readState(statement: *db_api.Statement, id: u32, state_col: c_int, owner_col:
     return state;
 }
 
-pub fn list(allocator: std.mem.Allocator, options: sdk.HistoryQuery, buffer: *[24]sdk.Download) !sdk.DownloadPage {
+pub fn list(allocator: std.mem.Allocator, options: sdk.DownloadQuery, buffer: *[24]sdk.Download) !sdk.DownloadPage {
     if (options.query.len > 256) return error.InvalidParams;
     flush();
     const statement = try db_api.prepare(try connection(),
         \\SELECT id,path,state,received,total,started,owner_pid,owner_birth,source FROM downloads
-        \\WHERE id>0 AND id<?1 AND instr(lower(path),lower(?2)) ORDER BY id DESC LIMIT 25
+        \\WHERE id>0 AND id<?1 AND instr(lower(path),lower(?2)) ORDER BY id DESC
     );
     defer _ = sqlite.sqlite3_finalize(statement);
     try bind(statement,1,if (options.before) |id| id else @as(u64,std.math.maxInt(u32))+1);
@@ -234,16 +234,23 @@ pub fn list(allocator: std.mem.Allocator, options: sdk.HistoryQuery, buffer: *[2
         const status = sqlite.sqlite3_step(statement);
         if (status == db_api.done) return .{ .downloads=buffer[0..length],.next=null };
         if (status != db_api.row) return error.IOError;
+        const id: u32 = @intCast(number(statement,0));
+        const state = readState(statement,id,2,6);
+        const matches = switch (options.filter) {
+            .all => true,
+            .active => state == .choosing or state == .transferring,
+            .complete => state == .complete,
+            .unsuccessful => retryState(state),
+        };
+        if (!matches) continue;
         const filename = try db_api.columnText(statement,1);
         const name = if (std.mem.lastIndexOfAny(u8,filename,"\\/")) |index| filename[index+1..] else filename;
         if (name.len > 1200 or !std.unicode.utf8ValidateSlice(name)) continue;
         const cost = 6*name.len+192;
         if (length == buffer.len or cost > budget)
             return .{ .downloads=buffer[0..length],.next=buffer[length-1].id };
-        const id: u32 = @intCast(number(statement,0));
         const entry = lookup(id);
         const total = if (entry) |transfer| transfer.total else number(statement,4);
-        const state = readState(statement,id,2,6);
         buffer[length] = .{
             .id=id,.name=try allocator.dupe(u8,name),.state=state,
             .received=if (entry) |transfer| transfer.received else number(statement,3),
