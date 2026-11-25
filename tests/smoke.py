@@ -306,6 +306,24 @@ addEventListener('load',()=>{
         elif path.startswith("/media-control-report/"):
             type(self).media_reports[path.rsplit("/",1)[-1]]=urlsplit(self.path).query
             data, content_type = b"ok", "text/plain"
+        elif path == "/page/network-capture":
+            data = (b'<!doctype html><title>Network capture fixture</title><script>'
+                    b'for(let i=0;i<18;i++)fetch("/network-capture/item-"+i+"?secret=drop-this");'
+                    b'fetch("/network-capture/not-found?secret=drop-this");'
+                    b'fetch("/network-capture/interrupted").catch(()=>{});'
+                    b'fetch("/network-capture/redirect?secret=drop-this");</script>')
+            content_type = "text/html"
+        elif path == "/network-capture/interrupted":
+            self.close_connection = True
+            return
+        elif path == "/network-capture/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/network-capture/item-final?secret=drop-this")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        elif path.startswith("/network-capture/item-"):
+            data, content_type = b"ok", "text/plain"
         elif path.startswith("/notification-report/"):
             type(self).notification_reports[path.removeprefix("/notification-report/")] = urlsplit(self.path).query
             data, content_type = b"ok", "text/plain"
@@ -1006,6 +1024,7 @@ def run_win32(exe, base, root):
     database_write = site_data.exists() and '"siteData.databaseWrite"' in site_data.with_name("plugin.json").read_text(encoding="utf-8")
     record_remove = database_write and "siteData.removeRecord" in site_data.with_name("site-data.html").read_text(encoding="utf-8")
     page_source = exe.parent / "plugins" / "page-source" / "MoonPageSource.exe"
+    capture_plugin = exe.parent / "plugins" / "network-capture" / "MoonNetworkCapture.exe"
     has_page_save = page_source.exists() and any(
         command["id"]=="save" for command in
         json.loads(page_source.with_name("plugin.json").read_text(encoding="utf-8"))["contributes"]["commands"])
@@ -1069,6 +1088,7 @@ def run_win32(exe, base, root):
              "site_data_cache_write": cache_remove,
              "site_data_records": database_records, "site_data_database_write": database_write},
             {"id": "moon.source-fixture", "enabled": True, "tabs_read": False, "page_source": True},
+            *([{"id":"moon.network-fixture","enabled":True,"tabs_read":False,"network_capture":True}] if capture_plugin.exists() else []),
             {"id": "moon.closed-fixture", "enabled": True, "tabs_read": False, "tabs_closed_manage": True},
             {"id": "moon.privacy-cache-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
             {"id": "moon.privacy-data-fixture", "enabled": True, "tabs_read": False, "privacy_clear": True},
@@ -1818,6 +1838,63 @@ def run_win32(exe, base, root):
 })();</script>"""
         page = reader_page.read_text(encoding="utf-8").replace("<title>阅读模式</title>","<title>阅读模式验收页</title>")
         (fixture / "reader.html").write_text(page.replace("</html>",contract+"</html>"),encoding="utf-8")
+    if capture_plugin.exists():
+        fixture = profile / "plugins" / "network-capture-contract"
+        fixture.mkdir(parents=True)
+        shutil.copy2(capture_plugin, fixture / capture_plugin.name)
+        manifest = json.loads(capture_plugin.with_name("plugin.json").read_text(encoding="utf-8"))
+        manifest["id"] = "moon.network-fixture"
+        manifest["name"] = "网络请求验收"
+        manifest["contributes"]["commands"][0]["label"] = "运行网络请求验收"
+        (fixture / "plugin.json").write_text(json.dumps(manifest), encoding="utf-8")
+        page = capture_plugin.with_name("network.html").read_text(encoding="utf-8")
+        page = page.replace("<title>网络请求</title>", "<title>网络请求验收页</title>")
+        contract = """
+<script>(async()=>{
+    const emit=value=>window.webkit.messageHandlers.moonSettings.postMessage(JSON.stringify({op:"write",value}));
+    const read=async()=>JSON.parse(await window.webkit.messageHandlers.moonSettings.postMessage('{"op":"read"}')).value;
+    const wait=async(fn,label)=>{for(let n=0;n<220;n++){const found=await fn();if(found)return found;
+        await new Promise(resolve=>setTimeout(resolve,60));}throw Error(label);};
+    try {
+        await emit({phase:"opened"});
+        await wait(()=>!get("reload").disabled,"capture panel did not bind");
+        get("reload").click();
+        await emit({phase:"reloading"});
+        const all = await wait(async()=>{
+            const list=await host("list",{search:"/network-capture/"});
+            const older=list.next===null?null:await host("list",{search:"/network-capture/",before:list.next});
+            return older&&list.events.length+older.events.length>=22&&[list,older];
+        },"resource callback did not report the reloaded page resources");
+        if(all[0].next===null||all[0].events.length!==16)throw Error("capture pagination");
+        const entries=all.flatMap(page=>page.events);
+        if(new Set(entries.map(row=>row.id)).size!==entries.length||entries.some(row=>row.url.includes("?")||row.url.includes("drop-this")))
+            throw Error("duplicate pagination entries or query material");
+        const has=(part,code,kind)=>entries.some(row=>row.url.endsWith(part)&&row.status===code&&row.kind===kind);
+        if(!has("/item-0",200,"complete")||!has("/item-final",200,"complete")||
+           !has("/not-found",404,"complete")||!has("/redirect",302,"redirect")||
+           !has("/interrupted",null,"failed"))
+            throw Error("unexpected response or redirect: "+JSON.stringify(entries));
+        await wait(()=>!get("failures").checked&&get("older").disabled===false,"older-page control");
+        get("older").click();
+        await wait(()=>!get("newer").disabled&&get("events").childElementCount>0,"older events not rendered");
+        get("failures").click();
+        await wait(()=>get("events").childElementCount===2&&get("events").textContent.includes("404")&&
+            get("events").textContent.includes("加载失败"),"HTTP error filter");
+        get("record").click();
+        await wait(()=>get("record").textContent==="继续记录","pause control");
+        get("clear").click();
+        await wait(async()=>!get("record").disabled&&(await host("list",{})).retained===0,"clear control");
+        get("record").click();
+        await wait(()=>get("record").textContent==="暂停记录","resume control");
+        await emit({phase:"isolation"});
+        await wait(async()=>(await read())?.phase==="check-isolation","isolation signal");
+        if((await host("list",{search:"/page/network-unrelated"})).events.length)
+            throw Error("network records leaked from another tab");
+        await emit({passed:true});
+        get("focus").click();
+    }catch(error){await emit({error:String(error)});}
+})();</script>"""
+        (fixture / "network.html").write_text(page.replace("</html>", contract + "</html>"), encoding="utf-8")
     if site_data.exists():
         fixture = profile / "plugins" / "site-data-contract"
         fixture.mkdir(parents=True)
@@ -3352,6 +3429,37 @@ def run_win32(exe, base, root):
             user.PostMessageW(edit,0x0100,0x0D,1)
             wait_for(lambda: history_rows("SELECT id FROM visits WHERE url=?",(url,)),
                      f"Reading fixture did not finish loading: {url}",15)
+
+        if capture_plugin.exists():
+            if "记录网页网络请求" not in native_entries().get("开发与诊断",{}):
+                raise RuntimeError("Network capture command is missing from the developer menu")
+            source = base + "/page/network-capture"
+            navigate_reading(source)
+            native_entries(choose=("插件","网络请求验收","运行网络请求验收"))
+            wait_for(lambda: read_address() == "extension://moon.network-fixture/network.html",
+                     f"Network capture panel did not open from {source}")
+            report = profile / f'extension-{sha256(b"moon.network-fixture").hexdigest()}.json'
+            try:
+                phase = wait_for(lambda: (row:=read_settings(report)) and (row.get("phase")=="isolation" or row.get("error")) and row,
+                                 "No network capture isolation phase", 25)
+                if phase.get("error"):
+                    raise RuntimeError(phase["error"])
+                native_entries(choose="新建标签页\tCtrl+T")
+                navigate_reading(base + "/page/network-unrelated")
+                invoke("网络请求验收页")
+                wait_for(lambda: read_address() == "extension://moon.network-fixture/network.html",
+                         "Could not return to the network capture panel")
+                signal = report.with_suffix(".signal")
+                signal.write_text('{"phase":"check-isolation"}', encoding="utf-8")
+                signal.replace(report)
+                result = wait_for(lambda: (row:=read_settings(report)) and (row.get("passed") or row.get("error")) and row,
+                                  "No final network capture result", 25)
+            except RuntimeError as error:
+                raise RuntimeError(f"{error}: {read_settings(report)}, {read_address()}") from error
+            if not result.get("passed"):
+                raise RuntimeError(f"Network capture fixture: {result.get('error')}")
+            wait_for(lambda: read_address() == source, "Network panel did not return to the source tab")
+            print("network_capture=ok webkit_responses=ok redirect=ok query_redaction=ok paging=ok filters=ok pause_clear_resume=ok tab_isolation=ok source_focus=ok", flush=True)
 
         def find_bar():
             found = user.FindWindowExW(frame,None,"MoonFind",None)

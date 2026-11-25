@@ -18,6 +18,7 @@
 #include <WebKit/WKPageConfigurationRef.h>
 #include <WebKit/WKPageNavigationClient.h>
 #include <WebKit/WKPagePrivate.h>
+#include <WebKit/WKPageResourceLoadClient.h>
 #include <WebKit/WKPageStateClient.h>
 #include <WebKit/WKPageUIClient.h>
 #include <WebKit/WKPreferencesRef.h>
@@ -155,6 +156,7 @@ static WKNotificationManagerRef notification_manager;
 static uint64_t notification_visible, next_notification;
 static char notification_source[320];
 static void (*delete_site_cookies)(WKWebsiteDataStoreRef, WKStringRef, bool, void *, void (*)(void *));
+static void (*set_resource_load_client)(WKPageRef, WKPageResourceLoadClientBase *);
 static WKUserContentControllerRef normal_page_content;
 static DLL_DIRECTORY_COOKIE dll_directory;
 static wchar_t engine_dir[2048];
@@ -182,6 +184,7 @@ struct MoonView {
     uint64_t picker_deadline;
     bool docked, inspector_visible;
     bool tab_muted, site_muted;
+    bool capture_network;
     unsigned document_playing;
     uint64_t media_observer;
     uint64_t token;
@@ -232,6 +235,50 @@ static void copy_url(WKURLRef url, char *buffer, size_t cap) {
     if (!url) { buffer[0] = 0; return; }
     copy_string(wk.WKURLCopyString(url), buffer, cap);
     release(url);
+}
+static size_t capture_url(WKURLRef url, char *buffer, size_t cap) {
+    WKStringRef value = url ? wk.WKURLCopyString(url) : NULL;
+    if (!value) return 0;
+    size_t bytes = wk.WKStringGetUTF8CString(value, buffer, cap);
+    release(value);
+    return bytes;
+}
+static void report_network_event(const void *client, WKURLResponseRef response, WKURLRef original, int kind) {
+    MoonView *view = (MoonView *)client;
+    if (!view->capture_network) return;
+    char url[4096];
+    WKURLRef resolved = response ? wk.WKURLResponseCopyURL(response) : NULL;
+    size_t bytes = capture_url(resolved, url, sizeof(url));
+    release(resolved);
+    if (bytes <= 1) bytes = capture_url(original, url, sizeof(url));
+    // An incomplete authority cannot be safely stripped of user information.
+    if (bytes <= 1 || bytes >= sizeof(url) || url[bytes-1] != '\0') return;
+    int status = response ? wk.WKURLResponseHTTPStatusCode(response) : 0;
+    moon_network_capture_event(view, view->token, url, status >= 100 && status <= 599 ? (uint16_t)status : 0, kind);
+}
+static void capture_redirect(const void *client, WKPageRef page, WKURLResponseRef response, WKURLRequestRef next) {
+    (void)page;
+    (void)next;
+    report_network_event(client, response, NULL, MOON_NETWORK_REDIRECT);
+}
+static void capture_completion(const void *client, WKPageRef page, WKURLRef original, WKURLResponseRef response, WKErrorRef error) {
+    (void)page;
+    report_network_event(client, response, original, error ? MOON_NETWORK_FAILED : MOON_NETWORK_COMPLETE);
+}
+bool moon_engine_supports_network_capture(void) {
+    return set_resource_load_client != NULL;
+}
+bool moon_engine_network_capture(MoonView *view, bool enabled) {
+    if (!set_resource_load_client || view->extension_address) return false;
+    if (view->capture_network == enabled) return true;
+    view->capture_network = enabled;
+    WKPageResourceLoadClientV0 client = {
+        .base = { .version = 0, .clientInfo = view },
+        .didPerformRedirect = capture_redirect,
+        .didCompleteWithError = capture_completion,
+    };
+    set_resource_load_client(view->page, enabled ? &client.base : NULL);
+    return true;
 }
 static void emit(const void *client, int kind, const char *detail) {
     moon_engine_event(kind, ((const MoonView *)client)->token, detail);
@@ -776,6 +823,7 @@ const char *moon_engine_init(void) {
     WK_NOTIFICATION_FUNCTIONS(RESOLVE_OPTIONAL)
 #undef RESOLVE_OPTIONAL
     delete_site_cookies = (__typeof__(delete_site_cookies))GetProcAddress(module,"WKWebsiteDataStoreStatisticsDeleteCookiesForTesting");
+    set_resource_load_client = (__typeof__(set_resource_load_client))GetProcAddress(module,"WKPageSetResourceLoadClient");
     WKContextConfigurationRef ctx = wk.WKContextConfigurationCreate();
     if (!ctx) return "Could not create process configuration.";
     wk.WKContextConfigurationSetPrewarmsProcessesAutomatically(ctx,false);
@@ -1230,6 +1278,7 @@ void moon_engine_close(MoonView *view) {
         wk.WKUserContentControllerRemoveAllUserMessageHandlers(view->extension_controller);
         release(view->extension_controller);
     }
+    if (view->capture_network) moon_engine_network_capture(view, false);
     wk.WKPageSetPageStateClient(view->page,NULL);
     wk.WKPageSetPageNavigationClient(view->page,NULL);
     wk.WKPageSetPageUIClient(view->page,NULL);

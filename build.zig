@@ -60,6 +60,12 @@ pub fn build(b: *std.Build) void {
     });
     page_source.root_module.addImport("moon_plugin",plugin_sdk);
     b.installArtifact(page_source);
+    const capture = b.addExecutable(.{
+        .name = "MoonNetworkCapture",
+        .root_module = b.createModule(.{ .root_source_file=b.path("examples/network-capture/main.zig"), .target=target, .optimize=optimize, .link_libc=true }),
+    });
+    capture.root_module.addImport("moon_plugin",plugin_sdk);
+    b.installArtifact(capture);
     const popups = b.addExecutable(.{
         .name = "MoonPopups",
         .root_module = b.createModule(.{ .root_source_file=b.path("examples/popups/main.zig"), .target=target, .optimize=optimize, .link_libc=true }),

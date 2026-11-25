@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>网络请求</title>
+<style>
+  :root { color-scheme:light; font:14px/1.5 "Segoe UI","Microsoft YaHei UI",system-ui,sans-serif; --page:#f6f7fa; --surface:#fff; --text:#171b26; --muted:#535e74; --line:#dbe0ed; --accent:#4158bf; --soft:#edf0fc; --error:#a0253e; background:var(--page); color:var(--text); }
+  :root[data-moon-theme=dark] { color-scheme:dark; --page:#171a22; --surface:#222635; --text:#edf0f7; --muted:#b6c0d5; --line:#3a435b; --accent:#acbbff; --soft:#303852; --error:#ffadc0; }
+  * { box-sizing:border-box; }
+  body { margin:0; }
+  main { margin:auto; max-width:1280px; padding:28px clamp(16px,4vw,40px); }
+  h1 { margin:0; font-size:26px; }
+  header,.toolbar,footer { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  header { justify-content:space-between; }
+  p { color:var(--muted); margin:8px 0 18px; }
+  button,input[type=search] { background:var(--surface); color:inherit; border:1px solid var(--line); border-radius:8px; font:inherit; padding:7px 12px; }
+  button { cursor:pointer; }
+  button:disabled { cursor:default; opacity:.55; }
+  button:not(:disabled):hover { background:var(--soft); }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  #record { color:var(--accent); }
+  .surface { border:1px solid var(--line); border-radius:12px; background:var(--surface); overflow:hidden; }
+  .toolbar,footer { padding:10px 14px; }
+  input[type=search] { flex:1; min-width:145px; }
+  label { display:inline-flex; gap:5px; align-items:center; }
+  .scroll { overflow:auto; border-block:1px solid var(--line); }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  th,td { padding:8px 12px; text-align:left; vertical-align:top; }
+  th { background:var(--page); font-weight:600; }
+  tr+tr td { border-top:1px solid var(--line); }
+  .col { width:1%; white-space:nowrap; }
+  .url { overflow-wrap:anywhere; font:13px/1.55 Consolas,monospace; }
+  [data-error] { color:var(--error); }
+  #empty { margin:0; padding:24px 14px; }
+  #count { color:var(--muted); flex:1; }
+</style>
+<main>
+  <header><h1>网络请求</h1><div class="toolbar">
+    <button id="focus" disabled>返回网页</button>
+    <button id="reload" disabled>强制刷新并记录</button>
+    <button id="record" disabled>暂停记录</button>
+  </div></header>
+  <p id="status" role="status">正在连接浏览器…</p>
+  <section class="surface" aria-label="请求日志">
+    <div class="toolbar">
+      <input id="search" type="search" maxlength="40" aria-label="筛选请求地址" placeholder="筛选请求地址">
+      <label><input id="failures" type="checkbox"> 仅显示错误</label>
+      <button id="clear" disabled>清空日志</button>
+    </div>
+    <div class="scroll">
+      <table aria-label="网络事件">
+        <thead><tr><th scope="col">请求地址</th><th scope="col" class="col">HTTP</th><th scope="col" class="col">结果</th><th scope="col" class="col">记录时刻</th></tr></thead>
+        <tbody id="events"></tbody>
+      </table>
+      <p id="empty">暂无记录。</p>
+    </div>
+    <footer>
+      <span id="count"></span>
+      <button id="newer" disabled>较新</button><button id="older" disabled>较早</button>
+    </footer>
+  </section>
+</main>
+<script>
+  const get = id => document.getElementById(id);
+  const controls = ['focus', 'reload', 'record', 'clear'].map(get);
+  const labels = { complete:'完成', redirect:'重定向', failed:'加载失败' };
+  let request = 0, state = 'idle', next = null, cursors = [null], shown = '', epoch = 0, reading = false, acting = false;
+  let feedback = '';
+  async function host(method, params = {}) {
+    const id = 'network:' + ++request;
+    const raw = await window.webkit.messageHandlers.moonHost.postMessage(JSON.stringify({jsonrpc:'2.0', id, method:'network.capture.' + method, params}));
+    const response = JSON.parse(raw);
+    if (response.id !== id || response.error) throw Error('NETWORK_CAPTURE_UNAVAILABLE');
+    return response.result;
+  }
+  function render(page, unavailable = false) {
+    state = page.state;
+    next = page.next;
+    get('status').textContent = unavailable ? '网络请求面板暂不可用。请检查插件是否已启用并授权。' : feedback || ({
+      idle:'在网页的「… → 开发与诊断 → 记录网页网络请求」中开始记录。',
+      recording:'正在记录所选网页标签。请求地址已省略查询参数。',
+      paused:'记录已暂停。'
+    })[state];
+    controls.forEach(control => control.disabled = acting || state === 'idle');
+    get('record').textContent = state === 'paused' ? '继续记录' : '暂停记录';
+    get('newer').disabled = cursors.length < 2;
+    get('older').disabled = next === null;
+    get('count').textContent = state === 'idle' ? '' : '保留 ' + page.retained + ' 条' + (page.dropped ? ' · 覆盖 ' + page.dropped + ' 条较早记录' : '');
+    get('empty').hidden = page.events.length > 0;
+    get('empty').textContent = (get('failures').checked || get('search').value) && page.retained
+      ? '没有匹配的记录。' : '暂无记录。';
+    const key = page.events.map(event => event.id).join(',');
+    if (shown === key) return;
+    shown = key;
+    const rows = document.createDocumentFragment();
+    for (const event of page.events) {
+      const row = document.createElement('tr');
+      const values = [event.url + (event.truncated ? '…' : ''), event.status ?? '—', labels[event.kind], '+' + (event.elapsedMs / 1000).toFixed(3) + ' 秒'];
+      for (const [index, value] of values.entries()) {
+        const cell = row.insertCell();
+        cell.className = index ? 'col' : 'url';
+        cell.textContent = value;
+      }
+      if (event.kind === 'failed' || event.status >= 400) row.setAttribute('data-error', '');
+      rows.append(row);
+    }
+    get('events').replaceChildren(rows);
+  }
+  async function refresh() {
+    if (reading || document.hidden) return;
+    reading = true;
+    const revision = epoch;
+    try {
+      const page = await host('list', {before:cursors.at(-1), search:get('search').value.trim(), failures:get('failures').checked});
+      if (revision === epoch) render(page);
+    } catch {
+      if (revision === epoch) {
+        render({state:'idle', events:[], retained:0, dropped:0, next:null}, true);
+      }
+    } finally {
+      reading = false;
+      if (revision !== epoch) refresh();
+    }
+  }
+  function firstPage() { cursors = [null]; epoch++; refresh(); }
+  async function control(action) {
+    if (acting || state === 'idle') return;
+    acting = true;
+    controls.forEach(control => control.disabled = true);
+    try {
+      const result = await host('control', {action});
+      feedback = ({
+        edited:'网页有未提交的输入，请先保存或提交。',
+        resubmission:'刷新可能重新提交表单。你可以在网页中处理后再试。',
+        unavailable:'当前操作暂不可用。请确认原网页标签仍打开且已加载。'
+      })[result] || '';
+    } catch {
+      feedback = '操作未完成。请检查插件权限。';
+    } finally {
+      acting = false;
+      if (action === 'clear' || action === 'reload') firstPage();
+      else { epoch++; refresh(); }
+    }
+  }
+  get('search').addEventListener('input', firstPage);
+  get('failures').addEventListener('change', firstPage);
+  get('older').onclick = () => { if (next !== null) { cursors.push(next); next = null; epoch++; refresh(); } };
+  get('newer').onclick = () => { if (cursors.length > 1) { cursors.pop(); epoch++; refresh(); } };
+  ['focus', 'reload', 'clear'].forEach(name => get(name).onclick = () => control(name));
+  get('record').onclick = () => control(state === 'paused' ? 'resume' : 'pause');
+  document.addEventListener('visibilitychange', refresh);
+  setInterval(refresh, 750);
+  refresh();
+</script>
+</html>

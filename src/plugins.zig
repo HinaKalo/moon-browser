@@ -30,6 +30,7 @@ const Grant = struct {
     privacy_clear: bool = false,
     task_manager_manage: bool = false,
     media_control: ?bool = null,
+    network_capture: ?bool = null,
     ui_commands: bool = false,
     tabs_organize: bool = false,
     private_window: bool = false,
@@ -245,6 +246,7 @@ fn addManifest(directory: []const u8, sub: []const u8, id: []const u8, name: []c
         const default_permission: ?sdk.Permission = if (std.mem.eql(u8,id,"moon.history")) .@"history.manage"
             else if (std.mem.eql(u8,id,"moon.lua-manager")) .@"lua.scripts.manage"
             else if (std.mem.eql(u8,id,"moon.devtools")) .@"page.inspect"
+            else if (std.mem.eql(u8,id,"moon.network")) .@"network.capture"
             else if (std.mem.eql(u8,id,"moon.source")) .@"page.source"
             else if (std.mem.eql(u8,id,"moon.popups")) .@"popups.manage"
             else if (std.mem.eql(u8,id,"moon.bookmarks")) .@"bookmarks.manage"
@@ -416,6 +418,8 @@ pub fn init(app: []const u8, profile: []const u8) void {
         if (grant.enabled and grant.tabs_read and plugin.requests.contains(.@"tabs.read")) plugin.grants.insert(.@"tabs.read");
         if (grant.enabled and grant.lua_scripts_manage and plugin.requests.contains(.@"lua.scripts.manage")) plugin.grants.insert(.@"lua.scripts.manage");
         if (grant.enabled and grant.page_inspect and plugin.requests.contains(.@"page.inspect")) plugin.grants.insert(.@"page.inspect");
+        if (grant.enabled and (grant.network_capture orelse plugin.default_grants.contains(.@"network.capture")) and
+            plugin.requests.contains(.@"network.capture")) plugin.grants.insert(.@"network.capture");
         if (grant.enabled and grant.history_manage and plugin.requests.contains(.@"history.manage")) plugin.grants.insert(.@"history.manage");
         if (grant.enabled and grant.network_filter and plugin.requests.contains(.@"network.filter")) plugin.grants.insert(.@"network.filter");
         if (grant.enabled and grant.bookmarks_manage and plugin.requests.contains(.@"bookmarks.manage")) plugin.grants.insert(.@"bookmarks.manage");
@@ -532,6 +536,7 @@ fn persist() bool {
         .page_inspect = plugin.grants.contains(.@"page.inspect"),
         .history_manage = plugin.grants.contains(.@"history.manage"),
         .network_filter = plugin.grants.contains(.@"network.filter"),
+        .network_capture = plugin.grants.contains(.@"network.capture"),
         .bookmarks_manage = plugin.grants.contains(.@"bookmarks.manage"),
         .downloads_manage = plugin.grants.contains(.@"downloads.manage"),
         .downloads_preferences = plugin.grants.contains(.@"downloads.preferences"),
@@ -615,6 +620,7 @@ pub fn toggle(index: usize, permission: ?sdk.Permission) Change {
                 .@"siteSettings.zoom" => "此插件可查看保存过缩放比例的网站，并修改或删除例外。",
                 .@"history.manage" => "此插件可读取和删除本机浏览记录，包括网页标题、网址和访问时间。",
                 .@"network.filter" => "此插件可阻止匹配规则的网页请求，并为你指定的站点停用过滤。",
+                .@"network.capture" => "此插件可记录手动选中的网页标签的地址、响应状态和加载结果。记录仅在内存中保留，网址会去掉查询参数。",
                 .@"bookmarks.manage" => "此插件可读取、添加、编辑和删除本机书签。",
                 .@"bookmarks.transfer" => "此插件可打开文件选择框，从所选 HTML 文件导入书签，或导出书签到你选的位置。",
                 .@"downloads.manage" => "此插件可读取本机下载记录、取消或重试传输，并在文件夹中显示已保存的文件。",

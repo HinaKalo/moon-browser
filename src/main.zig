@@ -12,6 +12,7 @@ const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
 const page_source = @import("page_source.zig");
+const network_capture = @import("network_capture.zig");
 const reader = @import("reader.zig");
 const popups = @import("popup_policy.zig");
 const autoplay = @import("autoplay_policy.zig");
@@ -348,6 +349,7 @@ fn detach(tab: *Tab) void {
     if (shortcut_capture) |capture| {
         if (capture.tab == tab.id) shortcut_capture = null;
     }
+    network_capture.closed(tab.id);
     site_data.invalidate(tab.id);
     page_source.invalidate(tab.id);
     reader.invalidate(tab.id);
@@ -1217,16 +1219,17 @@ export fn moon_devtools_prefer_window() bool {
 }
 
 export fn moon_devtools_hard_reload(tab_id: u64, navigation: u64) c_int {
-    const result: sdk.HardReloadResult = result: {
-        const view = devtoolsTarget(tab_id,navigation) orelse break :result .unavailable;
-        const tab = &tabs[active];
-        if (tab.loading or !tab.loaded) break :result .unavailable;
-        if (tab.unsafe_history) break :result .resubmission;
-        if (tab.dirty) break :result .edited;
-        native.moon_engine_reload_from_origin(view);
-        break :result .started;
-    };
+    const view = devtoolsTarget(tab_id,navigation) orelse return @intFromEnum(sdk.HardReloadResult.unavailable);
+    const result = hardReloadGuard(&tabs[active]);
+    if (result == .started) native.moon_engine_reload_from_origin(view);
     return @intFromEnum(result);
+}
+
+fn hardReloadGuard(tab: *const Tab) sdk.HardReloadResult {
+    if (tab.loading or !tab.loaded) return .unavailable;
+    if (tab.unsafe_history) return .resubmission;
+    if (tab.dirty) return .edited;
+    return .started;
 }
 export fn moon_devtools_toggle(tab_id: u64, navigation: u64) c_int {
     const view = devtoolsTarget(tab_id,navigation) orelse return -1;
@@ -1803,6 +1806,7 @@ export fn moon_engine_event(kind: c_int, id: u64, detail: [*c]const u8) void {
             if (!tab.extension and !tab.restoring_history and plugins.systemEnabled(.@"history.manage")) tab.history_visit = history.record(slice(&tab.url),slice(&tab.title));
         },
         native.MOON_TERMINATED => {
+            network_capture.closed(id);
             site_data.closed(id);
             page_source.closed(id);
             reader.closed(id);
@@ -2130,6 +2134,7 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"privacy.clear" => "允许在确认后清除浏览数据",
         .@"taskManager.manage" => "允许查看和管理标签与进程",
         .@"media.control" => "允许控制媒体标签",
+        .@"network.capture" => "允许记录手动选中的网页标签的网络事件",
         .@"ui.commands" => "允许添加菜单入口和注册快捷键",
         .@"ui.settings" => "允许查看和打开插件设置入口",
         .@"tabs.organize" => "允许固定、静音和排序标签",
@@ -2173,6 +2178,11 @@ fn changePlugin(index: usize, permission: ?sdk.Permission) plugins.Change {
     if (permission == null or permission == .@"siteData.read" or permission == .@"siteData.cookieDetails" or
         permission == .@"siteData.records") checkSiteDataGrant();
     if (permission == null or permission == .@"page.source") checkPageSourceGrant();
+    if (permission == null or permission == .@"network.capture") {
+        if (network_capture.ownerId()) |owner| {
+            if (!plugins.hasGrant(owner,.@"network.capture")) network_capture.reset();
+        }
+    }
     if (permission == null or permission == .@"page.reader") {
         if (reader.ownerId()) |id| {
             if (!plugins.hasGrant(id,.@"page.reader")) reader.reset();
@@ -2401,6 +2411,50 @@ fn openInternalPage(address: []const u8) bool {
 fn checkPageSourceGrant() void {
     const owner = page_source.ownerId() orelse return;
     if (!plugins.hasGrant(owner,.@"page.source")) page_source.reset();
+}
+
+export fn moon_network_capture_open(id: [*c]const u8, source: u64, navigation: u64) bool {
+    if (native.moon_shell_private() or !native.moon_engine_supports_network_capture()) return false;
+    const view = devtoolsTarget(source, navigation) orelse return false;
+    if (!moon_plugin_open_page(id)) return false;
+    const panel = tabs[active].id;
+    if (!tabs[active].extension or source == panel) return false;
+    const tab = &tabs[tabIndex(source) orelse return false];
+    if (tab.view != view or tab.navigation != navigation) return false;
+    return network_capture.begin(slice(id), source, panel, view);
+}
+
+export fn moon_network_capture_event(view: *native.MoonView, tab: u64, url: [*c]const u8, status: u16, kind: c_int) void {
+    if (stopped or url == null) return;
+    network_capture.add(view, tab, slice(url), status, std.enums.fromInt(sdk.NetworkEventKind, kind) orelse return);
+}
+
+export fn moon_network_capture_control(id: [*c]const u8, panel: u64, command: c_int) c_int {
+    const result: sdk.NetworkCaptureResult = control: {
+        if (!moon_extension_panel_active(panel)) break :control .unavailable;
+        const source = network_capture.sourceFor(panel, slice(id)) orelse break :control .unavailable;
+        const index = tabIndex(source) orelse break :control .unavailable;
+        const tab = &tabs[index];
+        const action = std.enums.fromInt(sdk.NetworkCaptureAction, command) orelse break :control .unavailable;
+        switch (action) {
+            .pause, .@"resume" => if (!network_capture.setRecording(action == .@"resume")) break :control .unavailable,
+            .clear => network_capture.clear(),
+            .focus => chooseTab(index, true),
+            .reload => {
+                if (!hasSite(tab)) break :control .unavailable;
+                switch (hardReloadGuard(tab)) {
+                    .unavailable => break :control .unavailable,
+                    .resubmission => break :control .resubmission,
+                    .edited => break :control .edited,
+                    .started => {},
+                }
+                if (!network_capture.setRecording(true)) break :control .unavailable;
+                native.moon_engine_reload_from_origin(tab.view.?);
+            },
+        }
+        break :control .ok;
+    };
+    return @intFromEnum(result);
 }
 
 export fn moon_page_source_open(id: [*c]const u8, source: u64, expected: [*c]const u8) bool {

@@ -135,6 +135,12 @@ bool moon_engine_set_request_policy(const char *rules, const char *document_scri
 void moon_engine_shutdown(void);
 MoonView *moon_engine_open(uint64_t token);
 void moon_engine_close(MoonView *view);
+bool moon_engine_supports_network_capture(void);
+bool moon_engine_network_capture(MoonView *view, bool enabled);
+enum { MOON_NETWORK_COMPLETE, MOON_NETWORK_REDIRECT, MOON_NETWORK_FAILED };
+void moon_network_capture_event(MoonView *view, uint64_t tab, const char *url, uint16_t status, int kind);
+bool moon_network_capture_open(const char *id, uint64_t tab, uint64_t navigation);
+int moon_network_capture_control(const char *id, uint64_t panel, int action);
 void moon_engine_show(MoonView *view, bool visible);
 bool moon_engine_load(MoonView *view, const char *url);
 MoonView *moon_engine_open_extension(uint64_t token, const char *plugin_id, const char *address);
@@ -331,7 +337,7 @@ typedef struct { uint64_t tab_id, navigation; bool site_muted, tab_muted; char o
 bool moon_site_context(MoonSiteContext *site);
 void moon_site_menu_run(const MoonSiteContext *site, size_t index, size_t command);
 enum MoonLinkMenu { MOON_LINK_OPEN = 1, MOON_LINK_COPY, MOON_LINK_BOOKMARK, MOON_LINK_MENU_STRIDE = 13 };
-enum { MOON_PLUGIN_LIMIT = 64, MOON_PLUGIN_MENU_PERMISSION_LIMIT = 41 };
+enum { MOON_PLUGIN_LIMIT = 64, MOON_PLUGIN_MENU_PERMISSION_LIMIT = 42 };
 typedef struct { uint64_t tab_id, navigation; char url[4096], label[512]; } MoonLinkContext;
 bool moon_link_capture(MoonLinkContext *link, uint64_t tab);
 bool moon_link_current(const MoonLinkContext *link);

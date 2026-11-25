@@ -11,6 +11,7 @@ const bookmarks = @import("bookmarks.zig");
 const downloads = @import("downloads.zig");
 const site_data = @import("site_data.zig");
 const page_source = @import("page_source.zig");
+const network_capture = @import("network_capture.zig");
 const popups = @import("popup_policy.zig");
 const autoplay = @import("autoplay_policy.zig");
 const site_sound = @import("site_sound.zig");
@@ -65,6 +66,7 @@ pub fn permissionFor(method: sdk.Method) ?sdk.Permission {
         .@"lua.scripts.getSource", .@"lua.scripts.update", .@"lua.scripts.reloadActive", .@"lua.scripts.lastError" => .@"lua.scripts.manage",
         .@"devtools.open", .@"devtools.toggle", .@"devtools.hardReload", .@"devtools.viewport" => .@"page.inspect",
         .@"pageSource.open", .@"pageSource.status", .@"pageSource.read" => .@"page.source",
+        .@"network.capture.open", .@"network.capture.list", .@"network.capture.control" => .@"network.capture",
         .@"page.saveHtml" => .@"page.save",
         .@"popups.open", .@"popups.status", .@"popups.setRule", .@"popups.openBlocked" => .@"popups.manage",
         .@"siteSettings.current", .@"siteSettings.openTool", .@"siteSettings.setFiltering" => .@"popups.manage",
@@ -223,6 +225,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"siteData.cacheRemove", .@"siteData.database", .@"siteData.storagePage", .@"siteData.cookiePage", .@"siteData.removeCookie" => {},
         .@"siteData.databaseRecords", .@"siteData.clearObjectStore", .@"siteData.removeRecord" => {},
         .@"pageSource.status", .@"pageSource.read" => {},
+        .@"network.capture.list", .@"network.capture.control" => {},
         .@"reading.article", .@"reading.read", .@"reading.returnToPage" => {},
         .@"popups.status", .@"popups.setRule", .@"popups.openBlocked", .@"siteSettings.autoplay.get", .@"siteSettings.autoplay.set" => {},
         .@"siteSettings.current", .@"siteSettings.openTool", .@"siteSettings.setFiltering" => {},
@@ -249,6 +252,7 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
         .@"host.getInfo", .@"browser.openDefaultApps", .@"tabs.getActive", .@"lua.scripts.list", .@"settings.read", .@"ui.openPage", .@"history.clear",
         .@"network.filter.status", .@"bookmarks.saveActive", .@"bookmarks.bar.toggle", .@"bookmarks.importHtml", .@"bookmarks.exportHtml", .@"siteData.open",
         .@"siteData.status", .@"siteData.refresh", .@"siteData.openInspector", .@"reading.find", .@"pageSource.open", .@"pageSource.status",
+        .@"network.capture.open",
         .@"reading.open", .@"reading.article", .@"reading.returnToPage",
         .@"popups.open", .@"popups.status", .@"siteSettings.autoplay.get", .@"downloads.clearCompleted", .@"tabs.openLink", .@"tabs.copyLink", .@"bookmarks.saveLink",
         .@"siteSettings.sound.get", .@"siteSettings.sound.toggle",
@@ -418,6 +422,26 @@ pub fn dispatch(output: std.mem.Allocator, bytes: []const u8, context: Context) 
             const encoder = std.base64.standard.Encoder;
             const buffer = try allocator.alloc(u8,encoder.calcSize(chunk.bytes.len));
             return sdk.result(output,id,sdk.PageSourceChunk{ .sourceBase64=encoder.encode(buffer,chunk.bytes), .next=chunk.next });
+        },
+        .@"network.capture.open" => {
+            if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);
+            const owner = try allocator.dupeSentinel(u8, context.plugin_id, 0);
+            return sdk.result(output, id, native.moon_network_capture_open(owner.ptr, context.target_tab_id, context.target_navigation));
+        },
+        .@"network.capture.list" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const query = decode(sdk.NetworkCaptureQuery, allocator, params) catch return sdk.failure(output,id,.InvalidParams);
+            if (query.search.len > 120) return sdk.failure(output,id,.InvalidParams);
+            var rows: [network_capture.page_size]sdk.NetworkCaptureEvent = undefined;
+            const page = network_capture.list(context.target_tab_id, context.plugin_id, query, &rows);
+            return sdk.result(output, id, page);
+        },
+        .@"network.capture.control" => {
+            if (!context.from_page) return sdk.failure(output,id,.PermissionDenied);
+            const args = decode(struct { action: sdk.NetworkCaptureAction }, allocator, params) catch return sdk.failure(output,id,.InvalidParams);
+            const owner = try allocator.dupeSentinel(u8, context.plugin_id, 0);
+            const result = native.moon_network_capture_control(owner.ptr, context.target_tab_id, @intFromEnum(args.action));
+            return sdk.result(output, id, std.enums.fromInt(sdk.NetworkCaptureResult, result) orelse .unavailable);
         },
         .@"popups.open" => {
             if (!context.user_command) return sdk.failure(output,id,.PermissionDenied);

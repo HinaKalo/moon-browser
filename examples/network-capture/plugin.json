@@ -1,0 +1,15 @@
+{
+  "id": "moon.network",
+  "name": "网络请求",
+  "version": "1.0.0",
+  "apiVersion": 2,
+  "runtime": "native",
+  "entry": "MoonNetworkCapture.exe",
+  "settingsPage": "network.html",
+  "contributes": {
+    "commands": [
+      { "id": "open", "label": "记录网页网络请求", "menu": "developer" }
+    ]
+  },
+  "permissions": ["network.capture"]
+}

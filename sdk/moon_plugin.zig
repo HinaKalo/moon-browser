@@ -50,6 +50,7 @@ pub const Permission = enum {
     @"ui.settings",
     @"siteSettings.notifications",
     @"media.control",
+    @"network.capture",
 };
 pub const Event = enum { @"tabs.changed" };
 pub const Shortcut = enum {
@@ -258,6 +259,25 @@ pub const ScriptSource = struct { sourceBase64: []const u8 };
 pub const ScriptUpdate = struct { id: []const u8, sourceBase64: []const u8 };
 pub const ReloadResult = enum { reloaded, noMatchingPage, protectedPage };
 pub const InspectorPanel = enum(c_int) { inspector, console, resources, elements };
+pub const NetworkEventKind = enum(c_int) { complete, redirect, failed };
+pub const NetworkCaptureAction = enum(c_int) { pause, @"resume", clear, reload, focus };
+pub const NetworkCaptureResult = enum(c_int) { ok, unavailable, edited, resubmission };
+pub const NetworkCaptureQuery = struct { before: ?u64 = null, search: []const u8 = "", failures: bool = false };
+pub const NetworkCaptureEvent = struct {
+    id: u64,
+    url: []const u8,
+    status: ?u16,
+    kind: NetworkEventKind,
+    elapsedMs: u64,
+    truncated: bool,
+};
+pub const NetworkCapturePage = struct {
+    state: enum { idle, recording, paused } = .idle,
+    events: []const NetworkCaptureEvent = &.{},
+    retained: usize = 0,
+    dropped: u64 = 0,
+    next: ?u64 = null,
+};
 pub const ViewportSize = struct { width: u16, height: u16 };
 pub const ViewportPreset = enum(c_uint) { compactPhone = 1, widePhone, tablet, desktop };
 pub const ViewportOptions = struct { size: ?ViewportSize = null, preset: ?ViewportPreset = null, fit: ?bool = null };
@@ -464,6 +484,9 @@ pub const Method = enum {
     @"pageSource.open",
     @"pageSource.status",
     @"pageSource.read",
+    @"network.capture.open",
+    @"network.capture.list",
+    @"network.capture.control",
     @"page.saveHtml",
     @"popups.open",
     @"popups.status",

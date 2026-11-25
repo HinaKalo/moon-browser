@@ -135,6 +135,13 @@
       "url": "https://docs.browser.moonl.cloud/devtools.html"
     },
     {
+      "id": "moon.network",
+      "name": "网络请求",
+      "description": "记录所选网页标签的 HTTP 状态、重定向和加载失败，支持搜索、筛选、暂停及强制刷新。",
+      "permission": "记录手动选中的网页标签的网络事件",
+      "url": "https://docs.browser.moonl.cloud/devtools.html#网络请求"
+    },
+    {
       "id": "moon.example",
       "name": "活动标签示例",
       "description": "在浏览器内显示当前标签标题，演示 API 2 原生命令、标签授权与快捷键。",
