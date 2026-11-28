@@ -18,13 +18,13 @@
 .\tools\release.ps1 -Async
 ~~~
 
-命令返回进程 ID 和日志路径。任务在独立 Git 工作树固定本次提交，本地跑单元测试、Windows 界面及 WebKit 冒烟测试，并检查两种包和 WinGet 清单。通过后推送源码，同步 GitHub Release 和 Moon preview，再更新或新建 WinGet PR。WinGet 收录进度以社区 PR 为准。
+命令返回进程 ID 和日志路径。任务在独立 Git 工作树固定本次提交，本地跑单元测试、Windows 界面及 WebKit 快速冒烟测试，并检查两种包和 WinGet 清单。界面冒烟覆盖窗口调整、中文地址、主菜单常用命令和插件市场。通过后推送源码，同步 GitHub Release 和 Moon preview，再更新或新建 WinGet PR。WinGet 收录进度以社区 PR 为准。
 
 发布任务从打包完成到验收和上传结束都会锁住该产物目录。并行构建或清理会保留正在使用的产物，它仍计入缓存上限。任务退出后，该目录可按普通缓存规则回收。
 
 日志位于 $env:LOCALAPPDATA\MoonBrowser\release-jobs\<版本>.log，保留最近五个。去掉 -Async 可在前台运行同一流程。发布只检查版本及产物元数据，省略下载后的 SHA-256 比对。WinGet 的 InstallerSha256 由同批安装包生成。若中途失败，用同版同批文件重跑。
 
-完整压力测试可用 .\build.ps1 verify。修改打包或安装逻辑时，用 .\tests\distribution.ps1 <产物目录> 验证 Portable 引导及 Installer 安装和卸载。
+完整 Windows 界面回归及压力测试可用 .\build.ps1 verify。修改打包或安装逻辑时，用 .\tests\distribution.ps1 <产物目录> 验证 Portable 引导及 Installer 安装和卸载。
 
 修改 Installer 的 WebKit 复用条件时，用 .\tests\installer-engine.ps1 -PreviousSetup <旧安装包> -Setup <新安装包> 验证同内核升级和缺失文件修复。使用未安装 Moon Browser 的 Windows 用户配置。
 

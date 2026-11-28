@@ -941,7 +941,7 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
         print("download_completion_record=ok", flush=True)
 
 
-def run_win32(exe, base, root):
+def run_win32(exe, base, root, quick=False):
     import ctypes
     from ctypes import wintypes as wt
 
@@ -3386,6 +3386,16 @@ def run_win32(exe, base, root):
                 user.PostMessageW(owner_window or frame,0x001F,0,0)  # WM_CANCELMODE
                 wait_for(lambda: not open_menu(),"Main menu did not dismiss")
 
+        def open_market_from_manager():
+            wait_for(lambda: read_address()=="moon://plugins/","Plugin Manager did not open")
+            wait_for(visible_page_view,"Plugin Manager has no WebKit view")
+            sleep(.5)
+            bounds = wt.RECT()
+            user.GetClientRect(content,ctypes.byref(bounds))
+            page_click(bounds.right-px(75),px(57))
+            wait_for(lambda: read_address()=="moon://market/","Plugin Manager did not open the market")
+            print("plugin_market_entry=ok",flush=True)
+
         def manager_permission(plugin_id, permission_index, *, has_settings=True, search=True):
             native_entries(choose="管理插件")
             wait_for(lambda: read_address()=="moon://plugins/","Plugin Manager did not open")
@@ -3422,6 +3432,19 @@ def run_win32(exe, base, root):
             print("main_menu=ok bookmarks_top_level=ok downloads_top_level=ok plugin_entry_unified=ok",flush=True)
             if "Lua 用户脚本" in entries or "打开 Lua 脚本编辑器" not in entries.get("扩展工具",{}):
                 raise RuntimeError("Lua scripts still have a shell menu or lost their plugin menu entry")
+
+        if quick:
+            for label, address in (
+                ("收藏夹\tCtrl+Shift+O", "extension://moon.bookmarks/bookmarks.html"),
+                ("下载\tCtrl+J", "extension://moon.downloads/downloads.html"),
+                ("打开浏览器设置\tCtrl+,", "extension://moon.settings/settings.html"),
+            ):
+                native_entries(choose=label)
+                wait_for(lambda: read_address()==address,f"{label!r} did not open its page")
+            native_entries(choose="管理插件")
+            open_market_from_manager()
+            print("release_ui=ok native_menu_actions=ok plugin_manager_to_market=ok",flush=True)
+            return
 
         if devtools.exists():
             sleep(0.3)
@@ -3742,13 +3765,7 @@ def run_win32(exe, base, root):
                     close_independent_inspector()
             print("devtools_system_plugin=ok", flush=True)
             invoke("管理插件")
-            wait_for(lambda: read_address() == "moon://plugins/", "Browser did not open the built-in plugin manager")
-            sleep(.5)
-            bounds = wt.RECT()
-            user.GetClientRect(content,ctypes.byref(bounds))
-            page_click(bounds.right-px(75),px(57))
-            wait_for(lambda: read_address() == "moon://market/", "Plugin Manager did not open the market")
-            print("plugin_market_entry=ok", flush=True)
+            open_market_from_manager()
             invoke("管理插件")
             wait_for(lambda: read_address() == "moon://plugins/", "Could not return to the plugin manager")
             click(px(70),px(65))
@@ -6970,7 +6987,7 @@ def main():
     parser.add_argument("--pressure", action="store_true")
     parser.add_argument("--gdi", action="store_true")
     parser.add_argument("--ui", action="store_true", help="Also test actual Win32 resizing and Unicode navigation")
-    parser.add_argument("--quick", action="store_true", help="Skip the 50-tab stress and run the engine/plugin/download checks")
+    parser.add_argument("--quick", action="store_true", help="Run engine, plugin, download, and optional Win32 release smoke checks")
     parser.add_argument("--report", type=Path, help="Copy browser metrics to this path")
     args = parser.parse_args()
     source = args.exe.resolve(strict=True)
@@ -6997,7 +7014,7 @@ def main():
                 if args.report and report.exists():
                     args.report.write_bytes(report.read_bytes())
             if args.ui:
-                run_win32(exe, base, root / "ui")
+                run_win32(exe, base, root / "ui", quick=args.quick)
         finally:
             server.shutdown()
             thread.join()
