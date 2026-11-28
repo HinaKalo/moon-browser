@@ -3283,7 +3283,7 @@ def run_win32(exe, base, root):
         set_control(edit,selected_text)
         user.SendMessageW(edit,0x00B1,0,len(selected_text))  # EM_SETSEL
         user.SendMessageW(frame,0x0231,0,0)  # WM_ENTERSIZEMOVE
-        for left, width in ((-260,820),(140,970),(225,1050),(rect.left,rect.right-rect.left))*3:
+        for left, width in ((-260,820),(225,1050),(rect.left,rect.right-rect.left)):
             user.SetWindowPos(frame,None,left,rect.top,width,rect.bottom-rect.top,0x0014)
             sleep(0.02)
         user.SendMessageW(frame,0x0232,0,0)  # WM_EXITSIZEMOVE
@@ -3731,7 +3731,7 @@ def run_win32(exe, base, root):
                     user.PostMessageW(edit,0x0100,0x7B,1)
                     close_independent_inspector()
             print("devtools_system_plugin=ok", flush=True)
-            native_entries(choose="管理插件")
+            invoke("管理插件")
             wait_for(lambda: read_address() == "moon://plugins/", "Browser did not open the built-in plugin manager")
             sleep(.5)
             bounds = wt.RECT()
@@ -3739,7 +3739,7 @@ def run_win32(exe, base, root):
             page_click(bounds.right-px(75),px(57))
             wait_for(lambda: read_address() == "moon://market/", "Plugin Manager did not open the market")
             print("plugin_market_entry=ok", flush=True)
-            native_entries(choose="管理插件")
+            invoke("管理插件")
             wait_for(lambda: read_address() == "moon://plugins/", "Could not return to the plugin manager")
             click(px(70),px(65))
             palette_window = find_palette()
