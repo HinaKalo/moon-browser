@@ -5,7 +5,8 @@
     .minimum_zig_version = "0.17.1",
     .dependencies = .{
         .moonui = .{
-            .path = "../moon-win32-modern",
+            .url = "git+https://github.com/HinaKalo/moonui.git#a9bc7ed50940ddd7c0a8f83067195f175dd00797",
+            .hash = "moonui-0.1.0-WpNFE9LDBgBAAuThMzI7spuXYhK4-nLiOWIlqs-J5DZf",
         },
     },
     .paths = .{

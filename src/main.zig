@@ -1948,23 +1948,8 @@ export fn moon_command(command: c_int, argument: u64, c_text: [*c]const u8) void
             tab.dirty = true;
         },
         native.MOON_DIAGNOSTICS => if (!plugins.namedCommand("moon.task-manager","open",tabSnapshot()))
-            native.moon_shell_toast("内存诊断","请在插件菜单启用浏览器任务管理器。"),
+            native.moon_shell_toast("内存诊断","请在「管理插件」中启用浏览器任务管理器。"),
         native.MOON_TICK => maintenance(),
-        native.MOON_PLUGIN_ENABLE => {
-            if (native.moon_shell_private()) return;
-            if (changePlugin(index,null)==.unavailable)
-                native.moon_shell_info("插件设置","无法保存插件设置。");
-        },
-        native.MOON_PLUGIN_GRANT => {
-            if (native.moon_shell_private()) return;
-            const permission = std.enums.fromInt(sdk.Permission,index & 0xffffffff) orelse return;
-            if (changePlugin(index >> 32,permission)==.unavailable)
-                native.moon_shell_info("插件设置","无法保存插件设置。");
-        },
-        native.MOON_PLUGIN_SETTINGS => {
-            var address: [256]u8 = undefined;
-            if (plugins.settingsAddress(index,&address)) |url| _ = openInternalPage(url);
-        },
         native.MOON_PLUGIN_COMMAND => plugins.command(index >> 32, index & 0xffffffff, tabSnapshot()),
         native.MOON_FOCUS_ADDRESS => native.moon_shell_focus_address(),
         native.MOON_TOGGLE_SIDEBAR => {
@@ -2292,9 +2277,6 @@ export fn moon_plugin_link_action(index: usize, command: usize) c_uint {
     return if (plugins.linkAction(index,command)) |operation| @intFromEnum(operation) else 0;
 }
 
-export fn moon_plugin_bound_action(index: usize, command: usize) bool {
-    return plugins.boundOnly(index,command);
-}
 
 export fn moon_link_menu_run(link: *const native.MoonLinkContext, index: usize, command: usize) void {
     if (moon_link_current(link)) plugins.linkCommand(index,command,tabSnapshot(),link);
@@ -2336,9 +2318,6 @@ export fn moon_controls() c_uint {
 export fn moon_plugin_count() usize {
     return plugins.count();
 }
-export fn moon_plugin_label(index: usize) [*:0]const u8 {
-    return plugins.label(index);
-}
 export fn moon_plugin_action_count(index: usize) usize {
     return plugins.actionCount(index);
 }
@@ -2349,9 +2328,6 @@ export fn moon_plugin_action_shortcut(index: usize, command: usize) [*:0]const u
     if (plugins.userShortcut(index,command)) |shortcut| return shortcut;
     if (plugins.registeredShortcut(index,command)) |shortcut| return shortcut;
     return if (plugins.actionShortcut(index,command)) |key| @tagName(key) else "";
-}
-export fn moon_plugin_enabled(index: usize) bool {
-    return plugins.isEnabled(index);
 }
 export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
     const permission = std.enums.fromInt(sdk.Permission,index) orelse return "";
@@ -2399,13 +2375,6 @@ export fn moon_plugin_permission_label(index: usize) [*:0]const u8 {
         .@"tabs.manage" => "允许复制和批量关闭标签",
         .@"search.manage" => "允许调整浏览器搜索引擎",
     };
-}
-export fn moon_plugin_permission_flags(index: usize, ordinal: usize) c_uint {
-    const permission = std.enums.fromInt(sdk.Permission,ordinal) orelse return 0;
-    return plugins.permissionFlags(index,permission);
-}
-export fn moon_plugin_has_settings(index: usize) bool {
-    return plugins.hasSettings(index);
 }
 export fn moon_extension_settings(id: [*c]const u8, request: [*c]const u8, result: [*c]u8, cap: usize) bool {
     if (stopped or plugins.pageGrants(slice(id)) == null) return false;

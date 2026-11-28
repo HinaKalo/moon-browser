@@ -10,7 +10,7 @@
 | `developer` | 开发与诊断 |
 | `extensions` | 扩展工具 |
 
-随包插件启用后显示声明的分组入口。外部插件需由用户授权 `ui.commands` 才能显示分组入口。可声明的 `shortcut` 列在 [插件清单 Schema](https://github.com/HinaKalo/moon-browser/blob/main/sdk/plugin.schema.json) 中。
+随包插件启用后显示声明的分组入口。随包命令可用 `menuPinned: true` 默认显示在一级。用户可以在「管理插件 → 命令与快捷键」调整固定项。外部插件需由用户授权 `ui.commands` 才能显示分组入口。可声明的 `shortcut` 列在 [插件清单 Schema](https://github.com/HinaKalo/moon-browser/blob/main/sdk/plugin.schema.json) 中。
 
 ## 站点菜单
 

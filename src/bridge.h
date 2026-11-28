@@ -7,9 +7,9 @@
 enum MoonCommand {
     MOON_NEW = 1, MOON_CLOSE, MOON_SELECT, MOON_BACK, MOON_FORWARD, MOON_RELOAD,
     MOON_ADDRESS, MOON_TICK, MOON_INPUT, MOON_DIAGNOSTICS, MOON_PLUGIN_COMMAND,
-    MOON_PLUGIN_ENABLE, MOON_PLUGIN_GRANT, MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
+    MOON_SHUTDOWN, MOON_KEY_NEXT, MOON_KEY_PREV,
     MOON_FOCUS_ADDRESS, MOON_TOGGLE_SIDEBAR, MOON_OPEN_PLUGINS, MOON_UPDATES,
-    MOON_PLUGIN_SETTINGS, MOON_MARKET,
+    MOON_MARKET,
     MOON_TAB_PIN, MOON_TAB_MUTE, MOON_TAB_CLOSE_TARGET, MOON_TAB_DUPLICATE, MOON_TAB_COPY_ADDRESS,
     MOON_TAB_CLOSE_OTHERS, MOON_TAB_CLOSE_BELOW, MOON_TAB_GROUP_NEW, MOON_TAB_GROUP_PANEL, MOON_TAB_GROUP_REMOVE,
     MOON_TAB_CLOSE_SELECTED
@@ -255,14 +255,10 @@ enum { MOON_TAB_ORGANIZE = 1, MOON_TAB_MANAGE = 2, MOON_TAB_GROUPS = 4 };
 unsigned moon_tab_tools_permissions(void);
 unsigned moon_controls(void);
 size_t moon_plugin_count(void);
-const char *moon_plugin_label(size_t index);
 size_t moon_plugin_action_count(size_t index);
 const char *moon_plugin_action(size_t index, size_t command);
 const char *moon_plugin_action_shortcut(size_t index, size_t command);
-bool moon_plugin_enabled(size_t index);
 const char *moon_plugin_permission_label(size_t permission);
-unsigned moon_plugin_permission_flags(size_t index, size_t permission);
-bool moon_plugin_has_settings(size_t index);
 int moon_userscript_reload_active(const char *id);
 bool moon_devtools_open(int panel, int placement, uint64_t tab_id, uint64_t navigation);
 bool moon_devtools_prefer_window(void);
@@ -348,12 +344,11 @@ typedef struct { uint64_t tab_id, navigation; bool site_muted, tab_muted; char o
 bool moon_site_context(MoonSiteContext *site);
 void moon_site_menu_run(const MoonSiteContext *site, size_t index, size_t command);
 enum MoonLinkMenu { MOON_LINK_OPEN = 1, MOON_LINK_COPY, MOON_LINK_BOOKMARK, MOON_LINK_MENU_STRIDE = 14 };
-enum { MOON_PLUGIN_LIMIT = 64, MOON_PLUGIN_MENU_PERMISSION_LIMIT = 42 };
+enum { MOON_PLUGIN_LIMIT = 64 };
 typedef struct { uint64_t tab_id, navigation; char url[4096], label[512]; } MoonLinkContext;
 bool moon_link_capture(MoonLinkContext *link, uint64_t tab);
 bool moon_link_current(const MoonLinkContext *link);
 unsigned moon_plugin_link_action(size_t index, size_t command);
-bool moon_plugin_bound_action(size_t index, size_t command);
 void moon_link_menu_run(const MoonLinkContext *link, size_t index, size_t command);
 unsigned moon_link_open(const MoonLinkContext *link);
 typedef struct { uint64_t source, anchor; bool after, into_group; } MoonTabDrop;

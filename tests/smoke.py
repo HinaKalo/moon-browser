@@ -3386,8 +3386,40 @@ def run_win32(exe, base, root):
                 user.PostMessageW(owner_window or frame,0x001F,0,0)  # WM_CANCELMODE
                 wait_for(lambda: not open_menu(),"Main menu did not dismiss")
 
+        def manager_permission(plugin_id, permission_index, *, has_settings=True, search=True):
+            native_entries(choose="管理插件")
+            wait_for(lambda: read_address()=="moon://plugins/","Plugin Manager did not open")
+            view = wait_for(visible_page_view,"Plugin Manager has no WebKit view")
+            sleep(.5)
+            page_click(px(75),px(132))  # The search field above the plugin list
+            if search:
+                for char in plugin_id:
+                    user.PostMessageW(view,0x0102,ord(char),1)
+                sleep(.3)
+            def press(key):
+                user.PostMessageW(view,0x0100,key,1)
+                user.PostMessageW(view,0x0101,key,0xc0000001)
+            # Three filters, the matching plugin, Enable, then its settings and permissions.
+            for _ in range(6 + has_settings + permission_index):
+                press(0x09)
+            press(0x20)
+            user.PostMessageW(view,0x0102,0x20,1)
+
+        def saved_permission(path, plugin_id, grant, enabled):
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, PermissionError):
+                return False
+            return any(entry["id"]==plugin_id and entry[grant]==enabled for entry in state)
+
         if unified_manager:
             entries = native_entries()
+            if {"插件", "插件市场"} & entries.keys() or "管理插件" not in entries:
+                raise RuntimeError(f"The main menu should have a single plugin management entry: {list(entries)}")
+            for label in ("收藏夹\tCtrl+Shift+O", "下载\tCtrl+J"):
+                if label not in entries or any(label in group for group in entries.values()):
+                    raise RuntimeError(f"Expected a single top-level entry for {label!r}")
+            print("main_menu=ok bookmarks_top_level=ok downloads_top_level=ok plugin_entry_unified=ok",flush=True)
             if "Lua 用户脚本" in entries or "打开 Lua 脚本编辑器" not in entries.get("扩展工具",{}):
                 raise RuntimeError("Lua scripts still have a shell menu or lost their plugin menu entry")
 
@@ -3437,14 +3469,21 @@ def run_win32(exe, base, root):
                     wait_for(lambda: covers_surface(panel),"Inspect Element did not reflow the page")
                     user.PostMessageW(panel,0x0100,0x7B,1)
                     wait_for(lambda: not attached_inspector(),"F12 could not close the right-click inspector")
-                    permission_entry = ("插件","网页开发者工具","允许打开网页开发者工具")
-                    native_entries(choose=permission_entry)
+                    grants_path = profile / "plugin-state.json"
+                    manager_permission("moon.devtools", 0)
+                    wait_for(lambda: saved_permission(grants_path,"moon.devtools","page_inspect",False),
+                             "Plugin Manager did not revoke the devtools permission")
+                    invoke("Moon fixture chrome-window")
+                    wait_for(lambda: read_address()==setup,"Could not return to the devtools fixture")
                     if inspect_menu in native_entries(trigger=right_click_element,owner_window=page):
                         raise RuntimeError("Inspect Element remained available after revoking permission")
-                    native_entries(choose=permission_entry)
+                    manager_permission("moon.devtools", 0, search=False)
                     confirmation = wait_for(lambda: owned_window("#32770","授予插件权限？"),"The devtools grant prompt did not open")
                     user.PostMessageW(confirmation,0x0111,6,0)
-                    wait_for(lambda: not user.IsWindow(confirmation),"The devtools grant prompt did not close")
+                    wait_for(lambda: saved_permission(grants_path,"moon.devtools","page_inspect",True),
+                             "Plugin Manager did not restore the devtools permission")
+                    invoke("Moon fixture chrome-window")
+                    wait_for(lambda: read_address()==setup,"Could not return to the devtools fixture")
                     if inspect_menu not in native_entries(trigger=right_click_element,owner_window=page):
                         raise RuntimeError("Inspect Element did not return after granting permission")
                     print("devtools_context_menu=ok available_before_first_open=ok cancel=ok native_dock=ok f12_close=ok grant_refresh=ok",flush=True)
@@ -3692,14 +3731,15 @@ def run_win32(exe, base, root):
                     user.PostMessageW(edit,0x0100,0x7B,1)
                     close_independent_inspector()
             print("devtools_system_plugin=ok", flush=True)
-            invoke("插件市场")
-            wait_for(lambda: read_address() == "moon://market/", "Browser did not open the built-in plugin market")
-            print("plugin_market_entry=ok", flush=True)
-            invoke("管理插件")
+            native_entries(choose="管理插件")
             wait_for(lambda: read_address() == "moon://plugins/", "Browser did not open the built-in plugin manager")
-            invoke("插件市场")
-            wait_for(lambda: read_address() == "moon://market/", "Could not return to the plugin market")
-            invoke("管理插件")
+            sleep(.5)
+            bounds = wt.RECT()
+            user.GetClientRect(content,ctypes.byref(bounds))
+            page_click(bounds.right-px(75),px(57))
+            wait_for(lambda: read_address() == "moon://market/", "Plugin Manager did not open the market")
+            print("plugin_market_entry=ok", flush=True)
+            native_entries(choose="管理插件")
             wait_for(lambda: read_address() == "moon://plugins/", "Could not return to the plugin manager")
             click(px(70),px(65))
             palette_window = find_palette()
@@ -3797,7 +3837,7 @@ def run_win32(exe, base, root):
                 raise RuntimeError("Network capture command is missing from the developer menu")
             source = base + "/page/network-capture"
             navigate_reading(source)
-            native_entries(choose=("插件","网络请求验收","运行网络请求验收"))
+            invoke("运行网络请求验收")
             wait_for(lambda: read_address() == "extension://moon.network-fixture/network.html",
                      f"Network capture panel did not open from {source}")
             report = profile / f'extension-{sha256(b"moon.network-fixture").hexdigest()}.json'
@@ -4058,7 +4098,7 @@ def run_win32(exe, base, root):
             invoke("将当前页加入书签")
             notice = wait_for(lambda: owned_window("#32770","书签"),"Bookmark save feedback did not open")
             wait_for(lambda: not user.IsWindow(notice),"Bookmark feedback did not dismiss itself")
-            invoke("管理书签")
+            native_entries(choose="收藏夹\tCtrl+Shift+O")
             wait_for(lambda: read_address() == "extension://moon.bookmarks/bookmarks.html",
                      "The bookmark system executable did not open its page")
             set_control(edit,"extension://moon.bookmark-fixture/bookmarks.html")
@@ -4163,7 +4203,7 @@ def run_win32(exe, base, root):
                     if download_open:
                         db.execute("INSERT INTO downloads(path,state,started,owner_pid,owner_birth) VALUES (?,2,1,0,0)",
                                    (str(profile / "missing-proof.txt"),))
-            invoke("查看下载")
+            native_entries(choose="下载\tCtrl+J")
             wait_for(lambda: read_address() == "extension://moon.downloads/downloads.html",
                      "The download system executable did not open its page")
             set_control(edit,"extension://moon.download-fixture/downloads.html")
@@ -5332,7 +5372,7 @@ def run_win32(exe, base, root):
             groups = native_entries()
             if "管理插件" not in groups:
                 raise RuntimeError("The native menu has no plugin management entry")
-            pinned_expected = {"历史记录\tCtrl+H","查看下载\tCtrl+J","管理书签\tCtrl+Shift+O"}
+            pinned_expected = {"历史记录\tCtrl+H","下载\tCtrl+J","收藏夹\tCtrl+Shift+O"}
             if browser_settings.exists():
                 pinned_expected.add("打开浏览器设置\tCtrl+,")
             if missing_pinned := pinned_expected - groups.keys():
@@ -5429,8 +5469,15 @@ def run_win32(exe, base, root):
             groups = native_entries()
             if any(item.startswith("显示 Moon 命令提示") for item in (*groups,*groups["扩展工具"])):
                 raise RuntimeError("The removed command remained in the native main menu")
-            if "显示 Moon 命令提示" not in groups["插件"]["命令唤醒验收"]:
-                raise RuntimeError("Removing the main menu placement also removed the plugin's command")
+            click(px(70),px(65))
+            palette_window = find_palette()
+            palette_edit = user.GetDlgItem(palette_window,1003)
+            set_control(palette_edit,"显示 Moon 命令提示")
+            palette_result = ctypes.create_unicode_buffer(128)
+            user.SendMessageW(user.GetDlgItem(palette_window,1004),0x0189,0,ctypes.addressof(palette_result))
+            user.PostMessageW(palette_edit,0x0100,0x1B,1)
+            if palette_result.value!="显示 Moon 命令提示":
+                raise RuntimeError("Removing the main menu placement also removed the command from search")
             print("command_contributions=ok native_groups=ok pin_no_duplicate=ok global_wake=ok conflict_cancel=ok restart=ok removal=ok",flush=True)
         if tab_tools.exists():
             pins = profile / "pinned-tabs.json"
@@ -6603,7 +6650,7 @@ def run_win32(exe, base, root):
             frame=browser_frame(proc)
             edit=user.GetDlgItem(frame,1001)
             hub="extension://moon.settings/settings.html"
-            native_entries(choose=("标签与页面","打开浏览器设置\tCtrl+,"))
+            native_entries(choose="打开浏览器设置\tCtrl+,")
             wait_for(lambda: read_address()==hub,"The native settings menu did not open the settings hub")
             set_control(edit,f"extension://{fixture_id}/settings.html")
             user.PostMessageW(edit,0x0100,0x0D,1)
@@ -6760,7 +6807,7 @@ def run_win32(exe, base, root):
                     (await wait(()=>control(id,'cancel'),'cancel action')).click();
                     await wait(async()=>(await entry(id)).state==='cancelled','original download did not cancel');
                 """)
-                invoke("查看下载")
+                native_entries(choose="下载\tCtrl+J")
                 wait_for(lambda: read_address()=="extension://moon.downloads/downloads.html",
                          "The download manager did not open to cancel the original transfer")
                 open_download_contract()
@@ -6844,12 +6891,7 @@ def run_win32(exe, base, root):
                 return process,window,user.GetDlgItem(window,1001),user.FindWindowExW(window,None,"MoonContent",None)
 
             proc,frame,edit,content = open_capacity()
-            listed = native_entries()["插件"]
-            if len(listed)!=64 or target_name not in listed or f"容量占位插件 {slots:02d}" in listed:
-                raise RuntimeError(f"Unexpected registered plugin count or max boundary: {len(listed)}")
-            if cache_remove and "允许经确认删除单个站点缓存" not in listed.get("站点数据",{}):
-                raise RuntimeError("The native menu omitted the most recently added permission")
-            native_entries(choose=("插件",target_name,"允许添加菜单入口和注册快捷键"))
+            manager_permission(target_id, 1)
             dialog = wait_for(lambda: owned_window("#32770","授予插件权限？"),"The high-index permission did not prompt")
             user.PostMessageW(dialog,0x0111,6,0)
             def saved_grants():
@@ -6866,8 +6908,7 @@ def run_win32(exe, base, root):
                 raise RuntimeError("Could not restart the browser with the large grant file")
             frame = None
             proc,frame,edit,content = open_capacity()
-            command_entry = command_label+"\tAlt+Shift+9"
-            native_entries(choose=("插件",target_name,command_entry))
+            invoke(command_label)
             wait_for(lambda: owned_window("#32770",target_name),"The high-index plugin command did not run after restart")
 
             invoke("管理插件")
@@ -6897,7 +6938,7 @@ def run_win32(exe, base, root):
             native_entries(trigger=right_click_capacity,choose=link_label,owner_window=target_view)
             wait_for(lambda: read_address()==f"extension://{target_id}/commands.html",
                      "The high-index WebKit context command did not use its restored permission")
-            print("plugin_capacity=ok count=64 excess_rejected=ok manager_count=ok large_grants_restart=ok native_command=ok user_shortcut_label=ok webkit_link_menu=ok",flush=True)
+            print("plugin_capacity=ok count=64 excess_rejected=ok manager_count=ok large_grants_restart=ok palette_command=ok manager_permission=ok webkit_link_menu=ok",flush=True)
     finally:
         Fixture.slow_download_release.set()
         Fixture.release_retry_download.set()

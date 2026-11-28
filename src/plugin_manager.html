@@ -131,7 +131,7 @@
       if (response.result === 'limitReached') {
         status.textContent = '主菜单固定项已达上限。';
       } else if (fields.op === 'menuPin') {
-        status.textContent = fields.enabled ? '已固定到右上角主菜单。' : '已移回分组子菜单。';
+        status.textContent = fields.enabled ? '已固定到右上角主菜单。' : '已从主菜单移出。';
       } else {
         status.textContent = response.result === 'cancelled' ? cancelled[fields.op] : '已保存。';
       }

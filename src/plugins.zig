@@ -119,8 +119,6 @@ const Command = struct {
 };
 comptime {
     if (native.MOON_LINK_MENU_STRIDE != sdk.command_limit) @compileError("WebKit link menu stride must match the plugin command limit");
-    if (std.enums.values(sdk.Permission).len > native.MOON_PLUGIN_MENU_PERMISSION_LIMIT)
-        @compileError("Native plugin menu must have a slot for every permission");
 }
 const Hotkey = struct {
     action: usize, mods: c_uint, key: c_uint, scope: sdk.ShortcutScope,

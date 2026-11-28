@@ -53,6 +53,7 @@
             ] },
             "then": { "not": { "anyOf": [
               { "required": ["menu"] },
+              { "required": ["menuPinned"], "properties": { "menuPinned": { "const": true } } },
               { "required": ["shortcut"] },
               { "required": ["siteMenu"], "properties": { "siteMenu": { "const": true } } },
               { "required": ["linkMenu", "tabDrop"], "properties": { "tabDrop": { "const": true } } },
@@ -65,6 +66,7 @@
               "label": { "type": "string", "minLength": 1, "maxLength": 255 },
               "interactive": { "type": "boolean" },
               "menu": { "enum": ["page", "library", "privacy", "developer", "extensions"] },
+              "menuPinned": { "type": "boolean", "default": false },
               "siteMenu": { "type": "boolean", "default": false },
               "linkMenu": { "enum": ["open", "copy", "bookmark"] },
               "inspectElementMenu": { "type": "string", "minLength": 1, "maxLength": 255 },

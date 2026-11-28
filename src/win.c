@@ -76,10 +76,8 @@ static const Theme *theme = &light;
 enum { PAD = 8, SIDEBAR = 264, TOP = 48, ROW = 37, TAB_START = 134, FOOTER = 48, BOOKMARK_HEIGHT = 32 };
 enum { MAINTENANCE_TIMER = 1, PRESENTATION_TIMER = 2, FULLSCREEN_HINT_TIMER = 3, TAB_DRAG_TIMER = 4,
        ADDRESS_TOP = 8, ADDRESS_HEIGHT = 32, HOME_FIELD_HEIGHT = 44 };
-enum { MENU_ADD = 11, MENU_PALETTE, MENU_UPDATES, MENU_MARKET, MENU_MANAGE_PLUGINS,
-       MENU_PLUGIN_BASE = 100, MENU_PLUGIN_ACTIONS = 2 + MOON_PLUGIN_MENU_PERMISSION_LIMIT, MENU_PLUGIN_STRIDE = 64 };
-_Static_assert(MENU_PLUGIN_ACTIONS + MOON_LINK_MENU_STRIDE <= MENU_PLUGIN_STRIDE,
-    "Native menu plugin command and permission IDs must fit within the plugin slot");
+enum { MENU_ADD = 11, MENU_PALETTE, MENU_UPDATES, MENU_MANAGE_PLUGINS,
+       MENU_PLUGIN_BASE = 100, MENU_PLUGIN_STRIDE = MOON_LINK_MENU_STRIDE };
 enum { ADDRESS_CONTROL = 1001, HOME_CONTROL = 1002, PALETTE_INPUT = 1003, PALETTE_LIST = 1004,
        FULLSCREEN_EXIT_CONTROL = 1005,
        PALETTE_TAB_OFFSET = 1000 };
@@ -1130,7 +1128,7 @@ int moon_shell_pick_html(const char *title,char *path,size_t capacity,bool *repl
     *replace=GetFileAttributesW(file)!=INVALID_FILE_ATTRIBUTES;
     return moon_utf8(file,path,capacity)?1:-1;
 }
-static void plugin_menu_item(HMENU menu, size_t plugin, size_t entry, bool enabled) {
+static void plugin_menu_item(HMENU menu, size_t plugin, size_t entry) {
     wchar_t action[300];
     if (!moon_utf16(moon_plugin_action(plugin,entry),action,256)) return;
     const char *shortcut=moon_plugin_action_shortcut(plugin,entry);
@@ -1139,8 +1137,8 @@ static void plugin_menu_item(HMENU menu, size_t plugin, size_t entry, bool enabl
         action[end++]=L'\t';
         if (!moon_utf16(shortcut,action+end,ARRAYSIZE(action)-end)) action[end-1]=0;
     }
-    const unsigned id=MENU_PLUGIN_BASE+(unsigned)plugin*MENU_PLUGIN_STRIDE+MENU_PLUGIN_ACTIONS+(unsigned)entry;
-    AppendMenuW(menu,MF_STRING|(enabled?0:MF_GRAYED),id,action);
+    const unsigned id=MENU_PLUGIN_BASE+(unsigned)plugin*MENU_PLUGIN_STRIDE+(unsigned)entry;
+    AppendMenuW(menu,MF_STRING,id,action);
 }
 
 static bool site_menu(HWND hwnd) {
@@ -1159,7 +1157,7 @@ static bool site_menu(HWND hwnd) {
     const int header=GetMenuItemCount(popup);
     for (size_t i=0;i<moon_plugin_count();++i)
         for (size_t j=0;j<moon_plugin_action_count(i);++j)
-            if (moon_plugin_action_site_menu(i,j)) plugin_menu_item(popup,i,j,true);
+            if (moon_plugin_action_site_menu(i,j)) plugin_menu_item(popup,i,j);
     if (GetMenuItemCount(popup)>header) InsertMenuW(popup,header,MF_BYPOSITION|MF_SEPARATOR,0,NULL);
 
     RECT button=rectangle(address_left()+3,ADDRESS_TOP,24,ADDRESS_HEIGHT);
@@ -1170,7 +1168,7 @@ static bool site_menu(HWND hwnd) {
     DestroyMenu(popup);
     if (command>=MENU_PLUGIN_BASE) {
         const UINT value=command-MENU_PLUGIN_BASE, offset=value%MENU_PLUGIN_STRIDE;
-        if (offset>=MENU_PLUGIN_ACTIONS) moon_site_menu_run(&site,value/MENU_PLUGIN_STRIDE,offset-MENU_PLUGIN_ACTIONS);
+        moon_site_menu_run(&site,value/MENU_PLUGIN_STRIDE,offset);
     }
     return true;
 }
@@ -1192,7 +1190,7 @@ static void plugin_command_groups(HMENU popup, size_t count) {
             if (location==MOON_MENU_NONE || location>=ARRAYSIZE(groups)) continue;
             if (location==MOON_MENU_PINNED) has_pinned=true;
             else if (!groups[location]) groups[location]=CreatePopupMenu();
-            if (groups[location]) plugin_menu_item(groups[location],i,j,true);
+            if (groups[location]) plugin_menu_item(groups[location],i,j);
         }
     }
     bool has_groups=false;
@@ -1215,31 +1213,8 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     }
     if (!private_window) {
         AppendMenuW(popup,MF_SEPARATOR,0,NULL);
-        AppendMenuW(popup,MF_STRING,MENU_MARKET,L"插件市场");
         AppendMenuW(popup,MF_STRING,MENU_MANAGE_PLUGINS,L"管理插件");
         AppendMenuW(popup,MF_STRING,MENU_UPDATES,L"\u7248\u672c\u4e0e\u66f4\u65b0");
-    }
-    HMENU extensions=count && !private_window ? CreatePopupMenu() : NULL;
-    if (extensions) AppendMenuW(popup,MF_POPUP,(UINT_PTR)extensions,L"插件");
-    for(size_t i=0;extensions && i<count;++i) {
-        wchar_t name[256],action[300];
-        if (!moon_utf16(moon_plugin_label(i),name,ARRAYSIZE(name))) continue;
-        HMENU sub=CreatePopupMenu();
-        if (!sub) continue;
-        const bool enabled=moon_plugin_enabled(i);
-        const unsigned id=MENU_PLUGIN_BASE+(unsigned)i*MENU_PLUGIN_STRIDE;
-        AppendMenuW(sub,MF_STRING|(enabled?MF_CHECKED:0),id,L"启用插件");
-        if (moon_plugin_has_settings(i)) AppendMenuW(sub,MF_STRING|(enabled?0:MF_GRAYED),id+1,L"配置页面");
-        for (size_t j=0;j<MENU_PLUGIN_ACTIONS-2;++j) {
-            const char *permission=moon_plugin_permission_label(j);
-            if (!*permission) break;
-            const unsigned flags=moon_plugin_permission_flags(i,j);
-            if ((flags&1) && moon_utf16(permission,action,ARRAYSIZE(action)))
-                AppendMenuW(sub,MF_STRING|(flags&2?MF_CHECKED:0)|(enabled?0:MF_GRAYED),id+2+j,action);
-        }
-        for(size_t j=0;j<moon_plugin_action_count(i);++j)
-            if (!moon_plugin_bound_action(i,j)) plugin_menu_item(sub,i,j,enabled);
-        AppendMenuW(extensions,MF_POPUP,(UINT_PTR)sub,name);
     }
     MapWindowPoints(hwnd,NULL,(POINT *)&button,2);
     TPMPARAMS placement={.cbSize=sizeof(placement),.rcExclude=button};
@@ -1252,15 +1227,11 @@ static void menu(HWND hwnd, RECT button, bool above, bool right_aligned) {
     if (command==MENU_ADD) moon_command(MOON_NEW,0,NULL);
     else if (command==MENU_PALETTE) open_palette();
     else if (command==MENU_UPDATES) moon_command(MOON_UPDATES,0,NULL);
-    else if (command==MENU_MARKET) moon_command(MOON_MARKET,0,NULL);
     else if (command==MENU_MANAGE_PLUGINS) moon_command(MOON_OPEN_PLUGINS,0,NULL);
     else if (command>=MENU_PLUGIN_BASE) {
         unsigned value=command-MENU_PLUGIN_BASE;
         const unsigned offset=value%MENU_PLUGIN_STRIDE, plugin=value/MENU_PLUGIN_STRIDE;
-        if (!offset) moon_command(MOON_PLUGIN_ENABLE,plugin,NULL);
-        else if (offset==1) moon_command(MOON_PLUGIN_SETTINGS,plugin,NULL);
-        else if (offset<MENU_PLUGIN_ACTIONS) moon_command(MOON_PLUGIN_GRANT,((uint64_t)plugin<<32)|(offset-2),NULL);
-        else moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|(offset-MENU_PLUGIN_ACTIONS),NULL);
+        moon_command(MOON_PLUGIN_COMMAND,((uint64_t)plugin<<32)|offset,NULL);
         moon_shell_refresh();
     }
 }

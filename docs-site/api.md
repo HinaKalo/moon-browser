@@ -23,7 +23,7 @@ Moon Browser 0.1.0-preview.5 提供第一版统一宿主 API，协议号为 `2`�
 }
 ~~~
 
-将 `plugin.json` 和同目录 EXE 放进浏览器程序或配置目录下的 `plugins/<目录>`，重启后从工具栏菜单启用。命令在插件菜单与命令面板中使用同一 ID。每个插件可声明一到八条命令，ID 在插件内唯一。
+将 `plugin.json` 和同目录 EXE 放进浏览器程序或配置目录下的 `plugins/<目录>`，重启后在「管理插件」中启用。命令在主菜单和命令面板中使用同一 ID。每个插件可声明一到十四条命令，ID 在插件内唯一。
 
 命令可选填 `shortcut`。支持的组合键见 [清单 Schema](https://github.com/HinaKalo/moon-browser/blob/main/sdk/plugin.schema.json)。同一组合键由第一个符合条件且声明该组合键的插件处理，随浏览器分发的插件优先。使用 `F11` 需要 `window.fullscreen` 权限，使用 `Ctrl+B` 和 `Ctrl+Shift+L` 需要 `window.appearance` 权限。外部插件使用这些预设组合键还需要 `ui.commands` 权限。
 

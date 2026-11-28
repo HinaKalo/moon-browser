@@ -8,7 +8,7 @@
   "settingsPage": "bookmarks.html",
   "contributes": {
     "commands": [
-      { "id": "open", "label": "管理书签", "menu": "library", "menuPinned": true, "shortcut": "Ctrl+Shift+O" },
+      { "id": "open", "label": "收藏夹", "menu": "library", "menuPinned": true, "shortcut": "Ctrl+Shift+O" },
       { "id": "save", "label": "将当前页加入书签", "menu": "library", "shortcut": "Ctrl+D" },
       { "id": "bar", "label": "显示或隐藏书签栏", "menu": "library", "shortcut": "Ctrl+Shift+B" },
       { "id": "import", "label": "导入 HTML 书签", "menu": "library", "interactive": true },
