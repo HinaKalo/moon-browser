@@ -1,6 +1,7 @@
 //! MoonBrowser native shell chrome renderer powered by MoonUI (`moon-win32-modern`).
 //! Renders the sidebar, top toolbar, address bar frame, bookmark bar, New Tab / Home page,
-//! and window chrome via Direct3D 11 + DXGI + DirectComposition + Direct2D 1.1 + DirectWrite.
+//! and window chrome. The shell updates the retained draw list when its state changes.
+//! WM_PAINT presents that list through DirectComposition.
 const std = @import("std");
 const moonui = @import("moonui");
 const native = @import("native");
@@ -46,14 +47,14 @@ const ShellRendererState = struct {
     hwnd: ?*anyopaque = null,
     renderer: ?Renderer = null,
     main_dl: DrawList = DrawList.init(std.heap.page_allocator),
-    overlay_dl: DrawList = DrawList.init(std.heap.page_allocator),
-    initialized: bool = false,
+    background: Color = undefined,
     dwm_applied: bool = false,
     dwm_dark: bool = false,
     dwm_square: bool = false,
 };
 
 var g_state: ShellRendererState = .{};
+const empty_overlay = DrawList.init(std.heap.page_allocator);
 
 fn syncWindowDwm(hwnd: *anyopaque, dark: bool, square: bool) void {
     if (g_state.dwm_applied and g_state.dwm_dark == dark and g_state.dwm_square == square) return;
@@ -67,19 +68,9 @@ fn syncWindowDwm(hwnd: *anyopaque, dark: bool, square: bool) void {
 }
 
 pub export fn moon_shell_ui_release() void {
-    if (g_state.renderer) |*r| {
-        r.deinit();
-        g_state.renderer = null;
-    }
-    if (g_state.initialized) {
-        g_state.main_dl.deinit();
-        g_state.overlay_dl.deinit();
-        g_state.main_dl = DrawList.init(std.heap.page_allocator);
-        g_state.overlay_dl = DrawList.init(std.heap.page_allocator);
-        g_state.initialized = false;
-    }
-    g_state.hwnd = null;
-    g_state.dwm_applied = false;
+    if (g_state.renderer) |*r| r.deinit();
+    g_state.main_dl.deinit();
+    g_state = .{};
 }
 
 fn ensureRenderer(hwnd: *anyopaque, pixel_w: u32, pixel_h: u32, dpi: u32) ?*Renderer {
@@ -99,7 +90,6 @@ fn ensureRenderer(hwnd: *anyopaque, pixel_w: u32, pixel_h: u32, dpi: u32) ?*Rend
         ) catch return null;
         g_state.renderer = r;
         g_state.hwnd = hwnd;
-        g_state.initialized = true;
     } else if (g_state.renderer) |*r| {
         r.resize(pixel_w, pixel_h, dpi_f);
     }
@@ -195,7 +185,7 @@ fn homeTop(f: *const native.MoonShellFrame, height: f32) f32 {
 }
 
 fn tabCapacity(height: f32) usize {
-    const avail = height - TAB_START - FOOTER - 9;
+    const avail = height - TAB_START - FOOTER - 6;
     if (avail < ROW) return 1;
     return @intFromFloat(@floor(avail / ROW));
 }
@@ -508,7 +498,7 @@ fn paintSidebar(r: *Renderer, dl: *DrawList, f: *const native.MoonShellFrame, th
 
     // Slim scrollbar
     if (count > capacity) {
-        const track = height - TAB_START - FOOTER - 9;
+        const track = height - TAB_START - FOOTER - 6;
         if (track > 0) {
             const thumb = @max(track * @as(f32, @floatFromInt(capacity)) / @as(f32, @floatFromInt(count)), 16);
             const thumb_y = TAB_START + track * @as(f32, @floatFromInt(f.first_tab)) / @as(f32, @floatFromInt(count));
@@ -546,7 +536,7 @@ fn paintBookmarkBar(r: *Renderer, dl: *DrawList, f: *const native.MoonShellFrame
         while (shown < f.bookmark_count) : (shown += 1) {
             const entry = &f.bookmark_roots[shown];
             const label = fixedSlice(&entry.text);
-            const char_count = std.unicode.utf8CountCodepoints(label) catch label.len;
+            const char_count = std.unicode.calcUtf16LeLen(label) catch label.len;
             const raw_w: f32 = 32 + @as(f32, @floatFromInt(char_count)) * 8;
             const item_w = std.math.clamp(raw_w, 62, 182);
             if (x + item_w > right - 35) break;
@@ -747,7 +737,7 @@ fn paintChrome(r: *Renderer, dl: *DrawList, f: *const native.MoonShellFrame, the
     }
 }
 
-pub export fn moon_shell_ui_paint(frame_ptr: [*c]const native.MoonShellFrame) bool {
+pub export fn moon_shell_ui_update(frame_ptr: [*c]const native.MoonShellFrame) bool {
     if (frame_ptr == null) return false;
     const f: *const native.MoonShellFrame = @ptrCast(frame_ptr);
     const hwnd = f.hwnd orelse return false;
@@ -756,12 +746,14 @@ pub export fn moon_shell_ui_paint(frame_ptr: [*c]const native.MoonShellFrame) bo
     syncWindowDwm(hwnd, f.dark, f.zoomed or f.fullscreen);
 
     const theme = activeTheme(f.dark);
+    g_state.background = frameBg(theme);
     g_state.main_dl.clear();
-    g_state.overlay_dl.clear();
-
     paintChrome(r, &g_state.main_dl, f, theme);
-
-    // Present immediately (vsync = false) inside WM_PAINT to keep Win32 message loop responsive.
-    r.render(frameBg(theme), &g_state.main_dl, &g_state.overlay_dl, false);
     return true;
+}
+
+pub export fn moon_shell_ui_present() void {
+    if (g_state.renderer) |*r| {
+        r.render(g_state.background, &g_state.main_dl, &empty_overlay, false);
+    }
 }

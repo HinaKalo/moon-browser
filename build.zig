@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
         "lfunc.c", "lgc.c", "llex.c", "lmathlib.c", "lmem.c", "lobject.c", "lopcodes.c", "lparser.c",
         "lstate.c", "lstring.c", "ltable.c", "ltablib.c", "ltm.c", "lundump.c", "lutf8lib.c", "lvm.c", "lzio.c",
     }, .flags = &.{"-std=c17"} });
-    for ([_][]const u8{ "user32", "gdi32", "d2d1", "dwrite", "gdiplus", "shlwapi", "shell32", "ole32", "comdlg32", "advapi32", "psapi", "imm32", "comctl32", "winhttp", "bcrypt" }) |library|
+    for ([_][]const u8{ "user32", "gdi32", "d2d1", "dwrite", "shlwapi", "shell32", "ole32", "comdlg32", "advapi32", "psapi", "imm32", "comctl32", "winhttp", "bcrypt" }) |library|
         app.root_module.linkSystemLibrary(library, .{});
     b.installArtifact(app);
     const request_filter = b.addLibrary(.{

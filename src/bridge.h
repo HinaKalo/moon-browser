@@ -212,7 +212,6 @@ int moon_shell_choose_download_folder(const char *initial, char *folder, size_t 
 void moon_download_progress(uint32_t id, uint64_t chunk, uint64_t total);
 void moon_download_finish(uint32_t id, int result);
 void moon_engine_probe(MoonView *view);
-void moon_engine_test_fallback(bool enabled);
 
 MoonPipe *moon_pipe_open(const char *executable, uint32_t *error);
 bool moon_pipe_send(MoonPipe *pipe, const char *line);
@@ -444,5 +443,6 @@ typedef struct MoonShellFrame {
     int drag_guide;
 } MoonShellFrame;
 void moon_shell_ui_release(void);
-bool moon_shell_ui_paint(const MoonShellFrame *frame);
+bool moon_shell_ui_update(const MoonShellFrame *frame);
+void moon_shell_ui_present(void);
 #endif

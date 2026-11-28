@@ -783,7 +783,7 @@ def answer_contract_prompts(proc):
             sleep(0.05)
 
 
-def run_browser(exe, base, root, force_pressure, fallback, quick):
+def run_browser(exe, base, root, force_pressure, quick):
     env = preview_env(root)
     profile = Path(env["MOON_BROWSER_PROFILE_DIR"])
     profile.mkdir()
@@ -866,8 +866,6 @@ def run_browser(exe, base, root, force_pressure, fallback, quick):
         (profile / "plugin-state.json").write_text(json.dumps([
             {"id": "moon.filter-fixture", "enabled": True, "tabs_read": False, "network_filter": True},
         ]), encoding="utf-8")
-    if fallback:
-        args += ["--gdi"]
     if quick:
         args += ["--smoke-quick"]
     browser = subprocess.Popen(args, env=env)
@@ -2884,10 +2882,13 @@ def run_win32(exe, base, root, quick=False):
             sleep(0.1)
         raise RuntimeError("Win32 shell not found")
 
-    proc = subprocess.Popen([str(exe), "--gdi"], env=preview_env(root))
+    proc = subprocess.Popen([str(exe)], env=preview_env(root))
     frame = None
     try:
         frame = browser_frame(proc)
+        chrome = user.FindWindowExW(frame, None, "MoonChrome", None)
+        if not chrome or not user.IsWindowVisible(chrome):
+            raise RuntimeError("The retained chrome surface is not visible")
         style = user.GetWindowLongPtrW(frame, -16)  # GWL_STYLE
         if style & 0x00C00000 == 0x00C00000:  # WS_CAPTION
             raise RuntimeError(f'Duplicate Windows title bar style is present: {style:#x}')
@@ -3314,7 +3315,7 @@ def run_win32(exe, base, root, quick=False):
         print("chrome_move_reflow=ok scroll_retained=ok native_address_selection=ok",flush=True)
         if not user.IsWindowVisible(content) or user.IsWindowVisible(home):
             raise RuntimeError("The WebKit view did not replace the native new-tab view")
-        print(f"win32_unicode_address=ok resized_dpi={dpi} chrome_px={expected_chrome} fallback=GDI+")
+        print(f"win32_unicode_address=ok resized_dpi={dpi} chrome_px={expected_chrome} chrome=retained")
         def native_entries(trigger=None, choose=None, before_choose=None, popup_at=None, owner_window=None):
             dimensions = wt.RECT()
             user.GetClientRect(frame,ctypes.byref(dimensions))
@@ -4970,7 +4971,7 @@ def run_win32(exe, base, root, quick=False):
                 raise RuntimeError("Browser failed to shut down before reading preference check")
             frame = None
             persisted = base + "/page/reading-restart"
-            proc = subprocess.Popen([str(exe),"--gdi",persisted],env=preview_env(root))
+            proc = subprocess.Popen([str(exe),persisted],env=preview_env(root))
             frame = browser_frame(proc)
             edit = user.GetDlgItem(frame,1001)
             home = user.GetDlgItem(frame,1002)
@@ -5473,7 +5474,7 @@ def run_win32(exe, base, root, quick=False):
             if proc.wait(8)!=0:
                 raise RuntimeError("Browser failed to exit before the registered shortcut restart check")
             frame = None
-            proc = subprocess.Popen([str(exe),"--gdi"],env=preview_env(root))
+            proc = subprocess.Popen([str(exe)],env=preview_env(root))
             frame = browser_frame(proc)
             edit = user.GetDlgItem(frame,1001)
             wait_for(lambda: user.IsWindowVisible(user.GetDlgItem(frame,1002)),"Restarted shell did not initialize")
@@ -5513,7 +5514,7 @@ def run_win32(exe, base, root, quick=False):
                 user.PostMessageW(frame,0x0010,0,0)
                 if proc.wait(8)!=0:
                     raise RuntimeError("Browser did not exit before the pinned tab check")
-                restarted = subprocess.Popen([str(exe),"--gdi"],env=preview_env(root))
+                restarted = subprocess.Popen([str(exe)],env=preview_env(root))
                 return restarted,browser_frame(restarted)
 
             def tab_menu(row, choose=None, before_choose=None):
@@ -6143,7 +6144,7 @@ def run_win32(exe, base, root, quick=False):
             if proc.wait(8)!=0:
                 raise RuntimeError("Browser did not exit for the search preference restart check")
             frame = None
-            proc = subprocess.Popen([str(exe),"--gdi"],env=preview_env(root))
+            proc = subprocess.Popen([str(exe)],env=preview_env(root))
             frame = browser_frame(proc)
             edit = user.GetDlgItem(frame,1001)
             wait_for(lambda: user.IsWindowVisible(user.GetDlgItem(frame,1002)),"Restarted shell did not initialize")
@@ -6232,7 +6233,7 @@ def run_win32(exe, base, root, quick=False):
                 return tuple(Fixture.closed_loaded.get(name,0) for name in ("session-first","session-second","session-pinned"))
 
             database = session_profile / "history.sqlite3"
-            proc,frame = restart_session("--gdi")
+            proc,frame = restart_session()
             edit = user.GetDlgItem(frame,1001)
             home = user.GetDlgItem(frame,1002)
             wait_for(lambda: user.IsWindowVisible(home),"The fresh session browser did not initialize")
@@ -6257,7 +6258,7 @@ def run_win32(exe, base, root, quick=False):
             click(px(110),px(222))
             wait_for(lambda: read_address()==selected_url,"Could not select the last ordinary session tab")
             initial = counts()
-            proc,frame = restart_session("--gdi")
+            proc,frame = restart_session()
             edit = user.GetDlgItem(frame,1001)
             home = user.GetDlgItem(frame,1002)
             wait_for(lambda: user.IsWindowVisible(home),"A fresh start unexpectedly restored the old session")
@@ -6289,12 +6290,12 @@ def run_win32(exe, base, root, quick=False):
                 raise RuntimeError(f"Session preferences: {result}")
             invoke("Moon fixture session-second")
             wait_for(lambda: read_address()==selected_url,"The last active session tab did not regain focus")
-            proc,frame = restart_session("--private","--gdi",base + "/page/session-private",message=0x0016)
+            proc,frame = restart_session("--private",base + "/page/session-private",message=0x0016)
             wait_for(lambda: Fixture.closed_loaded.get("session-private"),"The isolated private-window fixture did not load")
             saved_bytes = saved_session.read_bytes()
             initial = counts()
             Fixture.hold_session_asset.set()
-            proc,frame = restart_session("--gdi")
+            proc,frame = restart_session()
             edit = user.GetDlgItem(frame,1001)
             wait_for(lambda: read_address()==selected_url and Fixture.session_asset_requested.is_set(),
                      "Automatic restore did not commit the selected tab with a pending subresource")
@@ -6303,7 +6304,7 @@ def run_win32(exe, base, root, quick=False):
             external = base + "/page/session-external"
             initial = counts()
             try:
-                proc,frame = restart_session("--gdi",external)
+                proc,frame = restart_session(external)
             finally:
                 Fixture.hold_session_asset.clear()
                 Fixture.release_session_asset.set()
@@ -6331,7 +6332,7 @@ def run_win32(exe, base, root, quick=False):
                 if not result.get("custom"):
                     raise RuntimeError(f"Custom startup preferences: {result}")
                 initial = counts()
-                proc,frame = restart_session("--gdi")
+                proc,frame = restart_session()
                 edit = user.GetDlgItem(frame,1001)
                 wait_for(lambda: read_address()==first_url and counts()[0]>initial[0],"The first configured startup page did not load")
                 if counts()[1:]!=initial[1:]:
@@ -6339,13 +6340,13 @@ def run_win32(exe, base, root, quick=False):
                 click(px(110),px(222))
                 wait_for(lambda: read_address()==selected_url and counts()[1]>initial[1],"The next configured startup page did not load on selection")
                 initial = counts()
-                proc,frame = restart_session("--private","--gdi")
+                proc,frame = restart_session("--private")
                 home = user.GetDlgItem(frame,1002)
                 wait_for(lambda: user.IsWindowVisible(home),"Private startup did not show a new tab")
                 if counts()!=initial:
                     raise RuntimeError("Private startup opened one of the regular browser's pages")
                 external_hits = Fixture.closed_loaded.get("session-external",0)
-                proc,frame = restart_session("--gdi",external)
+                proc,frame = restart_session(external)
                 edit = user.GetDlgItem(frame,1001)
                 wait_for(lambda: read_address()==external and Fixture.closed_loaded.get("session-external",0)>external_hits,
                          "The explicit address did not override configured startup pages")
@@ -6430,7 +6431,7 @@ def run_win32(exe, base, root, quick=False):
                             return window,handle
                 return None
 
-            proc=subprocess.Popen([str(exe),"--gdi"],env=bar_env)
+            proc=subprocess.Popen([str(exe)],env=bar_env)
             frame=browser_frame(proc)
             edit=user.GetDlgItem(frame,1001)
             collapsed=px(49)
@@ -6544,7 +6545,7 @@ def run_win32(exe, base, root, quick=False):
                         ("批量打开 B",base+"/page/bookmark-batch-open-b","批量打开")
                     ])
                     connection.commit()
-            proc=subprocess.Popen([str(exe),"--gdi"],env=bar_env)
+            proc=subprocess.Popen([str(exe)],env=bar_env)
             frame=browser_frame(proc)
             edit=user.GetDlgItem(frame,1001)
             wait_for(lambda: viewport_top(frame)==expanded,"Bookmark bar visibility did not survive restart")
@@ -6579,7 +6580,7 @@ def run_win32(exe, base, root, quick=False):
                 user.PostMessageW(frame,0x0010,0,0)
                 if proc.wait(8)!=0:
                     raise RuntimeError("Could not close the browser before the appearance check")
-                process = subprocess.Popen([str(exe),"--gdi"],env=appearance_env)
+                process = subprocess.Popen([str(exe)],env=appearance_env)
                 window = browser_frame(process)
                 user.SetWindowPos(window,None,0,0,px(1080),px(650),0x0016)
                 return process,window,user.GetDlgItem(window,1001),user.FindWindowExW(window,None,"MoonContent",None)
@@ -6675,7 +6676,7 @@ def run_win32(exe, base, root, quick=False):
             user.PostMessageW(frame,0x0010,0,0)
             if proc.wait(8)!=0:
                 raise RuntimeError("Could not close the browser before the settings hub check")
-            proc=subprocess.Popen([str(exe),"--gdi"],env=hub_env)
+            proc=subprocess.Popen([str(exe)],env=hub_env)
             frame=browser_frame(proc)
             edit=user.GetDlgItem(frame,1001)
             hub="extension://moon.settings/settings.html"
@@ -6756,7 +6757,7 @@ def run_win32(exe, base, root, quick=False):
                 user.PostMessageW(frame,0x0010,0,0)
                 if proc.wait(8)!=0:
                     raise RuntimeError("Could not close the browser before the download settings check")
-                process=subprocess.Popen([str(exe),"--gdi"],env=settings_env)
+                process=subprocess.Popen([str(exe)],env=settings_env)
                 window=browser_frame(process)
                 return process,window,user.GetDlgItem(window,1001)
 
@@ -6914,7 +6915,7 @@ def run_win32(exe, base, root, quick=False):
             ]),encoding="utf-8")
 
             def open_capacity():
-                process = subprocess.Popen([str(exe),"--gdi"],env=capacity_env)
+                process = subprocess.Popen([str(exe)],env=capacity_env)
                 window = browser_frame(process)
                 user.SetWindowPos(window,None,0,0,px(960),px(610),0x0016)
                 return process,window,user.GetDlgItem(window,1001),user.FindWindowExW(window,None,"MoonContent",None)
@@ -6985,7 +6986,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("exe", type=Path)
     parser.add_argument("--pressure", action="store_true")
-    parser.add_argument("--gdi", action="store_true")
     parser.add_argument("--ui", action="store_true", help="Also test actual Win32 resizing and Unicode navigation")
     parser.add_argument("--quick", action="store_true", help="Run engine, plugin, download, and optional Win32 release smoke checks")
     parser.add_argument("--report", type=Path, help="Copy browser metrics to this path")
@@ -7008,7 +7008,7 @@ def main():
         base = f"http://127.0.0.1:{server.server_port}"
         try:
             try:
-                run_browser(exe, base, root, args.pressure, args.gdi, args.quick)
+                run_browser(exe, base, root, args.pressure, args.quick)
             finally:
                 report = root / "report.txt"
                 if args.report and report.exists():

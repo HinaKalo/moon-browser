@@ -1782,9 +1782,7 @@ export fn moon_start(argc: c_int, argv: [*c]const [*c]const u16) bool {
     while (index < @as(usize, @intCast(@max(0, argc)))) : (index += 1) {
         const argument = std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.sliceTo(argv[index], 0)) catch return false;
         defer allocator.free(argument);
-        if (equals(argument, "--gdi")) {
-            native.moon_engine_test_fallback(true);
-        } else if (private and std.mem.startsWith(u8,argument,"-")) {
+        if (private and std.mem.startsWith(u8,argument,"-")) {
             continue;
         } else if (equals(argument, "--relhub-probe") and index + 3 < @as(usize, @intCast(argc))) {
             const report = std.unicode.utf16LeToUtf8Alloc(allocator, std.mem.sliceTo(argv[index + 1], 0)) catch return false;

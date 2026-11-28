@@ -21,7 +21,7 @@ Windows x64 原生浏览器开发预览。外壳和标签调度使用 Zig 0.17.1
 
 build 生成本地开发目录，package 打包本地开发用的自包含 ZIP。release 生成 GitHub 的两种发行包，需要引擎时直接从上游取得 WebKit。打开输出目录下的 MoonBrowser.exe。engine 目录需与 EXE 一起保留。
 
-原生外壳默认使用亮色主题。侧栏标签可滚动，Ctrl+K 在命令面板中搜索标签和可用命令，Ctrl+B 收起或恢复侧栏，Ctrl+Shift+L 切换配色。Ctrl+L 聚焦地址栏。支持 Ctrl+T、Ctrl+W、Ctrl+Tab、Ctrl+Shift+Tab、Alt+← / → 和 F5。Ctrl+Shift+M 打开内存诊断。命令行可传入启动地址，也可用 --gdi 检查外壳回退。
+原生外壳默认使用亮色主题。侧栏标签可滚动，Ctrl+K 在命令面板中搜索标签和可用命令，Ctrl+B 收起或恢复侧栏，Ctrl+Shift+L 切换配色。Ctrl+L 聚焦地址栏。支持 Ctrl+T、Ctrl+W、Ctrl+Tab、Ctrl+Shift+Tab、Alt+← / → 和 F5。Ctrl+Shift+M 打开内存诊断。命令行可传入启动地址。外壳在界面状态变化时更新保留式绘制列表，GPU 初始化失败时由 MoonUI 尝试 Windows WARP。
 
 新标签页与命令面板共用命令入口。应用内置命令与启用的本地插件均可在面板调用。原型中的固定工作空间、服务入口与演示数据保留为设计参考，具体入口和数据由未来的插件提供。
 
