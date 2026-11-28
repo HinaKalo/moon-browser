@@ -3455,6 +3455,12 @@ def run_win32(exe, base, root):
                     return ((a.left,a.top,b.right,b.bottom)==(host.left,host.top,host.right,host.bottom)
                             and ((a.bottom==b.top and a.right==b.right) or (a.right==b.left and a.bottom==b.bottom)))
 
+                def page_fills_surface():
+                    layout, host = wt.RECT(), wt.RECT()
+                    user.GetWindowRect(page,ctypes.byref(layout))
+                    user.GetWindowRect(surface,ctypes.byref(host))
+                    return (layout.left,layout.top,layout.right,layout.bottom)==(host.left,host.top,host.right,host.bottom)
+
                 if inspect_menu:
                     def right_click_element():
                         point = px(36) | (px(33)<<16)
@@ -3521,13 +3527,17 @@ def run_win32(exe, base, root):
                         user.PostMessageW(page,0x0201,1,target)  # WM_LBUTTONDOWN
                         user.PostMessageW(page,0x0202,0,target)  # WM_LBUTTONUP
 
-                    clicks = Fixture.inspector_clicks
-                    click_inspector_target()
-                    wait_for(lambda: Fixture.inspector_clicks==clicks+1,"The uninspected element did not receive its click")
                     user.GetPropW.argtypes=[wt.HWND,wt.LPCWSTR]
                     user.GetPropW.restype=wt.HANDLE
                     def picker_ready():
                         return user.GetPropW(page,"MoonInspectorPickerState")==2
+
+                    wait_for(lambda: not user.GetPropW(page,"MoonInspectorPickerState"),
+                             "The closed inspector did not release its picker state")
+                    wait_for(lambda: page_fills_surface(),"Closing the inspector did not restore the content layout")
+                    clicks = Fixture.inspector_clicks
+                    click_inspector_target()
+                    wait_for(lambda: Fixture.inspector_clicks==clicks+1,"The uninspected element did not receive its click")
 
                     invoke("拾取网页元素")
                     wait_for(attached_inspector,"Element picking did not open the WebKit inspector",20)
