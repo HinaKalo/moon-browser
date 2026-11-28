@@ -5773,8 +5773,10 @@ def run_win32(exe, base, root):
                     if {entry["url"] for entry in saved_groups["tabs"] if entry["group"]==groups[0]["id"]}!={first_grouped,second_grouped}:
                         raise RuntimeError("Session checkpoint lost group members")
                     wait_for(lambda: user.IsWindowVisible(home),"Could not reopen the group test browser")
+                    visits = Fixture.closed_loaded.get("group-outside", 0)
                     invoke("恢复上次会话")
-                    wait_for(lambda: read_address()==outside,"Session restore did not reactivate the ungrouped tab")
+                    wait_for(lambda: read_address()==outside and Fixture.closed_loaded.get("group-outside", 0)>visits,
+                             "Session restore did not load the ungrouped tab", 15)
                     if '"closeSelected"' in tab_tools_manifest:
                         select_row(0,0x0004)
                         if "关闭所选标签（3）" not in tab_menu(0) or read_address()!=outside:
